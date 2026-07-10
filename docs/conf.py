@@ -26,6 +26,9 @@ extensions = [
 autosummary_generate = True
 autodoc_member_order = "bysource"
 nbsphinx_execute = "never"  # render notebooks without executing them during builds
+# Keep notebook highlighting portable across supported Pygments releases.  nbsphinx
+# reads the notebook metadata first, but this remains the fallback for new notebooks.
+nbsphinx_codecell_lexer = "python"
 nbsphinx_prolog = r"""
 {% set nbtitle = env.docname.split('/')[-1].replace('_', ' ').title() %}
 {{ nbtitle }}
