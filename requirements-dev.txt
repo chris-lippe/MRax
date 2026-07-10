@@ -1,0 +1,18 @@
+-r requirements.txt
+build
+coverage
+pytest
+pyright
+ruff
+twine
+isort
+sphinx
+myst-parser
+pydata-sphinx-theme
+nbsphinx
+jupyterlab
+scikit-image
+# Full-feature development environment. BM3D/BM4D are non-commercial-use packages.
+jax-finufft>=1,<2
+bm3d>=4,<5
+bm4d>=4,<5

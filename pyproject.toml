@@ -1,0 +1,115 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mrax"
+version = "0.1.0"
+description = "JAX-based tools for quantitative MRI model fitting, reconstruction, and analysis."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Chris Lippe" },
+]
+keywords = ["MRI", "JAX", "quantitative imaging", "reconstruction"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "jax>=0.4.35,<0.11",
+    "optax>=0.2.4,<0.3",
+    "numpy>=2,<3",
+    "scipy>=1.14,<2",
+    "ismrmrd>=1.14,<2",
+    "nibabel>=5.3,<6",
+    "dipy>=1.10,<2",
+    "pypulseq>=1.4,<2",
+    "SimpleITK>=2.4,<3",
+    "PySide6>=6.8,<7",
+    "pyqtgraph>=0.13,<0.15",
+    "qtpy>=2.4,<3",
+    "superqt>=0.7,<1",
+    "matplotlib>=3.9,<4",
+]
+
+[project.urls]
+Homepage = "https://github.com/chris-lippe/MRax"
+Documentation = "https://chris-lippe.github.io/MRax"
+Repository = "https://github.com/chris-lippe/MRax"
+Issues = "https://github.com/chris-lippe/MRax/issues"
+
+[project.optional-dependencies]
+nufft = [
+    "jax-finufft>=1,<2",
+]
+denoise-external = [
+    "bm3d>=4,<5",
+    "bm4d>=4,<5",
+]
+all = [
+    "jax-finufft>=1,<2",
+    "bm3d>=4,<5",
+    "bm4d>=4,<5",
+]
+docs = [
+    "sphinx>=8,<11",
+    "myst-parser>=4,<6",
+    "pydata-sphinx-theme>=0.16,<1",
+    "nbsphinx>=0.9,<1",
+]
+notebooks = [
+    "jupyterlab>=4,<5",
+    "scikit-image>=0.25,<1",
+]
+dev = [
+    "build>=1.2,<2",
+    "coverage>=7.6,<8",
+    "isort>=5.13,<7",
+    "pytest>=8.3,<10",
+    "pyright>=1.1.400,<2",
+    "ruff>=0.9,<1",
+    "twine>=6,<7",
+]
+
+[project.scripts]
+mrax-gui = "mrax.gui.app:main"
+
+[tool.setuptools.packages.find]
+include = ["mrax*"]
+exclude = [
+    "docs*",
+    "notebooks*",
+    "tests*",
+]
+
+[tool.setuptools.package-data]
+"mrax.library" = ["parameter_library.toml"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B"]
+ignore = ["B008", "B905", "E741"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.coverage.run]
+branch = true
+source = ["mrax"]
+
+[tool.coverage.report]
+fail_under = 22
+show_missing = true
+skip_empty = true

@@ -1,0 +1,227 @@
+:root {
+  --pst-color-primary: #1f77b4;
+  --pst-color-secondary: #ff7f0e;
+}
+
+.mrax-hero {
+  border: 1px solid var(--pst-color-border);
+  border-radius: 12px;
+  padding: 1.75rem;
+  margin: 0 0 2rem;
+  background:
+    linear-gradient(135deg, rgba(31, 119, 180, 0.12), rgba(255, 127, 14, 0.08)),
+    var(--pst-color-background);
+}
+
+.mrax-hero-inner {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 1.75rem;
+  align-items: center;
+}
+
+.mrax-hero-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+.mrax-hero-mark img {
+  display: block;
+  width: 150px;
+  max-width: 100%;
+  height: auto;
+}
+
+.mrax-hero-title {
+  max-width: 760px;
+  margin: 0;
+  color: var(--pst-color-heading);
+  font-size: 2rem;
+  line-height: 1.1;
+  font-weight: 750;
+}
+
+.mrax-hero-copy {
+  max-width: 780px;
+  margin: 1rem 0 0;
+  font-size: 1.05rem;
+}
+
+.mrax-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.4rem;
+}
+
+.mrax-hero a.mrax-button {
+  display: inline-block;
+  border: 1px solid var(--pst-color-border);
+  border-radius: 7px;
+  padding: 0.55rem 0.85rem;
+  font-weight: 700;
+  text-decoration: none;
+  background: var(--pst-color-background);
+}
+
+.mrax-hero a.mrax-button,
+.mrax-hero a.mrax-button:visited {
+  color: var(--pst-color-primary);
+}
+
+.mrax-hero a.mrax-button:hover {
+  text-decoration: none;
+  border-color: var(--pst-color-primary);
+}
+
+.mrax-hero a.mrax-button-primary,
+.mrax-hero a.mrax-button-primary:visited {
+  background: #4bb4c5;
+  border-color: #4bb4c5;
+  color: #06131f !important;
+}
+
+.mrax-hero a.mrax-button-primary:hover {
+  background: #60c0cf;
+  border-color: #60c0cf;
+  color: #06131f !important;
+}
+
+@media (max-width: 720px) {
+  .mrax-hero {
+    padding: 1.25rem;
+  }
+
+  .mrax-hero-inner {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .mrax-hero-mark {
+    justify-content: flex-start;
+  }
+
+  .mrax-hero-mark img {
+    width: 112px;
+  }
+
+  .mrax-hero-title {
+    font-size: 1.55rem;
+  }
+}
+
+/* Constrain line lengths for readability */
+.bd-article {
+  max-width: 980px;
+}
+
+/* Light card styling for lists */
+.toctree-wrapper ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.toctree-wrapper ul li {
+  background: #f8f9fb;
+  border: 1px solid #e1e5ea;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.toctree-wrapper ul li a {
+  font-weight: 600;
+  color: var(--pst-color-primary);
+}
+
+/* Soften code blocks */
+div.highlight pre {
+  border-radius: 6px;
+}
+
+.notebook-embed {
+  margin: 16px 0;
+  border: 1px solid #e1e5ea;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.04);
+}
+
+.notebook-embed iframe {
+  display: block;
+  width: 100%;
+  background: #fff;
+}
+
+.bd-article > section[id] + h1[id] {
+  display: none;
+}
+
+/* Header logo: larger image, hide text label */
+.navbar-brand .logo__image {
+  height: 52px;
+  max-height: 52px;
+  width: auto;
+}
+
+.navbar-brand .logo__title {
+  display: none;
+}
+
+@media (min-width: 960px) {
+  .bd-header__inner {
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  .navbar-header-items__start {
+    flex: 0 0 auto;
+    max-width: none;
+    width: auto;
+  }
+
+  .navbar-header-items {
+    align-items: center;
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    max-width: none;
+    min-width: 0;
+    width: auto;
+  }
+
+  .navbar-header-items__center {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .bd-navbar-elements {
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+
+  .navbar-header-items__end {
+    flex: 0 0 auto;
+  }
+}
+
+/* Dark theme tweaks */
+html[data-theme="dark"] .toctree-wrapper ul li {
+  background: #1f2733;
+  border-color: #2e3a4a;
+}
+
+html[data-theme="dark"] .toctree-wrapper ul li a {
+  color: var(--pst-color-primary);
+}
+
+html[data-theme="dark"] .notebook-embed {
+  border-color: #2e3a4a;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+html[data-theme="dark"] .notebook-embed iframe {
+  background: #0f141c;
+}

@@ -1,0 +1,13 @@
+include LICENSE
+include README.md
+include CITATION.cff
+include MRax_logo.png
+include pyrightconfig.json
+include requirements.txt
+include requirements-dev.txt
+recursive-include mrax *.py *.toml
+recursive-include docs *.rst *.py *.css *.html *.png
+recursive-include notebooks *.ipynb
+recursive-include tests *.py
+prune docs/_build
+global-exclude __pycache__ *.py[cod] .DS_Store

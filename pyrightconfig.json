@@ -1,0 +1,10 @@
+{
+  "include": [
+    "mrax/analysis/group.py",
+    "mrax/data_struct/dataset.py",
+    "mrax/data_struct/experiment.py",
+    "mrax/data_struct/quantity.py"
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic"
+}

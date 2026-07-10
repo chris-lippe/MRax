@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use MRax in your research, please cite it using the metadata in this file."
+title: "MRax: JAX-based tools for quantitative MRI research"
+version: 0.1.0
+date-released: 2026-07-10
+type: software
+license: MIT
+authors:
+  - given-names: Chris
+    family-names: Lippe
+repository-code: "https://github.com/chris-lippe/MRax"
+url: "https://github.com/chris-lippe/MRax"
+abstract: "MRax is a JAX-based Python library for quantitative MRI model fitting, reconstruction, and analysis."

@@ -1,0 +1,14 @@
+jax>=0.4.35,<0.11
+optax>=0.2.4,<0.3
+numpy>=2,<3
+scipy>=1.14,<2
+ismrmrd>=1.14,<2
+nibabel>=5.3,<6
+dipy>=1.10,<2
+pypulseq>=1.4,<2
+SimpleITK>=2.4,<3
+PySide6>=6.8,<7
+pyqtgraph>=0.13,<0.15
+qtpy>=2.4,<3
+superqt>=0.7,<1
+matplotlib>=3.9,<4
