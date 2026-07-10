@@ -209,7 +209,7 @@ __marimo__/
 # Output files
 *.png
 !MRax_logo.png
-!docs/_static/MRax_logo.png
+!docs/_static/MRax_logo*
 *.mp4
 *.pkl
 *.mrd
