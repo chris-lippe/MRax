@@ -135,8 +135,8 @@ html_theme_options = {
     "navigation_depth": 2,
     "navbar_end": ["theme-switcher", "navbar-icon-links"],
     "logo": {
-        "image_light": "MRax_logo_nav.png",
-        "image_dark": "MRax_logo_nav.png",
+        "image_light": "_static/MRax_logo_nav.png",
+        "image_dark": "_static/MRax_logo_nav.png",
         "text": "",
     },
     "secondary_sidebar_items": [],
