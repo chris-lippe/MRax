@@ -18,8 +18,8 @@ Reconstruction code assumes that geometry already matches the data:
 - Cartesian ``DataSet.kspace`` is sorted on the intended ``ky``/``kx`` grid.
 - Non-Cartesian ``DataSet.trajectory`` is in the same sample order as
   ``DataSet.kspace``.
-- Corrections that act in k-space are applied before image reconstruction or
-  model-based fitting.
+- Corrections that act in k-space are applied before image or
+  parameter map reconstruction.
 
 Image-domain operations such as output cropping, magnitude conversion, coil
 combination, and transposition are separate. They support display or vendor comparison;

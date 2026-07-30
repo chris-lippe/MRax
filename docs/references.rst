@@ -70,9 +70,10 @@ Quantitative MRI models
    doi:10.1006/jmrb.1995.1111.
    PubMed: https://pubmed.ncbi.nlm.nih.gov/7648009/.
 
-.. [Lippe2026] Lippe, C. and Hoerr, V. Effective Modeling of Continuous Wave Z-Spectra 
-   for Quantitative CEST and CESL MRI Across Exchange Regimes. *Magnetic Resonance in Medicine* (2026).
-   doi:10.1002/mrm.70483.
+.. [Lippe2026] Lippe, C. and Hoerr, V. Effective Modeling of Continuous Wave Z-Spectra
+   for Quantitative CEST and CESL MRI Across Exchange Regimes. *Magnetic Resonance
+   in Medicine*. Version of record published online 30 July 2026.
+   https://doi.org/10.1002/mrm.70483.
 
 Regularization and denoising
 ----------------------------

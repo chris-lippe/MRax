@@ -7,6 +7,9 @@ parametrizations, regularizer hooks, and unit metadata.
 Method references are collected in :doc:`references`; the sections below cite the
 non-trivial model families directly where they are introduced.
 
+All equations below define the mathematical forward model, evaluated independently
+at each spatial location and acquisition frame.
+
 .. contents::
    :local:
    :depth: 2
@@ -72,12 +75,17 @@ Optional helpers:
 Once defined, construct the model from your module and pass it to ``run_fit`` or attach
 it to an experiment/study.
 
-Core relaxometry
-----------------
+Relaxometry and perfusion models
+--------------------------------
 
 T1 inversion recovery (``make_t1_ir_model``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-- Signal: :math:`S = |A - 2 A e^{-TI / T1}|` (small bias added in code for stability).
+- Defining equation:
+
+  .. math::
+
+     S(TI) = \left|A - 2A\exp\left(-\frac{TI}{T_1}\right)\right|.
+
 - Parameters: ``amplitude`` (a.u.), ``t1`` (ms).
 - Observables: inversion times ``TI`` (ms) provided either in ``offsets`` or ``experiment.observables``.
 - Default parameter bounds: ``t1`` in ``[50, 5000]`` ms via a sigmoid mapping; amplitude constrained positive.
@@ -87,18 +95,31 @@ FAIR ASL (``make_fair_asl_model``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 - References: FAIR was introduced for relative cerebral blood-flow and perfusion
   imaging by Kim [Kim1995]_ and Kim/Tsekos [KimTsekos1997]_.
-- Signal: inversion recovery with selective/non-selective parameter maps chosen by ``fair_label``.
+- Defining equation: let :math:`\ell` be ``fair_label`` and define
+  :math:`(A_\ell,T_{1,\ell})=(A_{sel},T_{1,sel})` for :math:`\ell<0.5`, otherwise
+  :math:`(A_{non},T_{1,non})`.  The frame signal is
+
+  .. math::
+
+     S(TI,\ell) = \left|A_\ell - 2A_\ell\exp\left(-\frac{TI}{T_{1,\ell}}\right)\right|.
+
 - Parameters: ``amplitude_sel``/``t1_sel`` and ``amplitude_non``/``t1_non``.
 - Observables: ``TI`` (ms) and ``fair_label`` (0=selective, 1=non-selective).
 - Derived maps: ``t1_sel``, ``t1_non``, and ``perfusion_map`` (ml/100g/min).
-- Perfusion formula uses :math:`\lambda \cdot 60000 \cdot (T1_{non}/T1_{blood}) \cdot (1/T1_{sel} - 1/T1_{non})`.
+- Defining derived-perfusion equation:
+
+  .. math::
+
+     f = \lambda\,60000\,\frac{T_{1,non}}{T_{1,blood}}
+     \left(\frac{1}{T_{1,sel}}-\frac{1}{T_{1,non}}\right).
+
   Defaults to ``t1_blood=2430`` ms and ``partition_coeff=90``; override via observables or study globals with keys
   ``t1_blood``/``t1_blood_ms`` and ``partition_coeff``/``partition_coefficient``/``lambda``.
 - FAIR scans default to experiment type ``fair_asl`` and use this model.
 
 T1 variable TR (``make_t1_vtr_model``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-- Signal: :math:`S = A (1 - e^{-TR / T1}) + c`.
+- Defining equation: :math:`S(TR) = A \left(1 - \exp(-TR/T_1)\right) + c`.
 - Parameters: ``amplitude`` (a.u.), ``t1`` (ms), ``bias`` (a.u.).
 - Observables: repetition times ``TR`` (ms).
 - Default parameter bounds: ``t1`` in ``[50, 5000]`` ms, amplitudes/bias scaled positive.
@@ -107,7 +128,12 @@ T1 variable flip angle (``make_t1_vfa_model``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 - Reference: the spoiled-GRE variable-flip-angle formulation follows the
   DESPOT-style T1 mapping literature [Deoni2003]_.
-- Signal: spoiled GRE steady state :math:`S = A \tfrac{(1-e^{-TR/T1})\sin(\alpha)}{1-\cos(\alpha)e^{-TR/T1}} + c`.
+- Defining equation (with :math:`\alpha` converted from degrees to radians):
+
+  .. math::
+
+     E_1 &= \exp(-TR/T_1), \\
+     S(TR,\alpha) &= A\frac{(1-E_1)\sin\alpha}{1-E_1\cos\alpha}+c.
 - Parameters: ``amplitude`` (a.u.), ``t1`` (ms), ``bias`` (a.u.).
 - Observables: repetition time ``TR`` (ms) plus flip angles (deg) provided via
   ``flip_angle``/``flip_angles``/``FA`` in observables or directly as ``offsets``.
@@ -115,26 +141,41 @@ T1 variable flip angle (``make_t1_vfa_model``)
 
 Exponential decay, T2, and T2* (``make_exp_decay_model``, ``make_t2_se_model``, ``make_t2star_se_model``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-- Shared base signal: :math:`S = A \exp(-TE / \tau) + c`.
+- Shared defining equation: :math:`S(TE) = A\exp(-TE/\tau)+c`.
 - The generic ``make_exp_decay_model`` exposes ``decay_time`` (ms).
 - ``make_t2_se_model`` uses the same model with the decay parameter named ``t2``;
   multi-spin-echo (``mse``) experiments default to this model.
-- Signal: :math:`S = A \exp(-TE / T2) + c`.
+- Defining T2 equation: :math:`S(TE) = A\exp(-TE/T_2)+c`.
 - Parameters: ``amplitude`` (a.u.), ``t2`` (ms), ``bias`` (a.u.).
 - Observables: echo times ``TE`` (ms) via ``offsets`` or ``experiment.observables``.
 - Default parameter bounds: ``t2`` in ``[5, 200]`` ms, amplitudes positive.
 - ``make_t2star_se_model`` uses the same model with the decay parameter named
   ``t2star``; multi-gradient-echo (``mge``) experiments default to this model.
-- Signal: :math:`S = A \exp(-TE / T2^*) + c`.
+- Defining T2* equation: :math:`S(TE) = A\exp(-TE/T_2^*)+c`.
 - Parameters: ``amplitude`` (a.u.), ``t2star`` (ms), ``bias`` (a.u.).
 - Observables: echo times ``TE`` (ms).
 - Default parameter bounds: ``t2star`` in ``[1, 200]`` ms, amplitudes positive.
+
+Diffusion models
+----------------
 
 Diffusion tensor imaging (``make_dti_tensor_model``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 - Reference: diffusion tensor MRI follows the tensor formulation introduced by
   Basser, Mattiello, and LeBihan [Basser1994]_.
-- Signal: :math:`S = S_0 \exp(-b \cdot \mathbf{g}^T \mathbf{D} \mathbf{g})`.
+- Defining equation:
+
+  .. math::
+
+     \mathbf D &=
+     \begin{bmatrix}
+     d_{xx} & d_{xy} & d_{xz} \\
+     d_{xy} & d_{yy} & d_{yz} \\
+     d_{xz} & d_{yz} & d_{zz}
+     \end{bmatrix}, \qquad
+     \mathbf g = \begin{bmatrix}g_x & g_y & g_z\end{bmatrix}^{\mathsf T}, \\
+     D_{app}(\mathbf g) &= \mathbf g^{\mathsf T}\mathbf D\mathbf g, \\
+     S(b,\mathbf g) &= S_0\exp\left[-bD_{app}(\mathbf g)\right].
 - Parameters: ``s0`` (a.u.) plus tensor components ``dxx``, ``dyy``, ``dzz``,
   ``dxy``, ``dxz``, ``dyz`` (mm\ :sup:`2`/s).
 - Observables: ``bvals`` (s/mm\ :sup:`2`) and ``bvecs`` (unitless, shape ``(N, 3)``).
@@ -145,7 +186,13 @@ Diffusion kurtosis (``make_dki_kurtosis_model``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 - References: the kurtosis extension follows diffusional kurtosis imaging
   [Jensen2005]_, with MRI context summarized in [JensenHelpern2010]_.
-- Signal: :math:`S = S_0 \exp(-b D_{app} + \tfrac{1}{6} b^2 D_{app}^2 K)` with isotropic kurtosis :math:`K`.
+- Defining equation, using the same :math:`D_{app}(\mathbf g)` tensor contraction
+  as DTI and a scalar (isotropic) kurtosis field :math:`K`:
+
+  .. math::
+
+     S(b,\mathbf g) = S_0\exp\left[-bD_{app}(\mathbf g)
+     +\frac{b^2D_{app}(\mathbf g)^2K}{6}\right].
 - Parameters: ``s0`` (a.u.), tensor components ``dxx``...``dyz`` (mm\ :sup:`2`/s), and ``kurtosis`` (unitless).
 - Observables: ``bvals`` (s/mm\ :sup:`2`) and ``bvecs`` (unitless, shape ``(N, 3)``).
 - Derived maps: DTI metrics plus ``mk`` (mean kurtosis).
@@ -156,8 +203,14 @@ Saturation-transfer / CEST models
 WASABI / B0-B1 mapping (``make_wasabi_model``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 - Reference: the WASABI signal model follows Schuenke et al. [Schuenke2017]_.
-- Signal: :math:`|c - d \sin^2(\theta) \sin^2(\phi)|` with :math:`\theta = \arctan(\gamma B1 / \Delta\omega)`
-  and :math:`\phi = \tfrac{1}{2} \tau \sqrt{(\gamma B1)^2 + \Delta\omega^2}` (``tau`` is the pulse duration).
+- Defining equation, with :math:`\Delta\omega=2\pi B_0(\Delta_{ppm}-\delta_{ppm})`
+  in rad/s and :math:`\tau=t_{sat}` in seconds:
+
+  .. math::
+
+     \theta &= \arctan\left(\frac{\gamma B_1}{\Delta\omega}\right), \\
+     \phi &= \frac{\tau}{2}\sqrt{(\gamma B_1)^2+\Delta\omega^2}, \\
+     S &= \left|c-d\sin^2\theta\sin^2\phi\right|.
 - Parameters: ``c`` and ``d`` (scaling), ``b1`` (uT), ``delta`` (Hz, B0 offset). Derived maps return B0 (ppm) and
   B1 deviation (% of nominal).
 - Observables: frequency ``offsets`` in ppm (converted using the study field strength), optional ``sat_time`` (ms)
@@ -170,7 +223,13 @@ Multi-pool Lorentzian (``make_multipool_lorentzian_model``)
 - References: the model is an empirical Lorentzian Z-spectrum decomposition in
   the CEST/MR Z-spectroscopy tradition [Liu2013]_ [ZaissBachert2013]_,
   including Lorentzian-line-fit separation of pool contributions [Zaiss2011]_.
-- Signal: :math:`Z(\Delta\omega) = Z_{base} - \sum_i a_i \tfrac{(G_i/2)^2}{(\Delta\omega - \delta_i)^2 + (G_i/2)^2}`.
+- Defining equation: with :math:`\omega=2\pi(\Delta_{ppm}-B_{0,ppm})`,
+  :math:`\omega_i=2\pi\delta_{i,ppm}`, and :math:`h_i=G_i/2`,
+
+  .. math::
+
+     L_i(\omega) = a_i\frac{h_i^2}{(\omega-\omega_i)^2+h_i^2},
+     \qquad Z(\omega)=Z_{base}-\sum_iL_i(\omega).
 - Observables: ``offsets`` in ppm. Saturation-transfer offsets and pool frequency
   shifts are handled as angular ppm by multiplying those ppm values by
   :math:`2\pi`. Empirical linewidth and rate parameters stay in the units declared
@@ -189,8 +248,35 @@ Zaiss full analytical (``make_zaiss_full_model``)
 - Reference: implements the approximate continuous-wave analytical Z-spectrum
   model of Zaiss/Trott-Palmer used as the starting point for AB-MT+n
   [ZaissBachert2013]_.
-- Signal: :math:`Z = (P_z^2 - Z_{ss}) e^{-R_{1\rho} t_{sat}} + Z_{ss}` with
-  :math:`R_{1\rho} = R_{eff} + \sum_i R_{ex,i}` and explicit exchange pools.
+- Defining equations: after B0/residual-water correction, let
+  :math:`\omega=2\pi\Delta_{ppm}`, :math:`\omega_1=\gamma B_{1,eff}/B_0`,
+  :math:`c_\theta=|\omega|/\sqrt{\omega^2+\omega_1^2}`, and
+  :math:`P_z=c_\theta` (or :math:`P_z=1` when ``spin_lock`` is enabled).  For each
+  pool :math:`i`, with :math:`\omega_i=2\pi\delta_i`, the implemented exchange rate is
+
+  .. math::
+
+     \Gamma_i^2/4 &= \frac{R_{2i}+k_i}{k_i}\omega_1^2+(R_{2i}+k_i)^2, \\
+     q_i &= R_{2i}+k_i\frac{\omega_i^2+R_{2i}(R_{2i}+k_i)}
+     {\omega^2+\omega_1^2}, \\
+     R_{ex,i} &= \frac{f_i\omega_1^2q_i}
+     {\Gamma_i^2/4+(\omega-\omega_i)^2}.
+
+  Water relaxation and the steady state are
+
+  .. math::
+
+     R_{eff} &= \frac{R_{1w}\omega^2+R_{2w}\omega_1^2}{\omega^2+\omega_1^2}, \\
+     R_{1\rho} &= R_{eff}+R_{ex,mt}+\sum_{i\ne mt}\frac{R_{ex,i}}{1+f_{mt}}, \\
+     Z_{ss} &= \frac{R_{1,obs}P_zc_\theta}{R_{1\rho}}, \\
+     Z &= (P_z^2Z_i-Z_{ss})\exp(-R_{1\rho}t_{sat})+Z_{ss}.
+
+  :math:`R_{1,obs}` is an inserted ``r1_map`` converted to ppm, or its
+  model-based fallback :math:`(R_{1w}+f_{mt}R_{1,mt})/(1+f_{mt})` when the MT
+  pool is present (:math:`R_{1w}` otherwise).
+
+  The shipped forward model fixes :math:`Z_i=1`; the factor is shown explicitly
+  because it defines the initial longitudinal magnetization term.
 - Observables: ``freq_offsets`` (ppm), ``sat_b1`` (uT), ``sat_time`` (ms), plus
   study-wide ``field_strength_mhz``. Optional ``t1_map``/``r1_map``,
   ``b0_map`` and ``b1_map`` are consumed with the same units as AB-MT+n.
@@ -201,13 +287,58 @@ Zaiss full analytical (``make_zaiss_full_model``)
 
 AB-MT+n (``make_AB_MT_n_model``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-- Reference: AB-MT+n is an MRax model described by Lippe and Hoerr in a
-  manuscript currently under review at *Magnetic Resonance in Medicine*
+- Reference: AB-MT+n is the saturation-transfer model introduced by Lippe and Hoerr
   [Lippe2026]_. Semisolid MT line-shape handling follows the
   super-Lorentzian MT modeling context of Morrison, Stanisz, and Henkelman
   [Morrison1995]_.
-- Signal: analytic approximation to multi-pool Bloch–McConnell dynamics with explicit
-  saturation power and duration dependence.
+- Defining equations: use the corrected angular offset :math:`\omega=2\pi\Delta_{ppm}`
+  and :math:`\omega_1=\gamma B_{1,eff}/B_0`.  Let
+  :math:`P=|\omega|/\sqrt{\omega^2+\omega_1^2}` (or :math:`P=1` for
+  ``spin_lock``).  For a non-MT pool with fraction :math:`f`, rate :math:`k`, and
+  offset :math:`\delta`, the off-resonance contribution is
+
+  .. math::
+
+     D &= 4\omega_1^2\delta^2+(k^2+\delta^2)^2, \\
+     a &= \frac{2\delta^3fk}{D},\qquad
+     b = \frac{\delta^2fk(\delta^2+k^2)}{D},\qquad
+     d = \frac{\delta^2fk(3\delta^2-k^2)}{D}, \\
+     F(\omega) &= \frac{d-a\omega}{(\omega-\delta)^2+k^2+\omega_1^2}
+     +\frac{b+a\omega}{\omega^2+\omega_1^2}.
+
+  For the MT pool, with :math:`u=\omega-\delta_{mt}`, the selected RF rate is
+
+  .. math::
+
+     R_{rf}^{Lor}(u) &= \frac{\omega_1^2R_{2,mt}}{R_{2,mt}^2+u^2}, \\
+     R_{rf}^{Gau}(u) &= \frac{\omega_1^2\sqrt{\pi/2}}{R_{2,mt}}
+     \exp\left[-\left(\frac{u}{2R_{2,mt}}\right)^2\right], \\
+     R_{rf}^{SL}(u) &= \omega_1^2\frac{L_{SL}(|u|/R_{2,safe})}{R_{2,safe}},
+     \qquad R_{2,safe}=|R_{2,mt}|.
+
+  :math:`L_{SL}` is the package's tabulated super-Lorentzian kernel, linearly
+  interpolated over its stored domain and set to zero outside it.  The complete
+  rate and signal equations are
+
+  .. math::
+
+     R_{ex,mt} &= R_{rf}(\omega-\delta_{mt},\omega_1,R_{2,mt})
+     \frac{f_{mt}}{1+f_{mt}}\frac{\omega^2}{\omega^2+\omega_1^2}, \\
+     R_{1\rho} &= \frac{R_{1,obs}\omega^2+b_0\omega_1^2+a_0\omega_1^2\omega}
+     {\omega^2+\omega_1^2}+R_{ex,mt}
+     +\sum_{i\ne mt}\frac{\omega_1^2F_i(\omega)}{1+f_{mt}}, \\
+     Z_{ss} &= \frac{R_{1,obs}P|\omega|/\sqrt{\omega^2+\omega_1^2}}
+     {R_{1\rho}}, \\
+     Z_{rec} &= 1+\left(\sqrt{\max(\sin^{-2}\alpha_{eff}-1,0)}\,Z_{prev}-1\right)
+     \exp(-R_{1,obs}t_{rec}), \\
+     Z &= 1-C+C\left[(Z_{rec}P^2-Z_{ss})\exp(-R_{1\rho}t_{sat})+Z_{ss}\right],
+     \qquad C=\exp(-R_{1,obs}t_{delay}).
+
+  Here :math:`t_{sat}`, :math:`t_{delay}`, and :math:`t_{rec}=TR-t_{sat}-t_{delay}`
+  are converted to the implementation's ppm-time convention by multiplying
+  seconds by the study field strength.  :math:`a_0`, :math:`b_0`, and
+  :math:`\sin\alpha_{eff}` are fitted AB-MT+n parameters; :math:`Z_{prev}=1`
+  unless supplied as an observable.
 - Observables: ``freq_offsets`` (ppm), ``sat_b1`` (uT), ``sat_time`` (ms), ``TR`` (ms),
   plus a study-wide ``field_strength_mhz``.
 - Optional maps: ``r1_map`` or ``t1_map`` (required), ``b0_map``/``b1_map`` for B0/B1 corrections.
@@ -219,6 +350,14 @@ AB-MT+n (``make_AB_MT_n_model``)
   share parameters. If you want the repeat axis explained by a side model, insert the
   derived observable directly into the experiment (``Experiment.insert_observables``)
   and map the repeat dimension to it.
+
+Identity model (``make_identity_model``)
+-----------------------------------------
+- Defining equation: :math:`S_j(\mathbf r)=A(\mathbf r)` for every acquisition
+  frame :math:`j`.  The amplitude map is broadcast across frames; when its leading
+  axis already has the frame length, it is returned unchanged.
+- Parameters: ``amplitude`` (unitless).  This is the default placeholder for
+  unsupported experiment types and does not encode acquisition dependence.
 
 Using the models with importers
 -------------------------------
