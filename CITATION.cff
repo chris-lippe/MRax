@@ -2,7 +2,8 @@ cff-version: 1.2.0
 message: "If you use MRax in your research, please cite it using the metadata in this file."
 title: "MRax: JAX-based tools for quantitative MRI research"
 version: 0.1.0
-date-released: 2026-07-10
+date-released: 2026-07-31
+doi: 10.5281/zenodo.21723328
 type: software
 license: MIT
 authors:
