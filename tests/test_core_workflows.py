@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -5,9 +6,18 @@ import pytest
 import mrax.core.study_runner as study_runner
 from mrax.analysis.dti import dti_design_rank, fit_dti_log_linear
 from mrax.analysis.roi import ROI, collect_roi_stats
-from mrax.core.loss_builder import make_model_callable
+from mrax.core.loss_builder import build_loss, make_model_callable
 from mrax.core.study_runner import execute_study_plan, plan_study_fits
-from mrax.data_struct import DataSet, Quantity, Study, load_study_results, save_study_results
+from mrax.core.variance import estimate_data_variance
+from mrax.data_struct import (
+    DataSet,
+    Experiment,
+    Model,
+    Quantity,
+    Study,
+    load_study_results,
+    save_study_results,
+)
 from mrax.library import build_default_experiment, default_model_for_type, make_t2_se_model
 from mrax.library.default_models import make_dti_tensor_model
 from mrax.opt.regularizers import total_variation_penalty
@@ -39,6 +49,152 @@ def _small_t2_study():
         study_globals={"field_strength_mhz": Quantity(jnp.asarray(400.0), "MHz")},
     )
     return study, model
+
+
+def _constant_signal_problem():
+    experiment = Experiment(
+        dims={"frame": 2, "x": 1, "y": 1},
+        observables={"sample_index": Quantity(jnp.arange(2), "1")},
+    )
+
+    def model_apply(fields, _offsets, _observables=None):
+        return jnp.broadcast_to(fields["level"], experiment.shape)
+
+    def parametrization_factory(spatial_shape):
+        params = {"level": jnp.zeros(spatial_shape)}
+        return params, lambda values: values
+
+    model = Model(
+        name="constant_signal",
+        model_apply=model_apply,
+        parametrization_factory=parametrization_factory,
+        parameter_units={"level": "a.u."},
+    )
+    dataset = DataSet(data=jnp.asarray([0.0, 2.0]).reshape(experiment.shape))
+    return experiment, model, dataset
+
+
+def test_loss_combines_inverse_variance_weighting_with_rms_scaling():
+    experiment, model, dataset = _constant_signal_problem()
+    params = {"level": jnp.zeros((1, 1))}
+
+    uniform_loss, _, _ = build_loss(experiment, model, dataset)
+    scalar_variance_loss, _, _ = build_loss(
+        experiment, model, dataset, data_variance=7.0
+    )
+    weighted_loss, _, _ = build_loss(
+        experiment, model, dataset, data_variance=jnp.asarray([1.0, 4.0])
+    )
+    rescaled_variance_loss, _, _ = build_loss(
+        experiment, model, dataset, data_variance=jnp.asarray([10.0, 40.0])
+    )
+
+    assert float(uniform_loss(params)) == pytest.approx(1.0)
+    assert float(scalar_variance_loss(params)) == pytest.approx(1.0)
+    assert float(weighted_loss(params)) == pytest.approx(0.4)
+    assert float(rescaled_variance_loss(params)) == pytest.approx(0.4)
+
+    optimum = {"level": jnp.full((1, 1), 0.4)}
+    gradient = jax.grad(weighted_loss)(optimum)["level"]
+    assert np.allclose(np.asarray(gradient), 0.0, atol=1e-6)
+
+
+@pytest.mark.parametrize("variance", ([1.0, 0.0], [1.0, np.nan], [1.0, 2.0, 3.0]))
+def test_loss_rejects_invalid_data_variance(variance):
+    experiment, model, dataset = _constant_signal_problem()
+
+    with pytest.raises(ValueError, match="data_variance"):
+        build_loss(experiment, model, dataset, data_variance=jnp.asarray(variance))
+
+
+def test_auto_data_variance_estimates_heteroscedastic_frame_noise():
+    rng = np.random.default_rng(7)
+    sigma = np.asarray([0.5, 1.0, 2.0], dtype=np.float32)
+    data = 4.0 + rng.normal(size=(3, 96, 96)).astype(np.float32) * sigma[:, None, None]
+    experiment = Experiment(
+        dims={"frame": 3, "x": 96, "y": 96},
+        observables={"sample_index": Quantity(jnp.arange(3), "1")},
+    )
+    dataset = DataSet(data=jnp.asarray(data))
+
+    estimate = estimate_data_variance(experiment, dataset, shrinkage=0.0)
+    estimated_relative = estimate.relative_variance / estimate.relative_variance[0]
+    expected_relative = sigma**2 / sigma[0] ** 2
+
+    assert estimate.method == "wavelet_mad"
+    assert np.all(estimate.sample_count > 2000)
+    assert np.allclose(estimated_relative, expected_relative, rtol=0.15)
+
+
+def test_auto_data_variance_uses_magnitude_background_when_available():
+    rng = np.random.default_rng(17)
+    sigma = np.asarray([1.0, 2.0, 3.0], dtype=np.float32)
+    grid_x, grid_y = np.ogrid[:96, :96]
+    tissue = (grid_x - 48) ** 2 + (grid_y - 48) ** 2 < 30**2
+    frames = []
+    for frame_sigma in sigma:
+        real_noise = rng.normal(scale=frame_sigma, size=(96, 96))
+        imag_noise = rng.normal(scale=frame_sigma, size=(96, 96))
+        frame = np.sqrt(real_noise**2 + imag_noise**2)
+        frame[tissue] = np.abs(50.0 + real_noise[tissue])
+        frames.append(frame)
+    data = np.asarray(frames, dtype=np.float32)
+    experiment = Experiment(
+        dims={"frame": 3, "x": 96, "y": 96},
+        observables={"sample_index": Quantity(jnp.arange(3), "1")},
+    )
+    dataset = DataSet(data=jnp.asarray(data))
+
+    estimate = estimate_data_variance(experiment, dataset, min_samples=128, shrinkage=0.0)
+    estimated_relative = estimate.variance / estimate.variance[0]
+    expected_relative = sigma**2 / sigma[0] ** 2
+
+    assert estimate.method == "background_rayleigh"
+    assert np.all(estimate.sample_count >= 128)
+    assert np.allclose(estimated_relative, expected_relative, rtol=0.25)
+
+
+def test_auto_data_variance_builds_same_loss_as_explicit_estimate():
+    rng = np.random.default_rng(11)
+    sigma = np.asarray([0.5, 1.5], dtype=np.float32)
+    data = 2.0 + rng.normal(size=(2, 32, 32)).astype(np.float32) * sigma[:, None, None]
+    experiment = Experiment(
+        dims={"frame": 2, "x": 32, "y": 32},
+        observables={"sample_index": Quantity(jnp.arange(2), "1")},
+    )
+    dataset = DataSet(data=jnp.asarray(data))
+
+    def model_apply(fields, _offsets, _observables=None):
+        return jnp.broadcast_to(fields["level"], experiment.shape)
+
+    def parametrization_factory(spatial_shape):
+        params = {"level": jnp.zeros(spatial_shape)}
+        return params, lambda values: values
+
+    model = Model(
+        name="auto_variance_constant_signal",
+        model_apply=model_apply,
+        parametrization_factory=parametrization_factory,
+        parameter_units={"level": "a.u."},
+    )
+    estimate = estimate_data_variance(experiment, dataset)
+    auto_loss, params, unpack = build_loss(experiment, model, dataset, data_variance="auto")
+    explicit_loss, _, _ = build_loss(
+        experiment,
+        model,
+        dataset,
+        data_variance=estimate.variance,
+    )
+
+    assert np.asarray(unpack._mrax_variance_estimate.variance).shape == (2,)
+    assert float(auto_loss(params)) == pytest.approx(float(explicit_loss(params)), rel=1e-6)
+
+
+def test_loss_rejects_unknown_data_variance_mode():
+    experiment, model, dataset = _constant_signal_problem()
+
+    with pytest.raises(ValueError, match="must be 'auto'"):
+        build_loss(experiment, model, dataset, data_variance="estimate")
 
 
 def test_fit_study_storage_and_roi_workflow(tmp_path):

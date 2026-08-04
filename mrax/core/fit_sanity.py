@@ -344,6 +344,9 @@ def debug_fit_prototype(
     mask_fill_value: float | int | np.ndarray | None = 0.0,
     study_globals: Mapping[str, Quantity] | None = None,
     frame_mask: object | None = None,
+    data_variance: object | None = None,
+    variance_estimation_mask: object | None = None,
+    variance_estimation_mask_dims: tuple[str, ...] | None = None,
     auto_mask_nan_observables: bool = True,
 ) -> FitDebugReport:
     """Run a single non-jitted prototype optimization step and summarize the fit state."""
@@ -407,6 +410,9 @@ def debug_fit_prototype(
             mask_fill_value=mask_fill_value,
             study_globals=dict(global_obs),
             frame_mask=frame_mask,
+            data_variance=data_variance,
+            variance_estimation_mask=variance_estimation_mask,
+            variance_estimation_mask_dims=variance_estimation_mask_dims,
             auto_mask_nan_observables=auto_mask_nan_observables,
         )
         params = _validate_initial_params(default_params, initial_params)

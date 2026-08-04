@@ -3,6 +3,7 @@ from .fit_sanity import FitDebugReport, FitSanityReport, check_fit_sanity, debug
 from .loss_builder import build_loss, make_model_callable, run_fit
 from .study_runner import collect_skipped_experiments, execute_study_plan, plan_study_fits
 from .synthetic import make_example_suite, make_synthetic_study
+from .variance import VarianceEstimate, estimate_data_variance
 
 __all__ = [
     "discover_study_dirs",
@@ -15,6 +16,8 @@ __all__ = [
     "FitSanityReport",
     "make_example_suite",
     "make_synthetic_study",
+    "VarianceEstimate",
+    "estimate_data_variance",
     "run_batch_studies",
     "plan_study_fits",
     "execute_study_plan",

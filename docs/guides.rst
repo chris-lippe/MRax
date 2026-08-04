@@ -17,6 +17,7 @@ Core pipeline
 
    reconstruction
    preprocessing
+   variance_weighting
    studies
    batch
    storage
