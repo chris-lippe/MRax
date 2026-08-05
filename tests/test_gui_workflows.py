@@ -13,10 +13,14 @@ from mrax.gui.app import (
     _apply_observable_dim_compatibility,
     _capture_pyqtgraph_image_view_state,
     _experiment_metadata_template_from_session,
+    _export_object_records_for_session,
     _load_experiment_metadata_template_from_file,
     _restore_pyqtgraph_image_view_state,
+    _roi_nifti_reference_summary,
     _workspace_experiment_metadata_template_items,
+    _write_single_export_object,
 )
+from mrax.io.nifti import load_nifti
 from mrax.library import build_default_experiment, make_t2_se_model
 
 
@@ -86,6 +90,56 @@ def test_gui_roi_mask_round_trip_and_raw_import(tmp_path):
     assert loaded[0].metadata["color"] == "#abcdef"
     np.testing.assert_array_equal(loaded[0].mask, mask)
     np.testing.assert_array_equal(imported.mask, mask)
+
+
+def test_gui_roi_nifti_export_uses_reference_experiment_affine(tmp_path):
+    affine = np.asarray(
+        [
+            [0.0, -1.5, 0.0, 12.0],
+            [2.0, 0.0, 0.0, -8.0],
+            [0.0, 0.0, 3.0, 4.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    session = GuiSession()
+    session.create_empty_study("affine_export")
+    session.add_experiment(
+        "reference_scan",
+        np.zeros((2, 3), dtype=np.float32),
+        dims={"x": 2, "y": 3},
+        extra_metadata={"affine": affine.tolist()},
+    )
+    mask = np.asarray([[True, False, False], [False, True, False]])
+    session.add_roi(
+        ROI(
+            "mask",
+            mask,
+            dims=("x", "y"),
+            metadata={"source_experiment": "reference_scan", "slice_indices": {"frame": 0}},
+        )
+    )
+
+    roi_record = next(record for record in _export_object_records_for_session(session) if record["kind"] == "roi")
+    output = _write_single_export_object(roi_record, tmp_path / "mask.nii", "nifti")[0]
+    loaded_mask, loaded_affine = load_nifti(output)
+
+    np.testing.assert_array_equal(loaded_mask, mask.astype(np.float32))
+    np.testing.assert_allclose(loaded_affine, affine, atol=1e-6)
+    assert roi_record["nifti_reference"]["identity_fallback"] is False
+    assert "reference_scan: 1 mask(s), reference affine" in _roi_nifti_reference_summary(session)
+
+
+def test_gui_roi_nifti_export_keeps_identity_fallback_without_reference_geometry():
+    session = GuiSession()
+    session.create_empty_study("identity_export")
+    session.add_experiment("reference_scan", np.zeros((2, 2)), dims={"x": 2, "y": 2})
+    session.add_roi(ROI("mask", np.ones((2, 2), dtype=bool), dims=("x", "y")))
+
+    roi_record = next(record for record in _export_object_records_for_session(session) if record["kind"] == "roi")
+
+    np.testing.assert_array_equal(roi_record["nifti_reference"]["affine"], np.eye(4))
+    assert roi_record["nifti_reference"]["identity_fallback"] is True
+    assert "reference_scan: 1 mask(s), identity fallback" in _roi_nifti_reference_summary(session)
 
 
 def test_pyqtgraph_image_view_state_round_trip_preserves_range_and_levels():

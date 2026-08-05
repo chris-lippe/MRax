@@ -4537,6 +4537,10 @@ class _MainWindowMixin:
             mask = mask_slice_for_display(mask, dims=roi.dims, indices=self._current_slice_indices())
         transformed_mask = resample_mask_with_transform(mask, reference, result["transform"], inverse=inverse, output_dtype=bool)
         suffix = "to_moving" if inverse else "to_reference"
+        registration_metadata = dict(result.get("metadata") or {})
+        target_experiment = registration_metadata.get(
+            "moving_experiment" if inverse else "reference_experiment"
+        )
         transformed = ROI(
             _unique_roi_name(
                 _registration_roi_union(self.session.rois, self.session.shared_rois),
@@ -4548,6 +4552,7 @@ class _MainWindowMixin:
                 **dict(roi.metadata),
                 "shape": "mask",
                 "generated_by": "mrax.gui.registration",
+                "source_experiment": target_experiment or roi.metadata.get("source_experiment"),
                 "source_roi": roi.name,
                 "registration_transform": str(result["key"]),
                 "registration_direction": direction_key,
@@ -7322,6 +7327,13 @@ class _MainWindowMixin:
         dialog.setWindowTitle("Export MRax Data")
         dialog.resize(self._scaled_px(760), self._scaled_px(620))
         layout = QtWidgets.QVBoxLayout(dialog)
+        reference_info = QtWidgets.QLabel(_roi_nifti_reference_summary(self.session))
+        reference_info.setWordWrap(True)
+        reference_info.setStatusTip(
+            "ROI NIfTI files use the affine from the experiment on which each mask was created; "
+            "identity is used only when that reference geometry is unavailable."
+        )
+        layout.addWidget(reference_info)
         tabs = QtWidgets.QTabWidget()
         bulk_tab = QtWidgets.QWidget()
         bulk_layout = QtWidgets.QVBoxLayout(bulk_tab)
@@ -7784,16 +7796,30 @@ class _MainWindowMixin:
                 try:
                     from mrax.io.nifti import save_nifti
 
+                    references = [
+                        _roi_nifti_reference(self.session, row.get("metadata"))
+                        for row in group["labels"]
+                    ]
+                    label_reference = references[0]
+                    distinct_references = {
+                        (str(row.get("experiment") or ""), bool(row.get("identity_fallback")))
+                        for row in references
+                    }
+                    if len(distinct_references) > 1:
+                        export_manifest["warnings"].append(
+                            "ROI label mask combines masks from multiple reference experiments; "
+                            f"the combined label image uses {label_reference.get('experiment') or 'identity fallback'}."
+                        )
                     nifti_dir = roi_dir / "nifti"
                     label_nifti = nifti_dir / f"roi_labels{suffix}.nii"
                     label_nifti.parent.mkdir(parents=True, exist_ok=True)
-                    save_nifti(label_nifti, label_mask.astype(np.float32), np.eye(4))
+                    save_nifti(label_nifti, label_mask.astype(np.float32), label_reference["affine"])
                     saved.append(label_nifti)
                     binary_dir = nifti_dir / f"binary{suffix}"
-                    for row, mask in zip(group["labels"], binary_stack):
+                    for row, mask, reference in zip(group["labels"], binary_stack, references):
                         binary_path = binary_dir / f"{int(row['label']):03d}_{_safe_filename(row['name'])}.nii"
                         binary_path.parent.mkdir(parents=True, exist_ok=True)
-                        save_nifti(binary_path, mask.astype(np.float32), np.eye(4))
+                        save_nifti(binary_path, mask.astype(np.float32), reference["affine"])
                         saved.append(binary_path)
                 except Exception as exc:
                     export_manifest["warnings"].append(f"ROI label-mask NIfTI export failed: {exc}")
@@ -13039,18 +13065,18 @@ def _export_object_records_for_session(session: GuiSession) -> list[dict[str, An
     for roi in [*list(session.shared_rois), *list(session.rois)]:
         roi_by_name.setdefault(str(roi.name), roi)
     for roi in roi_by_name.values():
-        records.append(
-            _export_record(
-                "roi",
-                f"ROI / {roi.name}",
-                np.asarray(roi.mask),
-                group="ROIs",
-                name=roi.name,
-                dims=tuple(roi.dims or ()),
-                metadata=dict(roi.metadata),
-                roi=roi,
-            )
+        record = _export_record(
+            "roi",
+            f"ROI / {roi.name}",
+            np.asarray(roi.mask),
+            group="ROIs",
+            name=roi.name,
+            dims=tuple(roi.dims or ()),
+            metadata=dict(roi.metadata),
+            roi=roi,
         )
+        record["nifti_reference"] = _roi_nifti_reference(session, roi.metadata)
+        records.append(record)
     return records
 
 
@@ -13128,6 +13154,13 @@ def _single_export_record_metadata(record: Mapping[str, Any]) -> dict[str, Any]:
             "dims": list(roi.dims or ()),
             "metadata": _metadata_to_jsonable(dict(roi.metadata)),
         }
+    reference = record.get("nifti_reference")
+    if reference:
+        metadata["nifti_reference"] = {
+            key: value
+            for key, value in dict(reference).items()
+            if key != "affine"
+        }
     return _metadata_to_jsonable(metadata)
 
 
@@ -13195,10 +13228,122 @@ def _write_single_export_object(record: Mapping[str, Any], path: Path, file_type
             raise ValueError("NIfTI export supports real-valued 2D or 3D arrays only")
         from mrax.io.nifti import save_nifti
 
-        save_nifti(path, arr.astype(np.float32) if arr.dtype == bool else arr, np.eye(4))
+        reference = dict(record.get("nifti_reference") or {})
+        affine = _validated_nifti_affine(reference.get("affine"))
+        if affine is None:
+            affine = np.eye(4, dtype=float)
+        save_nifti(path, arr.astype(np.float32) if arr.dtype == bool else arr, affine)
     elif fmt == "json":
         path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
     return [path]
+
+
+def _validated_nifti_affine(value: Any) -> np.ndarray | None:
+    if value is None:
+        return None
+    try:
+        affine = np.asarray(value, dtype=float)
+    except (TypeError, ValueError):
+        return None
+    if affine.shape != (4, 4) or not np.all(np.isfinite(affine)):
+        return None
+    return affine
+
+
+def _experiment_nifti_affine(
+    session: GuiSession,
+    experiment_name: str | None,
+    *,
+    frame_index: int = 0,
+) -> np.ndarray | None:
+    if not experiment_name or not session.data:
+        return None
+    exp_data = (session.data.get("experiments") or {}).get(str(experiment_name))
+    if not isinstance(exp_data, Mapping):
+        return None
+
+    metadata_sources = [
+        exp_data,
+        exp_data.get("extra_metadata") or {},
+        exp_data.get("processed") or {},
+        exp_data.get("kspace_metadata") or {},
+    ]
+    for metadata in metadata_sources:
+        if not isinstance(metadata, Mapping):
+            continue
+        affines = metadata.get("affines")
+        if affines is not None:
+            try:
+                candidates = list(affines)
+            except TypeError:
+                candidates = []
+            if candidates:
+                index = max(0, min(int(frame_index), len(candidates) - 1))
+                affine = _validated_nifti_affine(candidates[index])
+                if affine is not None:
+                    return affine
+        affine = _validated_nifti_affine(metadata.get("affine"))
+        if affine is not None:
+            return affine
+
+    extra = exp_data.get("extra_metadata") or {}
+    visu = extra.get("visu") if isinstance(extra, Mapping) else None
+    if isinstance(visu, Mapping):
+        try:
+            from mrax.io.bruker_import import bruker_affine_from_visu
+
+            affine_value = bruker_affine_from_visu(dict(visu))
+        except Exception:
+            return None
+        if isinstance(affine_value, list):
+            if not affine_value:
+                return None
+            index = max(0, min(int(frame_index), len(affine_value) - 1))
+            affine = affine_value[index]
+        else:
+            affine = affine_value
+        return _validated_nifti_affine(affine)
+    return None
+
+
+def _roi_nifti_reference(session: GuiSession, metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    roi_metadata = dict(metadata or {})
+    declared_experiment = str(roi_metadata.get("source_experiment") or "").strip()
+    reference_experiment = declared_experiment or str(session.selected_experiment or "").strip()
+    indices = roi_metadata.get("slice_indices") or {}
+    try:
+        frame_index = int(indices.get("frame", 0)) if isinstance(indices, Mapping) else 0
+    except (TypeError, ValueError):
+        frame_index = 0
+    affine = _experiment_nifti_affine(session, reference_experiment, frame_index=frame_index)
+    return {
+        "experiment": reference_experiment or None,
+        "selection": "mask metadata" if declared_experiment else "active experiment",
+        "frame_index": max(0, frame_index),
+        "affine": np.eye(4, dtype=float) if affine is None else affine,
+        "identity_fallback": affine is None,
+    }
+
+
+def _roi_nifti_reference_summary(session: GuiSession) -> str:
+    active = str(session.selected_experiment or "none")
+    roi_by_name: dict[str, ROI] = {}
+    for roi in [*list(session.shared_rois), *list(session.rois)]:
+        roi_by_name.setdefault(str(roi.name), roi)
+    if not roi_by_name:
+        return f"Active reference experiment: {active}. No ROI masks are active."
+
+    grouped: dict[tuple[str, bool], int] = {}
+    for roi in roi_by_name.values():
+        reference = _roi_nifti_reference(session, roi.metadata)
+        name = str(reference.get("experiment") or "unavailable")
+        fallback = bool(reference.get("identity_fallback"))
+        grouped[(name, fallback)] = grouped.get((name, fallback), 0) + 1
+    details = []
+    for (name, fallback), count in sorted(grouped.items()):
+        status = "identity fallback" if fallback else "reference affine"
+        details.append(f"{name}: {count} mask(s), {status}")
+    return f"Active reference experiment: {active}. ROI NIfTI references: " + "; ".join(details) + "."
 
 
 def _shape_text(value: Any) -> str:
