@@ -299,6 +299,40 @@ class GuiSession:
         self.selected_experiment = names[0] if names else None
         self._reset_current_view_state()
 
+    def load_dicom_study(
+        self,
+        study_root: str | Path,
+        *,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+    ) -> None:
+        """Recursively import a DICOM folder as an in-memory MRax study."""
+
+        from mrax.io.dicom import load_dicom_study
+
+        root = Path(study_root)
+        if progress_callback is not None:
+            progress_callback(0, 1, "Reading DICOM series")
+        study, metadata = load_dicom_study(root, recursive=True)
+        if progress_callback is not None:
+            progress_callback(1, 1, "DICOM import complete")
+        self.study = study
+        self.import_metadata = metadata
+        self.data = _study_to_session_data(
+            study,
+            metadata,
+            source_root=root,
+            source_kind="dicom",
+        )
+        self._ensure_original_image_snapshots()
+        self.manifest_path = None
+        self.source_kind = "dicom"
+        self.view_states.clear()
+        self.shared_rois.clear()
+        self._slice_cache.clear()
+        names = self.experiment_names
+        self.selected_experiment = names[0] if names else None
+        self._reset_current_view_state()
+
     def add_experiment(
         self,
         name: str,
@@ -371,7 +405,12 @@ class GuiSession:
             metadata["non_imaging"] = True
         self.import_metadata = self.import_metadata or {"subject": self.study_name, "experiments": {}}
         self.import_metadata.setdefault("experiments", {})[exp_name] = metadata
-        self.data = _study_to_session_data(study, self.import_metadata, source_root=Path.cwd())
+        self.data = _study_to_session_data(
+            study,
+            self.import_metadata,
+            source_root=Path.cwd(),
+            source_kind="memory",
+        )
         for old_name, old_data in previous_experiments.items():
             if old_name not in self.data.get("experiments", {}):
                 continue
@@ -2381,7 +2420,13 @@ def _default_ab_mt_map_unit(kind: str) -> str:
     return {"t1": "ms", "b1": "%", "b0": "ppm"}[kind]
 
 
-def _study_to_session_data(study: Study, metadata: dict[str, Any] | None, *, source_root: Path) -> dict[str, Any]:
+def _study_to_session_data(
+    study: Study,
+    metadata: dict[str, Any] | None,
+    *,
+    source_root: Path,
+    source_kind: str = "bruker",
+) -> dict[str, Any]:
     metadata = metadata or {}
     experiments: dict[str, Any] = {}
     summary_entries: list[dict[str, Any]] = []
@@ -2443,7 +2488,7 @@ def _study_to_session_data(study: Study, metadata: dict[str, Any] | None, *, sou
             "study_name": metadata.get("subject") or source_root.name,
             "summary": {"experiments": summary_entries},
             "targets": [],
-            "source": {"kind": "bruker", "path": str(source_root)},
+            "source": {"kind": source_kind, "path": str(source_root)},
         },
         "experiments": experiments,
         "study_globals": dict(study.study_globals or {}),

@@ -4,6 +4,7 @@ numpy>=2,<3
 scipy>=1.14,<2
 ismrmrd>=1.14,<2
 nibabel>=5.3,<6
+pydicom>=3,<4
 dipy>=1.10,<2
 pypulseq>=1.4,<2
 SimpleITK>=2.4,<3

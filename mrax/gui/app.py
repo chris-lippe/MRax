@@ -1017,18 +1017,20 @@ class _MainWindowMixin:
         layout.addLayout(file_row)
 
         import_row = QtWidgets.QHBoxLayout()
-        bruker_btn = QtWidgets.QPushButton("Import...")
-        bruker_btn.clicked.connect(self.import_study_dialog)
+        import_btn = QtWidgets.QPushButton("Import...")
+        import_btn.clicked.connect(self.import_study_dialog)
         export_btn = QtWidgets.QPushButton("Export...")
         export_btn.clicked.connect(self.export_dialog)
-        import_row.addWidget(bruker_btn)
+        import_row.addWidget(import_btn)
         import_row.addWidget(export_btn)
         layout.addLayout(import_row)
 
         layout.addWidget(QtWidgets.QLabel("Experiments"))
         exp_action_row = QtWidgets.QHBoxLayout()
         add_exp_btn = QtWidgets.QPushButton("Add Experiment")
-        add_exp_btn.setStatusTip("Add blank, NIfTI, NumPy, or raw binary image data to the active study.")
+        add_exp_btn.setStatusTip(
+            "Add blank, NIfTI, DICOM, NumPy, or raw binary image data to the active study."
+        )
         add_exp_btn.clicked.connect(self.add_experiment_dialog)
         rename_exp_btn = QtWidgets.QPushButton("Rename")
         rename_exp_btn.setStatusTip("Rename the selected experiment in the active study.")
@@ -2137,11 +2139,22 @@ class _MainWindowMixin:
             return
         root = Path(directory)
         vendor = _detect_import_vendor(root)
+        if vendor == "DICOM":
+            self.run_guarded_task(
+                lambda progress: self._load_dicom(root, progress),
+                self.on_dicom_import_finished,
+                "Importing DICOM folder into MRax structures...",
+                error_title="Could not import DICOM folder",
+            )
+            return
+        if vendor != "Bruker":
+            self.show_error(
+                "Unsupported import folder",
+                "The selected folder does not contain a recognizable Bruker study or DICOM image series.",
+            )
+            return
         options = self._show_import_options_dialog(root, vendor)
         if options is None:
-            return
-        if options["vendor"] != "Bruker":
-            self.show_error("Unsupported import vendor", "Only Bruker import is currently supported.")
             return
         self.run_guarded_task(
             lambda progress: self._load_bruker(root, options, progress),
@@ -2301,6 +2314,31 @@ class _MainWindowMixin:
             )
         self.statusBar().showMessage(
             f"Imported Bruker study from {path}. Source files were not modified.{issue_text}"
+        )
+
+    def _load_dicom(
+        self,
+        path: Path,
+        progress: Callable[[int, int, str], None] | None = None,
+    ):
+        session = GuiSession()
+        session.load_dicom_study(path, progress_callback=progress)
+        self._replace_or_add_loaded_workspace(session, self._workspace_label_for_session(session, path.name))
+        return path
+
+    def on_dicom_import_finished(self, path: Path):
+        self._fit_results_by_experiment.clear()
+        self._preview_results_by_experiment.clear()
+        self.registration_results.clear()
+        self.drift_results.clear()
+        self._visual_undo_stacks.clear()
+        self.last_fit_result = None
+        self.last_preview_fit_result = None
+        self.populate_from_session()
+        self.mark_dirty("imported DICOM study")
+        count = len(self.session.experiment_names)
+        self.statusBar().showMessage(
+            f"Imported {count} DICOM experiment(s) from {path}. Source files were not modified."
         )
 
     def save_imported_study_dialog(self):
@@ -2503,6 +2541,7 @@ class _MainWindowMixin:
         source_combo = QtWidgets.QComboBox()
         source_combo.addItem("Blank image", "blank")
         source_combo.addItem("NIfTI image", "nifti")
+        source_combo.addItem("DICOM image", "dicom")
         source_combo.addItem("NumPy array (.npy/.npz)", "numpy")
         source_combo.addItem("Raw binary", "raw")
         form.addRow("Source", source_combo)
@@ -2618,6 +2657,7 @@ class _MainWindowMixin:
 
         def update_source_controls(*_args):
             source = str(source_combo.currentData() or "blank")
+            inferred = source == "dicom"
             file_edit.setEnabled(source != "blank")
             browse_btn.setEnabled(source != "blank")
             dtype_combo.setEnabled(source == "raw")
@@ -2625,12 +2665,14 @@ class _MainWindowMixin:
             offset_spin.setEnabled(source == "raw")
             memory_order_combo.setEnabled(source in {"nifti", "numpy", "raw"})
             npz_key_edit.setEnabled(source == "numpy")
-            shape_edit.setEnabled(True)
-            order_edit.setEnabled(True)
-            exp_type_combo.setEnabled(True)
-            model_combo.setEnabled(True)
-            observables_edit.setEnabled(True)
-            metadata_edit.setEnabled(True)
+            shape_edit.setEnabled(not inferred)
+            order_edit.setEnabled(not inferred)
+            exp_type_combo.setEnabled(not inferred)
+            model_combo.setEnabled(not inferred)
+            observables_edit.setEnabled(not inferred)
+            metadata_edit.setEnabled(not inferred)
+            observable_mismatch_combo.setEnabled(not inferred)
+            metadata_source_combo.setEnabled(not inferred)
             if source == "blank" and not shape_edit.text().strip():
                 shape_edit.setText("1,64,64")
             if source in {"nifti", "numpy"} and order_edit.text().strip() in {"frame,x,y", "x,y,z"}:
@@ -2641,20 +2683,46 @@ class _MainWindowMixin:
                 order_edit.setText("frame,x,y")
             if source == "raw" and not shape_edit.text().strip():
                 shape_edit.setText("1,64,64")
+            update_metadata_template_controls()
             schedule_preview()
 
         def browse_source():
             source = str(source_combo.currentData() or "blank")
             filters = {
                 "nifti": "NIfTI (*.nii *.nii.gz);;All files (*)",
+                "dicom": "DICOM (*.dcm *.dicom *.ima);;All files (*)",
                 "numpy": "NumPy (*.npy *.npz);;All files (*)",
                 "raw": "Raw binary (*);;All files (*)",
             }
             path, _ = self._get_open_file_name("Choose experiment data", str(Path.cwd()), filters.get(source, "All files (*)"))
             if path:
                 file_edit.setText(path)
+                suggested_name = Path(path).stem
+                if source == "dicom":
+                    try:
+                        imported = _load_dicom_experiment_from_dialog(Path(path))
+                        suggested_name = str(imported["name"])
+                        exp_type = str(imported["exp_type"])
+                        if exp_type_combo.findText(exp_type) < 0:
+                            exp_type_combo.addItem(exp_type)
+                        exp_type_combo.setCurrentText(exp_type)
+                        model_index = model_combo.findData(str(imported["model_name"]))
+                        if model_index >= 0:
+                            model_combo.setCurrentIndex(model_index)
+                        observables_edit.setPlainText(
+                            _observables_to_json_text(imported["observables"])
+                        )
+                        metadata_edit.setPlainText(
+                            json.dumps(
+                                _metadata_to_jsonable(imported["extra_metadata"]),
+                                indent=2,
+                                sort_keys=True,
+                            )
+                        )
+                    except Exception as exc:
+                        self.statusBar().showMessage(f"Could not inspect DICOM file: {exc}")
                 if not name_edit.text().strip() or name_edit.text().startswith("experiment"):
-                    name_edit.setText(self._next_experiment_name(Path(path).stem))
+                    name_edit.setText(self._next_experiment_name(suggested_name))
                 schedule_preview()
 
         def schedule_preview(*_args):
@@ -2715,11 +2783,14 @@ class _MainWindowMixin:
 
         def update_metadata_template_controls(*_args):
             source = metadata_source_combo.currentData()
-            is_file = source == "file"
+            inferred = str(source_combo.currentData() or "blank") == "dicom"
+            is_file = source == "file" and not inferred
             metadata_file_edit.setEnabled(is_file)
             metadata_file_browse_btn.setEnabled(is_file)
             metadata_file_experiment_edit.setEnabled(is_file)
-            apply_metadata_btn.setEnabled(source is not None and str(source) != "manual")
+            apply_metadata_btn.setEnabled(
+                not inferred and source is not None and str(source) != "manual"
+            )
             schedule_preview()
 
         def on_metadata_template_source_changed(*_args):
@@ -2741,6 +2812,10 @@ class _MainWindowMixin:
         def preview_payload() -> dict[str, Any]:
             source = str(source_combo.currentData() or "blank")
             path = Path(file_edit.text()).expanduser() if file_edit.text().strip() else None
+            if source == "dicom":
+                if path is None:
+                    raise FileNotFoundError("Choose a DICOM image file")
+                return _load_dicom_experiment_from_dialog(path)
             shape = _parse_shape_text(shape_edit.text())
             order = _parse_dim_order(order_edit.text())
             data, metadata = _load_experiment_array_from_dialog(
@@ -2900,8 +2975,16 @@ class _MainWindowMixin:
                 name_edit.text().strip(),
                 accepted_payload["data"],
                 dims=accepted_payload["dims"],
-                exp_type=exp_type_combo.currentText().strip() or "anatomical",
-                model_name=str(model_combo.currentData() or "identity"),
+                exp_type=str(
+                    accepted_payload.get("exp_type")
+                    or exp_type_combo.currentText().strip()
+                    or "anatomical"
+                ),
+                model_name=str(
+                    accepted_payload.get("model_name")
+                    or model_combo.currentData()
+                    or "identity"
+                ),
                 observables=accepted_payload["observables"],
                 extra_metadata=accepted_payload["extra_metadata"],
                 data_role="image",
@@ -10833,7 +10916,9 @@ def _snap_polygon_points_to_gradient(points: Any, image: Any, *, radius: int = 4
 def _detect_import_vendor(root: Path) -> str:
     if _looks_like_bruker_study(root):
         return "Bruker"
-    return "Bruker"
+    if _looks_like_dicom_study(root):
+        return "DICOM"
+    return "Unknown"
 
 
 def _looks_like_bruker_study(root: Path) -> bool:
@@ -10843,6 +10928,17 @@ def _looks_like_bruker_study(root: Path) -> bool:
         if entry.is_dir() and entry.name.isdigit() and (entry / "method").is_file():
             return True
     return False
+
+
+def _looks_like_dicom_study(root: Path) -> bool:
+    if not root.is_dir():
+        return False
+    try:
+        from mrax.io.dicom import discover_dicom_series
+
+        return bool(discover_dicom_series(root, recursive=True))
+    except (OSError, ValueError):
+        return False
 
 
 def _detect_bruker_import_summary(root: Path) -> list[dict[str, Any]]:
@@ -11410,6 +11506,39 @@ def _load_experiment_array_from_dialog(
             memory_order=memory_order,
         ), metadata
     raise ValueError(f"Unsupported experiment data source '{source}'")
+
+
+def _load_dicom_experiment_from_dialog(path: Path) -> dict[str, Any]:
+    path = Path(path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError("Choose a readable DICOM image file")
+
+    from mrax.io.dicom import load_dicom_series
+    from mrax.library.default_experiments import default_model_for_type
+
+    experiment, dataset, dicom_metadata = load_dicom_series(path)
+    exp_type = str(experiment.exp_type or "anatomical")
+    model = default_model_for_type(exp_type)
+    extra_metadata = dict(dicom_metadata)
+    extra_metadata.update(
+        {
+            "import_format": "dicom",
+            "source_path": str(path),
+        }
+    )
+    return {
+        "kind": "experiment",
+        "source": "dicom",
+        "path": path,
+        "name": str(dataset.name or path.stem or "dicom"),
+        "data": np.asarray(dataset.data),
+        "dims": dict(experiment.dims),
+        "exp_type": exp_type,
+        "model_name": str(model.name or "identity"),
+        "observables": dict(experiment.observables),
+        "observable_compatibility": [],
+        "extra_metadata": extra_metadata,
+    }
 
 
 def _observables_from_json_text(text: str) -> dict[str, Quantity]:
@@ -12128,7 +12257,7 @@ def _button_status_tip(button) -> str:
     tips = {
         "Load...": "Load a .mrax bundle, editable package, manifest, GUI state, ROI set, or mask.",
         "Save...": "Save the current study, GUI state, ROIs, and fit outputs as a .mrax bundle or folder.",
-        "Import...": "Import vendor data into MRax's internal study structure without changing source files.",
+        "Import...": "Import Bruker or recursive DICOM folder data without changing source files.",
         "Export...": "Export images, k-space, maps, and ROIs as analysis-friendly NumPy or NIfTI files.",
         "Shape...": "Create an editable rotated rectangle, square, circle, ellipse, or regular-polygon ROI.",
         "Lasso": "Draw a freehand ROI by dragging; support count, spline type, and gentle edge snap are configurable.",

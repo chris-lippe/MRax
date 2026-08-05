@@ -7,6 +7,15 @@ from .bruker_import import (
     prepare_bruker_cartesian_kspace,
     reconstruct_bruker_cartesian_kspace,
 )
+from .dicom import (
+    DicomMetadataAdapter,
+    DicomMetadataPatch,
+    DicomSeriesInfo,
+    discover_dicom_series,
+    load_dicom_series,
+    load_dicom_study,
+)
+from .dicom_bruker import BrukerDicomMetadataAdapter
 from .dipy import load_dipy_gradients, load_dipy_nifti, save_dipy_nifti
 from .nifti import (
     export_nifti_4d,
@@ -29,6 +38,13 @@ __all__ = [
     "load_dipy_gradients",
     "load_dipy_nifti",
     "save_dipy_nifti",
+    "DicomMetadataAdapter",
+    "DicomMetadataPatch",
+    "DicomSeriesInfo",
+    "BrukerDicomMetadataAdapter",
+    "discover_dicom_series",
+    "load_dicom_series",
+    "load_dicom_study",
     "auto_select_scans",
     "pick_scan_by_type",
     "scan_text",
