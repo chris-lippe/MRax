@@ -30,6 +30,12 @@ from .models import make_model, normalize_model_key
 
 _LOG = logging.getLogger(__name__)
 
+IMAGE_PLANE_DIMS: dict[str, tuple[str, str]] = {
+    "axial": ("x", "y"),
+    "coronal": ("x", "z"),
+    "sagittal": ("y", "z"),
+}
+
 
 @dataclass
 class FrameMask:
@@ -115,6 +121,7 @@ class ExperimentViewState:
     active_frame: int = 0
     active_z: int = 0
     active_indices: dict[str, int] = field(default_factory=dict)
+    active_image_plane: str = "axial"
     active_map: str | None = None
     active_kspace_mode: str = "log_magnitude"
     active_kspace_centering: str = "auto"
@@ -164,6 +171,7 @@ class GuiSession:
     active_frame: int = 0
     active_z: int = 0
     active_indices: dict[str, int] = field(default_factory=dict)
+    active_image_plane: str = "axial"
     active_map: str | None = None
     active_kspace_mode: str = "log_magnitude"
     active_kspace_centering: str = "auto"
@@ -612,6 +620,7 @@ class GuiSession:
             active_frame=int(self.active_frame),
             active_z=int(self.active_z),
             active_indices=dict(self.active_indices),
+            active_image_plane=self.active_image_plane,
             active_map=self.active_map,
             active_kspace_mode=self.active_kspace_mode,
             active_kspace_centering=self.active_kspace_centering,
@@ -631,6 +640,7 @@ class GuiSession:
         self.active_frame = int(state.active_frame)
         self.active_z = int(state.active_z)
         self.active_indices = dict(state.active_indices)
+        self.active_image_plane = _normalize_image_plane(state.active_image_plane)
         self.active_map = state.active_map if state.active_map in self.map_names else (self.map_names[0] if self.map_names else None)
         self.active_kspace_mode = state.active_kspace_mode
         self.active_kspace_centering = state.active_kspace_centering
@@ -649,6 +659,7 @@ class GuiSession:
         self.active_frame = 0
         self.active_z = 0
         self.active_indices.clear()
+        self.active_image_plane = "axial"
         self.active_map = self.map_names[0] if self.map_names else None
         self.active_kspace_mode = "log_magnitude"
         self.active_kspace_centering = "auto"
@@ -1071,13 +1082,62 @@ class GuiSession:
             return [] if arr is None else _axis_controls_for_kspace(arr, self.experiment_dims)
         if kind in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"}:
             arr = self.reconstruction_array
-            return [] if arr is None else _axis_controls_for_image(arr, self.experiment_dims)
+            return (
+                []
+                if arr is None
+                else _axis_controls_for_image(
+                    arr,
+                    self.experiment_dims,
+                    plane_dims=self.image_plane_dims,
+                )
+            )
         if kind == "map":
             try:
-                return _axis_controls_for_map(self.map_array(), self.experiment_dims)
+                return _axis_controls_for_map(
+                    self.map_array(),
+                    self.experiment_dims,
+                    plane_dims=self.image_plane_dims,
+                )
             except Exception:
                 return []
-        return _axis_controls_for_image(self.image_array, self.experiment_dims)
+        return _axis_controls_for_image(
+            self.image_array,
+            self.experiment_dims,
+            plane_dims=self.image_plane_dims,
+        )
+
+    @property
+    def image_plane_dims(self) -> tuple[str, str]:
+        return IMAGE_PLANE_DIMS[_normalize_image_plane(self.active_image_plane)]
+
+    @property
+    def image_slice_dim(self) -> str:
+        plane = set(self.image_plane_dims)
+        return next((name for name in ("x", "y", "z") if name not in plane), "z")
+
+    def supports_image_planes(self, kind: str = "image") -> bool:
+        kind = kind.lower().replace("-", "_").replace(" ", "_")
+        if self.is_non_imaging or kind == "k_space":
+            return False
+        if not {"x", "y", "z"}.issubset(self.experiment_dims):
+            return False
+        if kind in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"}:
+            array = self.reconstruction_array
+        elif kind == "map":
+            try:
+                array = self.map_array()
+            except Exception:
+                return False
+        else:
+            array = self.image_array
+        return array is not None and np.asarray(array).ndim >= 3
+
+    def set_image_plane(self, plane: str) -> None:
+        normalized = _normalize_image_plane(plane)
+        if normalized == self.active_image_plane:
+            return
+        self.active_image_plane = normalized
+        self._slice_cache.clear()
 
     def set_active_index(self, key: str, value: int) -> None:
         size = None
@@ -1114,13 +1174,20 @@ class GuiSession:
         indices["frame"] = frame_idx
         indices["z"] = z_idx
         source = "original" if original else "current"
-        key = ("image", source, self.selected_experiment, tuple(sorted(indices.items())))
+        key = (
+            "image",
+            source,
+            self.selected_experiment,
+            self.active_image_plane,
+            tuple(sorted(indices.items())),
+        )
         if key not in self._slice_cache:
             self._slice_cache[key] = _display_slice(
                 self.original_image_array if original else self.image_array,
                 dims=self.experiment_dims,
                 indices=indices,
                 kind="image",
+                plane_dims=self.image_plane_dims,
             )
         return self._slice_cache[key]
 
@@ -1152,13 +1219,19 @@ class GuiSession:
         indices = dict(self.active_indices)
         indices["frame"] = frame_idx
         indices["z"] = z_idx
-        key = ("reconstruction", self.selected_experiment, tuple(sorted(indices.items())))
+        key = (
+            "reconstruction",
+            self.selected_experiment,
+            self.active_image_plane,
+            tuple(sorted(indices.items())),
+        )
         if key not in self._slice_cache:
             self._slice_cache[key] = _display_slice(
                 reconstruction,
                 dims=self.experiment_dims,
                 indices=indices,
                 kind="image",
+                plane_dims=self.image_plane_dims,
             )
         return self._slice_cache[key]
 
@@ -1196,13 +1269,20 @@ class GuiSession:
         z_idx = self.active_z if z is None else max(0, int(z))
         indices = dict(self.active_indices)
         indices["z"] = z_idx
-        key = ("map", self.selected_experiment, map_name, tuple(sorted(indices.items())))
+        key = (
+            "map",
+            self.selected_experiment,
+            map_name,
+            self.active_image_plane,
+            tuple(sorted(indices.items())),
+        )
         if key not in self._slice_cache:
             self._slice_cache[key] = _display_slice(
                 self.map_array(map_name),
                 dims=self.experiment_dims,
                 indices=indices,
                 kind="map",
+                plane_dims=self.image_plane_dims,
             )
         return self._slice_cache[key]
 
@@ -2495,12 +2575,28 @@ def _study_to_session_data(
     }
 
 
+def _normalize_image_plane(plane: str | None) -> str:
+    normalized = str(plane or "axial").strip().lower()
+    aliases = {
+        "transverse": "axial",
+        "xy": "axial",
+        "xz": "coronal",
+        "yz": "sagittal",
+        "saggital": "sagittal",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in IMAGE_PLANE_DIMS:
+        raise ValueError("Image plane must be axial, coronal, or sagittal")
+    return normalized
+
+
 def _display_slice(
     array: np.ndarray,
     *,
     dims: Mapping[str, int] | None = None,
     indices: Mapping[str, int] | None = None,
     kind: str = "image",
+    plane_dims: Sequence[str] = ("x", "y"),
 ) -> np.ndarray:
     arr = np.asarray(array)
     if arr.ndim == 0:
@@ -2510,7 +2606,7 @@ def _display_slice(
     if arr.ndim == 2:
         return arr
 
-    controls = _axis_controls_for_kind(arr, dims or {}, kind)
+    controls = _axis_controls_for_kind(arr, dims or {}, kind, plane_dims=plane_dims)
     index_map = dict(indices or {})
     slicer: list[object] = [slice(None)] * arr.ndim
     for control in controls:
@@ -2520,6 +2616,16 @@ def _display_slice(
             value = int(index_map.get(key, 0))
             slicer[axis] = max(0, min(value, arr.shape[axis] - 1))
     selected = np.asarray(arr[tuple(slicer)])
+    if selected.ndim == 2:
+        dim_names = list((dims or {}).keys()) if len(dims or {}) == arr.ndim else []
+        if dim_names:
+            sliced_axes = {int(control["axis"]) for control in controls}
+            selected_dims = [name for axis, name in enumerate(dim_names) if axis not in sliced_axes]
+            requested = [str(name) for name in plane_dims]
+            if len(selected_dims) == 2 and set(selected_dims) == set(requested):
+                order = [selected_dims.index(name) for name in requested]
+                selected = np.transpose(selected, order)
+        return selected
     selected = np.squeeze(selected)
     if selected.ndim == 0:
         return selected.reshape((1, 1))
@@ -2538,23 +2644,31 @@ def _axis_controls_for_kind(
     arr: np.ndarray,
     dims: Mapping[str, int],
     kind: str,
+    *,
+    plane_dims: Sequence[str] = ("x", "y"),
 ) -> list[dict[str, int | str]]:
     if kind == "kspace":
         return _axis_controls_for_kspace(arr, dims)
     if kind == "map":
-        return _axis_controls_for_map(arr, dims)
-    return _axis_controls_for_image(arr, dims)
+        return _axis_controls_for_map(arr, dims, plane_dims=plane_dims)
+    return _axis_controls_for_image(arr, dims, plane_dims=plane_dims)
 
 
-def _axis_controls_for_image(arr: np.ndarray, dims: Mapping[str, int]) -> list[dict[str, int | str]]:
+def _axis_controls_for_image(
+    arr: np.ndarray,
+    dims: Mapping[str, int],
+    *,
+    plane_dims: Sequence[str] = ("x", "y"),
+) -> list[dict[str, int | str]]:
     arr = np.asarray(arr)
     if arr.ndim <= 2:
         return []
     dim_names = list(dims.keys()) if len(dims) == arr.ndim else []
     controls: list[dict[str, int | str]] = []
     if dim_names:
+        displayed = {str(name) for name in plane_dims}
         for axis, (name, size) in enumerate(zip(dim_names, arr.shape)):
-            if name in ("x", "y"):
+            if name in displayed:
                 continue
             key = "frame" if name in ("frame", "t") and len(controls) == 0 else name
             if name == "z":
@@ -2581,17 +2695,23 @@ def _axis_controls_for_non_image(arr: np.ndarray, dims: Mapping[str, int]) -> li
     return controls
 
 
-def _axis_controls_for_map(arr: np.ndarray, dims: Mapping[str, int]) -> list[dict[str, int | str]]:
+def _axis_controls_for_map(
+    arr: np.ndarray,
+    dims: Mapping[str, int],
+    *,
+    plane_dims: Sequence[str] = ("x", "y"),
+) -> list[dict[str, int | str]]:
     arr = np.asarray(arr)
     if arr.ndim <= 2:
         return []
     controls: list[dict[str, int | str]] = []
+    displayed = {str(name) for name in plane_dims}
     if dims:
         spatial = spatial_names(dims)
         spatial_shape = tuple(int(dims[name]) for name in spatial)
         if spatial and tuple(int(v) for v in arr.shape) == spatial_shape:
             for axis, name in enumerate(spatial):
-                if name in ("x", "y"):
+                if name in displayed:
                     continue
                 controls.append({"key": name, "label": name, "axis": axis, "size": int(arr.shape[axis])})
             return controls
@@ -2599,7 +2719,7 @@ def _axis_controls_for_map(arr: np.ndarray, dims: Mapping[str, int]) -> list[dic
         dim_names = list(dims.keys()) if len(dims) == arr.ndim else []
         if dim_names:
             for axis, (name, size) in enumerate(zip(dim_names, arr.shape)):
-                if name in ("x", "y"):
+                if name in displayed:
                     continue
                 key = "frame" if name in ("frame", "t") and axis == 0 else name
                 controls.append({"key": key, "label": name, "axis": axis, "size": int(size)})

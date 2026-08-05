@@ -1,4 +1,5 @@
 import json
+import os
 
 import jax.numpy as jnp
 import numpy as np
@@ -10,13 +11,19 @@ from mrax.data_struct import DataSet, Quantity, Study, save_study_results
 from mrax.gui import GuiSession, import_mask, load_roi_set, save_roi_set
 from mrax.gui.app import (
     StudyWorkspace,
+    _apply_local_runtime_env,
     _apply_observable_dim_compatibility,
     _capture_pyqtgraph_image_view_state,
+    _centered_top_left,
     _experiment_metadata_template_from_session,
     _export_object_records_for_session,
     _load_experiment_metadata_template_from_file,
+    _rectangle_overlap_area,
+    _resize_edge_names,
     _restore_pyqtgraph_image_view_state,
     _roi_nifti_reference_summary,
+    _roi_overlay_mask_for_display,
+    _screen_with_largest_overlap,
     _workspace_experiment_metadata_template_items,
     _write_single_export_object,
 )
@@ -54,6 +61,44 @@ def _write_small_manifest(tmp_path):
     )
 
 
+def test_gui_window_geometry_prefers_majority_screen_and_centers_within_it():
+    left_screen = (0, 0, 1920, 1080)
+    right_screen = (1920, 0, 2560, 1440)
+    mostly_right = (1500, 120, 1400, 900)
+
+    assert _rectangle_overlap_area(mostly_right, left_screen) == 420 * 900
+    assert _rectangle_overlap_area(mostly_right, right_screen) == 980 * 900
+    assert _screen_with_largest_overlap(mostly_right, [left_screen, right_screen]) is right_screen
+    assert _centered_top_left((1320, 860), right_screen) == (2540, 290)
+    assert _resize_edge_names((16, 16), (16, 16, 800, 600)) == ("left", "top")
+    assert _resize_edge_names((815, 615), (16, 16, 800, 600)) == ("right", "bottom")
+    assert _resize_edge_names((400, 300), (16, 16, 800, 600)) == ()
+
+
+@pytest.mark.parametrize(
+    ("wayland_display", "display", "expected_platform"),
+    [("wayland-test", ":1", "wayland"), (None, ":1", "xcb")],
+)
+def test_gui_runtime_selects_native_display_backend(
+    monkeypatch,
+    tmp_path,
+    wayland_display,
+    display,
+    expected_platform,
+):
+    monkeypatch.setenv("MRAX_GUI_LOCAL_LIB_DIR", str(tmp_path / "missing-local-libs"))
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    if wayland_display is None:
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    else:
+        monkeypatch.setenv("WAYLAND_DISPLAY", wayland_display)
+    monkeypatch.setenv("DISPLAY", display)
+
+    _apply_local_runtime_env()
+
+    assert os.environ["QT_QPA_PLATFORM"] == expected_platform
+
+
 def test_gui_session_loads_manifest_and_extracts_roi_analysis(tmp_path):
     session = GuiSession.from_manifest(_write_small_manifest(tmp_path))
 
@@ -73,6 +118,74 @@ def test_gui_session_loads_manifest_and_extracts_roi_analysis(tmp_path):
     assert rows[0]["roi"] == "all"
     assert float(rows[0]["value"]) == 60.0
     assert np.asarray(timecourse["timecourse"]).shape == (2,)
+
+
+def test_gui_session_switches_3d_image_planes_and_spatial_slider():
+    data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape((2, 3, 4, 5))
+    session = GuiSession()
+    session.create_empty_study("volume_views")
+    session.add_experiment(
+        "volume",
+        data,
+        dims={"frame": 2, "x": 3, "y": 4, "z": 5},
+    )
+    session.set_active_index("frame", 1)
+    session.set_active_index("z", 3)
+
+    assert session.supports_image_planes()
+    assert session.image_plane_dims == ("x", "y")
+    assert [control["key"] for control in session.dimension_controls()] == ["frame", "z"]
+    np.testing.assert_array_equal(session.frame_image(), data[1, :, :, 3])
+
+    session.set_image_plane("coronal")
+    session.set_active_index("y", 2)
+    assert session.image_plane_dims == ("x", "z")
+    assert [control["key"] for control in session.dimension_controls()] == ["frame", "y"]
+    np.testing.assert_array_equal(session.frame_image(), data[1, :, 2, :])
+
+    session.set_image_plane("sagittal")
+    session.set_active_index("x", 1)
+    assert session.image_plane_dims == ("y", "z")
+    assert [control["key"] for control in session.dimension_controls()] == ["frame", "x"]
+    np.testing.assert_array_equal(session.frame_image(), data[1, 1, :, :])
+
+    session.add_experiment(
+        "second_volume",
+        np.zeros((3, 4, 5), dtype=np.float32),
+        dims={"x": 3, "y": 4, "z": 5},
+    )
+    session.select_experiment("volume")
+    assert session.active_image_plane == "sagittal"
+    assert session.active_indices["x"] == 1
+
+
+def test_gui_roi_overlay_follows_selected_3d_plane():
+    mask = np.zeros((3, 4, 5), dtype=bool)
+    mask[1, 2, 4] = True
+    roi = ROI("point", mask, dims=("x", "y", "z"))
+
+    axial = _roi_overlay_mask_for_display(
+        roi,
+        display_shape=(3, 4),
+        indices={"z": 4},
+        plane_dims=("x", "y"),
+    )
+    coronal = _roi_overlay_mask_for_display(
+        roi,
+        display_shape=(3, 5),
+        indices={"y": 2},
+        plane_dims=("x", "z"),
+    )
+    sagittal = _roi_overlay_mask_for_display(
+        roi,
+        display_shape=(4, 5),
+        indices={"x": 1},
+        plane_dims=("y", "z"),
+    )
+
+    assert axial is not None and axial[1, 2]
+    assert coronal is not None and coronal[1, 4]
+    assert sagittal is not None and sagittal[2, 4]
 
 
 def test_gui_roi_mask_round_trip_and_raw_import(tmp_path):
