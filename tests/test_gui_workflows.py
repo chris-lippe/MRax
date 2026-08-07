@@ -159,6 +159,45 @@ def test_gui_session_switches_3d_image_planes_and_spatial_slider():
     assert session.active_indices["x"] == 1
 
 
+@pytest.mark.parametrize(
+    ("orientation", "expected_plane", "expected_mapping"),
+    [
+        (
+            np.asarray([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]]),
+            "coronal",
+            {"coronal": ("x", "y"), "axial": ("x", "z"), "sagittal": ("y", "z")},
+        ),
+        (
+            np.asarray([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+            "sagittal",
+            {"sagittal": ("x", "y"), "axial": ("x", "z"), "coronal": ("y", "z")},
+        ),
+    ],
+)
+def test_gui_session_uses_bruker_native_orientation_for_initial_plane(
+    orientation,
+    expected_plane,
+    expected_mapping,
+):
+    data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape((2, 3, 4, 5))
+    session = GuiSession()
+    session.create_empty_study("native_orientation")
+    session.add_experiment(
+        "volume",
+        data,
+        dims={"frame": 2, "x": 3, "y": 4, "z": 5},
+        extra_metadata={
+            "visu": {"VisuCoreOrientation": orientation.T.reshape((-1,)).tolist()},
+        },
+    )
+
+    assert session.active_image_plane == expected_plane
+    assert session.native_image_plane == expected_plane
+    for plane, dims in expected_mapping.items():
+        session.set_image_plane(plane)
+        assert session.image_plane_dims == dims
+
+
 def test_gui_roi_overlay_follows_selected_3d_plane():
     mask = np.zeros((3, 4, 5), dtype=bool)
     mask[1, 2, 4] = True

@@ -35,6 +35,16 @@ IMAGE_PLANE_DIMS: dict[str, tuple[str, str]] = {
     "coronal": ("x", "z"),
     "sagittal": ("y", "z"),
 }
+ANATOMICAL_PLANE_AXES: dict[str, frozenset[str]] = {
+    "axial": frozenset(("x", "y")),
+    "coronal": frozenset(("x", "z")),
+    "sagittal": frozenset(("y", "z")),
+}
+NATIVE_PLANE_AXIS_LABELS: dict[str, tuple[str, str, str]] = {
+    "axial": ("x", "y", "z"),
+    "coronal": ("x", "z", "y"),
+    "sagittal": ("y", "z", "x"),
+}
 
 
 @dataclass
@@ -659,7 +669,7 @@ class GuiSession:
         self.active_frame = 0
         self.active_z = 0
         self.active_indices.clear()
-        self.active_image_plane = "axial"
+        self.active_image_plane = self.native_image_plane
         self.active_map = self.map_names[0] if self.map_names else None
         self.active_kspace_mode = "log_magnitude"
         self.active_kspace_centering = "auto"
@@ -1108,7 +1118,21 @@ class GuiSession:
 
     @property
     def image_plane_dims(self) -> tuple[str, str]:
-        return IMAGE_PLANE_DIMS[_normalize_image_plane(self.active_image_plane)]
+        plane = _normalize_image_plane(self.active_image_plane)
+        if not self.is_loaded:
+            return IMAGE_PLANE_DIMS[plane]
+        return _experiment_image_plane_dims(self.current_experiment).get(plane, IMAGE_PLANE_DIMS[plane])
+
+    @property
+    def native_image_plane(self) -> str:
+        return self.native_image_plane_for_experiment()
+
+    def native_image_plane_for_experiment(self, name: str | None = None) -> str:
+        exp_name = str(name or self.selected_experiment or "")
+        exp_data = ((self.data or {}).get("experiments") or {}).get(exp_name)
+        if not isinstance(exp_data, Mapping):
+            return "axial"
+        return _experiment_native_image_plane(exp_data)
 
     @property
     def image_slice_dim(self) -> str:
@@ -2588,6 +2612,104 @@ def _normalize_image_plane(plane: str | None) -> str:
     if normalized not in IMAGE_PLANE_DIMS:
         raise ValueError("Image plane must be axial, coronal, or sagittal")
     return normalized
+
+
+def _metadata_numeric_values(value: Any) -> list[float]:
+    if isinstance(value, (int, float, np.number)):
+        return [float(value)]
+    if isinstance(value, np.ndarray):
+        return [float(item) for item in value.ravel() if np.issubdtype(type(item), np.number)]
+    if isinstance(value, (tuple, list)):
+        values: list[float] = []
+        for item in value:
+            values.extend(_metadata_numeric_values(item))
+        return values
+    return []
+
+
+def _anatomical_axis_labels_from_matrix(matrix: Any) -> tuple[str, str, str] | None:
+    arr = np.asarray(matrix, dtype=float)
+    if arr.shape == (4, 4):
+        arr = arr[:3, :3]
+    if arr.shape != (3, 3) or not np.isfinite(arr).all():
+        return None
+    norms = np.linalg.norm(arr, axis=0)
+    if np.any(norms <= 1e-8):
+        return None
+    normalized = arr / norms[None, :]
+    dominant = np.argmax(np.abs(normalized), axis=0)
+    labels = tuple("xyz"[int(index)] for index in dominant)
+    if len(set(labels)) != 3:
+        return None
+    return labels
+
+
+def _experiment_image_axis_labels(exp_data: Mapping[str, Any]) -> tuple[str, str, str] | None:
+    extra = dict(exp_data.get("extra_metadata") or {})
+    explicit = extra.get("image_axis_anatomical_labels")
+    if explicit is None:
+        explicit = exp_data.get("image_axis_anatomical_labels")
+    if isinstance(explicit, Mapping):
+        labels = tuple(str(explicit.get(dim) or "").strip().lower() for dim in ("x", "y", "z"))
+    elif isinstance(explicit, (tuple, list)) and len(explicit) >= 3:
+        labels = tuple(str(value).strip().lower() for value in explicit[:3])
+    else:
+        labels = ()
+    if len(labels) == 3 and set(labels) == {"x", "y", "z"}:
+        return labels  # type: ignore[return-value]
+
+    affine = extra.get("affine")
+    if affine is None:
+        affine = exp_data.get("affine")
+    if affine is not None:
+        try:
+            affine_labels = _anatomical_axis_labels_from_matrix(affine)
+        except (TypeError, ValueError):
+            affine_labels = None
+        if affine_labels is not None:
+            return affine_labels
+
+    visu = extra.get("visu")
+    if isinstance(visu, Mapping):
+        values = _metadata_numeric_values(visu.get("VisuCoreOrientation"))
+        if len(values) >= 9:
+            # Bruker stores scanner-axis rows; transpose to image-axis columns.
+            orientation = np.asarray(values[:9], dtype=float).reshape((3, 3)).T
+            bruker_labels = _anatomical_axis_labels_from_matrix(orientation)
+            if bruker_labels is not None:
+                return bruker_labels
+
+    native = extra.get("native_image_plane") or exp_data.get("native_image_plane")
+    try:
+        return NATIVE_PLANE_AXIS_LABELS[_normalize_image_plane(str(native))] if native else None
+    except ValueError:
+        return None
+
+
+def _experiment_image_plane_dims(exp_data: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
+    labels = _experiment_image_axis_labels(exp_data)
+    if labels is None:
+        return dict(IMAGE_PLANE_DIMS)
+    data_dims = ("x", "y", "z")
+    mapping: dict[str, tuple[str, str]] = {}
+    for plane, anatomical_axes in ANATOMICAL_PLANE_AXES.items():
+        plane_dims = tuple(dim for dim, label in zip(data_dims, labels) if label in anatomical_axes)
+        if len(plane_dims) == 2:
+            mapping[plane] = plane_dims
+    return mapping if len(mapping) == 3 else dict(IMAGE_PLANE_DIMS)
+
+
+def _experiment_native_image_plane(exp_data: Mapping[str, Any]) -> str:
+    mapping = _experiment_image_plane_dims(exp_data)
+    for plane in ("axial", "coronal", "sagittal"):
+        if mapping.get(plane) == ("x", "y"):
+            return plane
+    extra = dict(exp_data.get("extra_metadata") or {})
+    native = extra.get("native_image_plane") or exp_data.get("native_image_plane")
+    try:
+        return _normalize_image_plane(str(native)) if native else "axial"
+    except ValueError:
+        return "axial"
 
 
 def _display_slice(

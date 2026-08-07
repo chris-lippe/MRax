@@ -238,6 +238,29 @@ def _bruker_orientation(visu: dict) -> list[np.ndarray]:
     return matrices
 
 
+def _bruker_image_orientation_metadata(visu: dict) -> dict[str, object]:
+    """Normalize Bruker image axes to anatomical axes and acquisition plane."""
+
+    orientations = _bruker_orientation(visu)
+    if not orientations:
+        return {}
+    orientation = np.asarray(orientations[0], dtype=float)
+    if orientation.shape != (3, 3) or not np.isfinite(orientation).all():
+        return {}
+    norms = np.linalg.norm(orientation, axis=0)
+    if np.any(norms <= 1e-8):
+        return {}
+    dominant = np.argmax(np.abs(orientation / norms[None, :]), axis=0)
+    labels = tuple("xyz"[int(index)] for index in dominant)
+    if len(set(labels)) != 3:
+        return {}
+    native_plane = {"x": "sagittal", "y": "coronal", "z": "axial"}[labels[2]]
+    return {
+        "image_axis_anatomical_labels": list(labels),
+        "native_image_plane": native_plane,
+    }
+
+
 def _bruker_position(visu: dict) -> list[np.ndarray]:
     vals = _flatten_numeric(visu.get("VisuCorePosition"))
     if not vals:
@@ -268,6 +291,8 @@ def _bruker_frame_transpositions(value: object, frame_count: int) -> np.ndarray:
         return np.full((count,), int(arr[0]), dtype=int)
     if arr.size >= count:
         return arr[:count]
+    if count % int(arr.size) == 0:
+        return np.tile(arr, count // int(arr.size))
     pad_val = int(arr[-1]) if arr.size > 0 else 0
     return np.pad(arr, (0, count - arr.size), constant_values=pad_val)
 
@@ -608,6 +633,20 @@ def _apply_bruker_rotate_to_kspace(kspace: np.ndarray, reco: dict) -> tuple[np.n
     if rot_vals.size >= spatial_ndim * frame_count:
         rotate_by_dim = [
             rot_vals[dim_idx * frame_count : (dim_idx + 1) * frame_count]
+            for dim_idx in range(spatial_ndim)
+        ]
+    elif (
+        rot_vals.size % spatial_ndim == 0
+        and rot_vals.size // spatial_ndim > 1
+        and frame_count % (rot_vals.size // spatial_ndim) == 0
+    ):
+        values_per_dim = int(rot_vals.size // spatial_ndim)
+        repeat_count = int(frame_count // values_per_dim)
+        rotate_by_dim = [
+            np.tile(
+                rot_vals[dim_idx * values_per_dim : (dim_idx + 1) * values_per_dim],
+                repeat_count,
+            )
             for dim_idx in range(spatial_ndim)
         ]
     elif rot_vals.size >= spatial_ndim:
@@ -1919,6 +1958,30 @@ def _pack_bruker_2d_frame_images(
     return np.moveaxis(packed, 1, -1)
 
 
+def _pack_bruker_2d_frame_kspace(
+    kspace: np.ndarray | None,
+    *,
+    frame_count: int,
+    raw_frame_count: int,
+    spatial_shape: tuple[int, ...],
+) -> np.ndarray | None:
+    """Separate flattened 2D slice objects into frame and z k-space axes."""
+
+    if kspace is None or len(spatial_shape) != 3:
+        return kspace
+    arr = np.asarray(kspace)
+    z = int(spatial_shape[-1])
+    expected_objects = int(frame_count) * z
+    if arr.ndim < 3 or int(arr.shape[0]) != expected_objects or int(raw_frame_count) != expected_objects:
+        return arr
+
+    packed = arr.reshape((int(frame_count), z) + tuple(arr.shape[1:]))
+    if arr.ndim >= 4:
+        # Keep receiver coils immediately after frame, followed by z, ky, kx.
+        packed = np.moveaxis(packed, 1, 2)
+    return packed
+
+
 def _encoding_step_destinations(enc_steps: Sequence[int], target_size: int) -> np.ndarray:
     """Map Bruker phase-encode steps to destination ky indices."""
 
@@ -1966,6 +2029,61 @@ def _reshape_bruker_standard_kspace(
         reshaped = usable.reshape((int(ky_count), int(frame_count), int(kx_count)))
         return np.transpose(reshaped, (1, 0, 2))
     return usable.reshape((int(frame_count), int(ky_count), int(kx_count)))
+
+
+def _reshape_bruker_standard_2d_raw_job(
+    blocks: np.ndarray,
+    *,
+    frame_count: int,
+    raw_frame_count: int,
+    slice_count: int,
+    ky_count: int,
+    kx_count: int,
+    reco: dict,
+) -> tuple[np.ndarray, dict]:
+    """Sort PV360 Cartesian blocks stored as repetition, phase, slice, coil, read."""
+
+    arr = np.asarray(blocks)
+    frames = int(frame_count)
+    slices = int(slice_count)
+    ky = int(ky_count)
+    kx = int(kx_count)
+    expected_objects = frames * slices
+    expected_scans = expected_objects * ky
+    if arr.ndim != 3:
+        raise ValueError("PV360 Cartesian raw blocks must have shape (scan, coil, read)")
+    if frames <= 0 or slices <= 0 or ky <= 0 or kx <= 0:
+        raise ValueError("PV360 Cartesian frame and encoding sizes must be positive")
+    if int(raw_frame_count) != expected_objects:
+        raise ValueError("PV360 Cartesian raw object count does not match frame_count * slice_count")
+    if int(arr.shape[0]) < expected_scans or int(arr.shape[-1]) != kx:
+        raise ValueError("PV360 Cartesian raw block shape does not match the recorded encoding sizes")
+
+    sort_range = np.asarray(_flatten_numeric(reco.get("RecoSortRange")), dtype=int).ravel()
+    sort_size = np.asarray(_flatten_numeric(reco.get("RecoSortSize")), dtype=int).ravel()
+    if (
+        sort_range.size < 2
+        or sort_size.size < 2
+        or tuple(sort_range[:2]) != (ky, slices)
+        or tuple(sort_size[:2]) != (ky, slices)
+    ):
+        raise ValueError("PV360 Cartesian RecoSort metadata does not describe phase and slice ordering")
+
+    phase_map, slice_map, sort_meta = _split_bruker_sort_maps(reco, ky, slices)
+    phase_sources = np.argsort(phase_map)
+    slice_sources = np.argsort(slice_map)
+    raw = arr[:expected_scans].reshape((frames, ky, slices, int(arr.shape[1]), kx))
+    sorted_raw = raw[:, phase_sources, ...][:, :, slice_sources, ...]
+    kspace = np.transpose(sorted_raw, (0, 2, 3, 1, 4)).reshape(
+        (expected_objects, int(arr.shape[1]), ky, kx)
+    )
+    return kspace, {
+        "sample_order": "pv360_repetition_phase_slice_channel_read",
+        "raw_scan_count": int(arr.shape[0]),
+        "used_scan_count": int(expected_scans),
+        "ignored_scan_count": int(max(int(arr.shape[0]) - expected_scans, 0)),
+        "reco_sort": sort_meta,
+    }
 
 
 def _bruker_standard_2d_sample_order(method: dict, raw_frame_count: int) -> str:
@@ -5296,7 +5414,19 @@ def _load_bruker_raw_kspace(
         }
         return kspace, raw_image_out, sampling_mask, meta
 
-    samples = _read_rawdat_complex(raw_path, dtype)
+    raw_blocks_result = _read_bruker_pv360_raw_job_blocks(
+        raw_path,
+        dtype,
+        method=method,
+        acqp=acqp,
+    )
+    if raw_blocks_result is None:
+        raw_blocks = None
+        raw_storage_meta: dict[str, object] = {}
+        samples = _read_rawdat_complex(raw_path, dtype)
+    else:
+        raw_blocks, raw_storage_meta = raw_blocks_result
+        samples = np.asarray(raw_blocks).reshape((-1,))
 
     enc_steps = reco.get("RECO_EncSteps1") or reco.get("RECO_enc_steps1") or method.get("PVM_EncSteps1")
     enc_steps2 = reco.get("RECO_EncSteps2") or reco.get("RECO_enc_steps2") or method.get("PVM_EncSteps2")
@@ -5337,6 +5467,7 @@ def _load_bruker_raw_kspace(
 
     kspace = None
     sample_sorting_meta: dict[str, object] = {}
+    frame_order_for_output = frame_order
     ky_acquired = int(raw_shape[0]) if len(raw_shape) == 2 else None
     kx_acquired = int(raw_shape[1]) if len(raw_shape) == 2 else None
     if len(raw_shape) == 2 and ky_acquired is not None and kx_acquired is not None:
@@ -5365,7 +5496,26 @@ def _load_bruker_raw_kspace(
                     }
                 except ValueError:
                     kspace = None
-        elif receivers > 1 and raw_frame_count > 1 and not is_multi_echo:
+        elif (
+            raw_blocks is not None
+            and len(spatial_shape) == 3
+            and int(raw_frame_count) == int(frame_count) * int(spatial_shape[-1])
+        ):
+            try:
+                kspace, sample_sorting_meta = _reshape_bruker_standard_2d_raw_job(
+                    raw_blocks,
+                    frame_count=frame_count,
+                    raw_frame_count=raw_frame_count,
+                    slice_count=int(spatial_shape[-1]),
+                    ky_count=ky_acquired,
+                    kx_count=kx_acquired,
+                    reco=reco,
+                )
+                sample_sorting_meta["raw_storage"] = raw_storage_meta
+                frame_order_for_output = None
+            except ValueError:
+                kspace = None
+        if kspace is None and receivers > 1 and raw_frame_count > 1 and not is_multi_echo:
             try:
                 standard_sample_order = _bruker_standard_2d_sample_order(method, raw_frame_count)
                 kspace = _reshape_bruker_standard_kspace(
@@ -5459,14 +5609,25 @@ def _load_bruker_raw_kspace(
     result = reco_pipeline.run(state.copy())
     image = result.image if result.image is not None else cartesian_ifft(result.kspace, axes=fft_axes)
 
-    kspace_unfilled = _reorder_bruker_frames(kspace_unfilled, frame_order)
+    kspace_unfilled = _reorder_bruker_frames(kspace_unfilled, frame_order_for_output)
     if mask is not None:
-        mask = _reorder_bruker_frames(mask, frame_order)
+        mask = _reorder_bruker_frames(mask, frame_order_for_output)
     if image is not None:
-        image = _reorder_bruker_frames(image, frame_order)
-    frame_transposition = _reorder_bruker_frames(frame_transposition, frame_order)
+        image = _reorder_bruker_frames(image, frame_order_for_output)
+    frame_transposition = _reorder_bruker_frames(frame_transposition, frame_order_for_output)
 
-    kspace_out = kspace_unfilled
+    kspace_out = _pack_bruker_2d_frame_kspace(
+        kspace_unfilled,
+        frame_count=frame_count,
+        raw_frame_count=raw_frame_count,
+        spatial_shape=spatial_shape,
+    )
+    mask = _pack_bruker_2d_frame_kspace(
+        mask,
+        frame_count=frame_count,
+        raw_frame_count=raw_frame_count,
+        spatial_shape=spatial_shape,
+    )
 
     raw_image_out = (
         format_bruker_cartesian_image(
@@ -5530,6 +5691,11 @@ def _load_bruker_raw_kspace(
         },
         "stages": [getattr(stage, "name", stage.__class__.__name__) for stage in reco_pipeline.stages],
         "sample_sorting": sample_sorting_meta,
+        "kspace_layout": (
+            ["frame", "coil", "z", "ky", "kx"]
+            if kspace_out is not None and np.asarray(kspace_out).ndim == 5
+            else None
+        ),
         "fft_axes": list(fft_axes),
         "acq_word_size": acq_word,
         "rotate_applied": correction_meta.get("rotate"),
@@ -5755,8 +5921,6 @@ def load_2dseq(pdata_dir: Path, *, image_type: str = "auto") -> Tuple[np.ndarray
             # otherwise ambiguous and existing datasets depend on that layout.
             reshape_order = "F"
         frames = scaled.reshape((frame_count, x, y), order=reshape_order)
-        if str(visu.get("VisuCoreDiskSliceOrder", "")).lower() == "disk_reverse_slice_order":
-            frames = np.flip(frames, axis=0)
         frames = _apply_framewise_transposition(frames, transpositions)
         if frames_are_slices:
             # Treat frames as z only when all frames share one geometry. If Bruker
@@ -5768,14 +5932,42 @@ def load_2dseq(pdata_dir: Path, *, image_type: str = "auto") -> Tuple[np.ndarray
                 and int(frame_count) % int(slice_count) == 0
             ):
                 grouped_frame_count = int(frame_count) // int(slice_count)
-                grouped = frames.reshape((int(slice_count), grouped_frame_count) + tuple(frames.shape[1:]))
-                grouped = np.transpose(grouped, (1, 0, 2, 3))
+                entries = _visu_fg_order_entries(visu)
+                counts = [int(round(float(entry[0]))) for entry in entries if entry]
+                slice_entry = next(
+                    (
+                        idx
+                        for idx, entry in enumerate(entries)
+                        if len(entry) >= 2 and "FG_SLICE" in str(entry[1]).upper()
+                    ),
+                    None,
+                )
+                if (
+                    slice_entry is not None
+                    and counts
+                    and int(np.prod(counts)) == int(frame_count)
+                ):
+                    group_shape = tuple(reversed(counts))
+                    grouped = frames.reshape(group_shape + tuple(frames.shape[1:]))
+                    slice_axis = len(counts) - 1 - int(slice_entry)
+                    grouped = np.moveaxis(grouped, slice_axis, len(counts) - 1)
+                    grouped = grouped.reshape(
+                        (grouped_frame_count, int(slice_count)) + tuple(frames.shape[1:])
+                    )
+                else:
+                    # Bruker frame-group descriptors list the fastest-varying
+                    # group first, so FG_SLICE occupies the inner axis.
+                    grouped = frames.reshape(
+                        (grouped_frame_count, int(slice_count)) + tuple(frames.shape[1:])
+                    )
                 data = np.moveaxis(grouped, 1, -1)
                 spatial_shape = tuple(int(v) for v in frames.shape[1:]) + (int(slice_count),)
                 frame_count = grouped_frame_count
             else:
                 data = np.moveaxis(frames, 0, -1)[None, ...]
                 spatial_shape = tuple(int(v) for v in frames.shape[1:]) + (int(frame_count),)
+            if str(visu.get("VisuCoreDiskSliceOrder", "")).lower() == "disk_reverse_slice_order":
+                data = np.flip(data, axis=-1)
         else:
             data = frames
             spatial_shape = tuple(int(v) for v in frames.shape[1:])
@@ -6532,6 +6724,7 @@ def load_bruker_experiment(
         "mixed_slice_geometry": bool(visu.get("_mrax_mixed_slice_geometry", False)),
         "sequence_type": sequence_type,
         "raw_reconstruction": raw_meta or {},
+        **_bruker_image_orientation_metadata(visu),
     }
     if non_imaging_role:
         metadata["non_imaging"] = True
@@ -6630,6 +6823,8 @@ def load_bruker_study(
                     "reco": meta.get("reco", {}),
                     "image_scaling": meta.get("image_scaling", {}),
                     "raw_reconstruction": meta.get("raw_reconstruction", {}),
+                    "image_axis_anatomical_labels": meta.get("image_axis_anatomical_labels"),
+                    "native_image_plane": meta.get("native_image_plane"),
                     "type": meta["type"],
                     "path": meta["path"],
                     "pdata_index": meta["pdata_index"],
@@ -6687,6 +6882,8 @@ def load_bruker_study(
                 "reco": e.get("reco", {}),
                 "image_scaling": e.get("image_scaling", {}),
                 "raw_reconstruction": e.get("raw_reconstruction", {}),
+                "image_axis_anatomical_labels": e.get("image_axis_anatomical_labels"),
+                "native_image_plane": e.get("native_image_plane"),
             }
             for e in entries
         },

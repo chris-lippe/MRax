@@ -13207,13 +13207,14 @@ def _restore_gui_state(
         except Exception as exc:
             _warn_restore(warnings, f"Active indices for '{exp_name}' reset to defaults: {exc}")
             active_indices = {}
-        active_image_plane = str(state_data.get("active_image_plane") or "axial").lower()
+        native_image_plane = session.native_image_plane_for_experiment(str(exp_name))
+        active_image_plane = str(state_data.get("active_image_plane") or native_image_plane).lower()
         if active_image_plane not in {"axial", "coronal", "sagittal"}:
             _warn_restore(
                 warnings,
-                f"Image plane for '{exp_name}' reset to axial: unsupported value.",
+                f"Image plane for '{exp_name}' reset to its native orientation: unsupported value.",
             )
-            active_image_plane = "axial"
+            active_image_plane = native_image_plane
         try:
             restored[str(exp_name)] = ExperimentViewState(
                 active_frame=_safe_int_value(state_data.get("active_frame"), 0),
