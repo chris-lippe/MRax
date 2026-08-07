@@ -18,6 +18,7 @@ from mrax.io import (
     load_dicom_study,
     load_pulseq_experiment,
 )
+from mrax.io.bruker_import import bruker_spatial_geometry
 
 
 def _base_dicom_dataset(path, *, series_uid, sop_class_uid, instance_number=1):
@@ -464,8 +465,43 @@ def test_standard_dicom_series_import_builds_mrax_experiment(tmp_path):
         ),
     )
     assert metadata["adapter"] == "standard"
+    assert dataset.spatial_geometry is not None
+    assert dataset.spatial_geometry.voxel_sizes == (2.0, 3.0, 2.5)
+    assert dataset.spatial_geometry.axis_anatomical_labels == ("y", "x", "z")
     assert "study_instance_uid" not in metadata
     assert experiment._mrax_dicom_metadata is metadata
+
+
+def test_bruker_geometry_uses_slice_positions_and_anatomical_axis_order():
+    orientation = np.asarray(
+        [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
+        dtype=float,
+    )
+    visu = {
+        "VisuCoreDim": 2,
+        "VisuCoreSize": [256, 256],
+        "VisuCoreExtent": [40.0, 32.0],
+        "VisuCoreFrameCount": 3,
+        "VisuFGOrderDesc": "FG_SLICE",
+        "VisuCoreFrameThickness": 0.5,
+        "VisuCoreOrientation": orientation.T.reshape((-1,)).tolist(),
+        "VisuCorePosition": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.75,
+            0.0,
+            0.0,
+            1.5,
+            0.0,
+        ],
+    }
+
+    geometry = bruker_spatial_geometry(visu, spatial_shape=(256, 256, 3))
+
+    assert geometry.voxel_sizes == (0.125, 0.15625, 0.75)
+    assert geometry.axis_anatomical_labels == ("z", "x", "y")
 
 
 def test_enhanced_bruker_dicom_uses_separate_adapter(tmp_path):

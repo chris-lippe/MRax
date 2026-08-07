@@ -6,7 +6,7 @@ from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 
-from mrax.data_struct import DataSet, Experiment
+from mrax.data_struct import DataSet, Experiment, SpatialGeometry, resolve_spatial_geometry
 from mrax.data_struct.dimensions import SPATIAL_DIMS
 
 _LOG = logging.getLogger(__name__)
@@ -56,6 +56,35 @@ def load_nifti(path: str | Path, *, dtype: np.dtype | None = None) -> tuple[np.n
         data = data.astype(dtype)
     data = nifti_to_mrax_volume(data)
     return data, img.affine
+
+
+def nifti_spatial_geometry(
+    affine: np.ndarray,
+    *,
+    spatial_shape: Sequence[int] | None = None,
+) -> SpatialGeometry:
+    """Describe a loaded NIfTI grid while leaving its MRax array order unchanged."""
+
+    matrix = np.asarray(affine, dtype=float)
+    nifti_voxel_sizes = tuple(float(value) for value in np.linalg.norm(matrix[:3, :3], axis=0))
+    spatial_ndim = len(tuple(spatial_shape or ())) or 3
+    voxel_sizes = tuple(reversed(nifti_voxel_sizes[:spatial_ndim]))
+    directions = matrix[:3, :spatial_ndim]
+    norms = np.linalg.norm(directions, axis=0)
+    axis_labels: tuple[str, ...] | None = None
+    if np.all(norms > 1e-8):
+        dominant = np.argmax(np.abs(directions / norms[None, :]), axis=0)
+        nifti_labels = tuple("xyz"[int(index)] for index in dominant)
+        if len(set(nifti_labels)) == spatial_ndim:
+            axis_labels = tuple(reversed(nifti_labels))
+    return SpatialGeometry(
+        affine=matrix,
+        spatial_shape=spatial_shape,
+        voxel_sizes=voxel_sizes,
+        axis_anatomical_labels=axis_labels,
+        source="nifti",
+        status="known",
+    )
 
 
 def save_nifti(
@@ -108,6 +137,7 @@ def export_nifti_series(
     raw_dtype: np.dtype | None = None,
     stem: str | None = None,
     overwrite: bool = True,
+    reference_geometry: SpatialGeometry | None = None,
 ) -> list[Path]:
     """Export each frame to an individual NIfTI file.
 
@@ -129,6 +159,7 @@ def export_nifti_series(
         raise ValueError("Experiment does not declare spatial dimensions; cannot export NIfTI.")
 
     outputs: list[Path] = []
+    spatial_shape = tuple(int(data.shape[axis]) for axis in spatial_axes)
     non_spatial_sizes = [experiment.dims[dim_names[ax]] for ax in non_spatial_axes]
     frame_count = int(np.prod(non_spatial_sizes)) if non_spatial_sizes else 1
 
@@ -151,7 +182,21 @@ def export_nifti_series(
         elif affine is not None:
             affine_local = np.asarray(affine, dtype=float)
         else:
-            affine_local = np.eye(4, dtype=float)
+            geometry = dataset.spatial_geometry or SpatialGeometry(
+                spatial_shape=spatial_shape,
+                source="unknown",
+            )
+            resolved = resolve_spatial_geometry(
+                geometry,
+                reference=reference_geometry,
+                frame_index=flat_index,
+            )
+            affine_local = resolved.affine
+            if resolved.identity_fallback:
+                _LOG.warning(
+                    "NIfTI export for %s has no orientation metadata; using identity affine",
+                    dataset.name,
+                )
 
         slope_local = slope
         intercept_local = intercept
@@ -211,6 +256,7 @@ def export_nifti_4d(
     raw_dtype: np.dtype | None = None,
     stem: str | None = None,
     overwrite: bool = True,
+    reference_geometry: SpatialGeometry | None = None,
 ) -> Path:
     """Export all frames into a single 4D NIfTI file."""
 
@@ -250,7 +296,23 @@ def export_nifti_4d(
     if intercept_local is None and intercept is not None:
         intercept_local = intercept
 
-    affine_local = np.asarray(affine, dtype=float) if affine is not None else np.eye(4, dtype=float)
+    if affine is not None:
+        affine_local = np.asarray(affine, dtype=float)
+    else:
+        geometry = dataset.spatial_geometry or SpatialGeometry(
+            spatial_shape=spatial_shape,
+            source="unknown",
+        )
+        resolved = resolve_spatial_geometry(
+            geometry,
+            reference=reference_geometry,
+        )
+        affine_local = resolved.affine
+        if resolved.identity_fallback:
+            _LOG.warning(
+                "NIfTI export for %s has no orientation metadata; using identity affine",
+                dataset.name,
+            )
     nib = _import_nibabel()
 
     if slope_local is not None:

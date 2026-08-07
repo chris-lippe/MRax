@@ -133,6 +133,11 @@ def execute_study_plan(
                 "fields": fitted_fields,
                 "loss_history": losses,
                 "cached": cached,
+                "spatial_geometry": (
+                    item.dataset.spatial_geometry.to_metadata()
+                    if item.dataset.spatial_geometry is not None
+                    else None
+                ),
             }
         )
 

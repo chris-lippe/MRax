@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 import jax.numpy as jnp
 import numpy as np
 
-from mrax.data_struct import DataSet, Experiment, Quantity
+from mrax.data_struct import DataSet, Experiment, Quantity, SpatialGeometry
 from mrax.data_struct.dimensions import reshape_frames_to_dims, reshape_observables_to_dims
 from mrax.library.default_experiments import build_default_experiment, filter_observables_for_type
 from mrax.reco.pipeline import FFTStage, RecoPipeline
@@ -88,6 +88,7 @@ class ImportDefinition:
     kspace_kind: str = "cartesian"
     sequence_type: str = "standard"
     kspace_metadata: Mapping[str, object] = field(default_factory=dict)
+    spatial_geometry: SpatialGeometry | None = None
 
 
 def build_imported_experiment_dataset(definition: ImportDefinition) -> tuple[Experiment, DataSet]:
@@ -149,6 +150,7 @@ def build_imported_experiment_dataset(definition: ImportDefinition) -> tuple[Exp
         density=jnp.asarray(density) if density is not None else None,
         sampling_mask=jnp.asarray(sampling_mask) if sampling_mask is not None else None,
         kspace_metadata=kspace_metadata or None,
+        spatial_geometry=definition.spatial_geometry,
     )
     return experiment, dataset
 

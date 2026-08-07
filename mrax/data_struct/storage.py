@@ -10,8 +10,12 @@ import ismrmrd
 import jax.numpy as jnp
 import numpy as np
 
+from mrax import MRAX_VERSION, MRAX_VERSION_TAG
+from mrax.versioning import missing_mrax_version_message, validate_mrax_file_version
+
 from .dimensions import SPATIAL_DIMS
 from .experiment import Experiment
+from .geometry import SpatialGeometry
 from .quantity import Quantity
 from .study import Study
 
@@ -382,18 +386,35 @@ def _frame_values(values: object, frame_count: int, default: float) -> list[floa
 def _nifti_params_from_metadata(
     experiment: Experiment,
     metadata: dict | None,
+    dataset: object | None = None,
 ) -> dict[str, object]:
+    geometry_params: dict[str, object] = {}
+    geometry = getattr(dataset, "spatial_geometry", None)
+    geometry_declared = isinstance(geometry, SpatialGeometry)
+    if geometry is None and isinstance(metadata, dict):
+        geometry_meta = metadata.get("spatial_geometry")
+        if isinstance(geometry_meta, dict):
+            geometry = SpatialGeometry.from_metadata(geometry_meta)
+            geometry_declared = True
+    if isinstance(geometry, SpatialGeometry) and geometry.has_orientation:
+        if geometry.frame_affines:
+            geometry_params["affines"] = [
+                np.asarray(value, dtype=float) for value in geometry.frame_affines
+            ]
+        affine = geometry.affine_for_frame()
+        if affine is not None and "affines" not in geometry_params:
+            geometry_params["affine"] = affine
     if not metadata:
-        return {}
+        return geometry_params
     visu = metadata.get("visu")
     if not isinstance(visu, dict):
-        return {}
+        return geometry_params
     if "VisuCoreSize" not in visu or "VisuCoreExtent" not in visu:
-        return {}
+        return geometry_params
     try:
         from mrax.io.bruker_import import bruker_affine_from_visu, bruker_word_dtype
     except Exception:
-        return {}
+        return geometry_params
 
     affines = bruker_affine_from_visu(visu)
     if isinstance(affines, list):
@@ -418,8 +439,8 @@ def _nifti_params_from_metadata(
         intercepts = None
 
     return {
-        "affine": affine,
-        "affines": affines_arg,
+        "affine": geometry_params.get("affine") if geometry_declared else affine,
+        "affines": geometry_params.get("affines") if geometry_declared else affines_arg,
         "slopes": slopes,
         "intercepts": intercepts,
         "raw_dtype": raw_dtype,
@@ -692,6 +713,9 @@ def save_study_results(
     result_map: Dict[str, dict] = {entry["name"]: entry for entry in results}
     study_globals = getattr(study, "study_globals", {}) or {}
     manifest: Dict[str, Any] = {
+        "format": "mrax.study",
+        "format_version": 1,
+        MRAX_VERSION_TAG: MRAX_VERSION,
         "study_name": study_name,
         "experiments": {},
         "targets": targets or [],
@@ -699,6 +723,7 @@ def save_study_results(
         "study_globals": _observables_to_manifest(study_globals),
         "warnings": [],
         "skipped_experiments": {},
+        "spatial_geometry": {},
     }
 
     order = study.execution_order(targets)
@@ -747,7 +772,7 @@ def save_study_results(
                 from mrax.io.nifti import export_nifti_series, save_nifti
 
                 nifti_root = exp_dir / "nifti"
-                nifti_params = _nifti_params_from_metadata(experiment_to_use, extra_meta)
+                nifti_params = _nifti_params_from_metadata(experiment_to_use, extra_meta, dataset)
                 nifti_image_dir = nifti_root / "mr_images"
                 nifti_files = export_nifti_series(
                     experiment_to_use,
@@ -864,6 +889,17 @@ def save_study_results(
             "fitted_map_units": fitted_units,
             "plots": {},
         }
+        geometry = getattr(dataset, "spatial_geometry", None)
+        if geometry is None and experiment_to_use.spatial_shape and not is_non_imaging:
+            geometry = SpatialGeometry(
+                spatial_shape=experiment_to_use.spatial_shape,
+                source="unknown",
+                status="unknown",
+            )
+        if isinstance(geometry, SpatialGeometry):
+            entry_meta["spatial_geometry"] = geometry.to_metadata()
+            manifest["spatial_geometry"][name] = geometry.to_metadata()
+        entry_meta[MRAX_VERSION_TAG] = MRAX_VERSION
         if is_non_imaging:
             entry_meta["non_imaging"] = True
         if extra_meta is not None:
@@ -894,11 +930,18 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
     with open(manifest_file, "r", encoding="utf-8") as f:
         manifest = json.load(f)
 
+    version_info = validate_mrax_file_version(manifest, file_kind="MRax study manifest")
+
     base = manifest_file.parent
     load_warnings: list[str] = []
 
     def warn_skipped(message: str) -> None:
         text = f"warning: skipped {message}"
+        load_warnings.append(text)
+        warnings.warn(text, RuntimeWarning, stacklevel=2)
+
+    if version_info.tag_missing:
+        text = missing_mrax_version_message("MRax study manifest")
         load_warnings.append(text)
         warnings.warn(text, RuntimeWarning, stacklevel=2)
 
@@ -922,6 +965,14 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
         except Exception as exc:
             warn_skipped(f"{name}/metadata: {type(exc).__name__}: {exc}")
             continue
+        entry_version = validate_mrax_file_version(
+            entry,
+            file_kind=f"MRax experiment metadata for '{name}'",
+        )
+        if entry_version.tag_missing and not version_info.tag_missing:
+            text = missing_mrax_version_message(f"MRax experiment metadata for '{name}'")
+            load_warnings.append(text)
+            warnings.warn(text, RuntimeWarning, stacklevel=2)
 
         try:
             dim_names = list(entry["dims"].keys())
@@ -1009,6 +1060,8 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
             "observables": observables,
             "fitted_map_units": fitted_units,
             "extra_metadata": entry.get("extra_metadata"),
+            "spatial_geometry": entry.get("spatial_geometry")
+            or (manifest.get("spatial_geometry") or {}).get(name),
             "non_imaging": bool(entry.get("non_imaging")),
             "plots": entry.get("plots", {}),
         }

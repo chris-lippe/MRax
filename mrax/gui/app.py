@@ -23,8 +23,9 @@ from typing import Any, Callable, Mapping, MutableMapping, Sequence
 import jax.numpy as jnp
 import numpy as np
 
+from mrax import MRAX_VERSION, MRAX_VERSION_TAG
 from mrax.analysis import ROI, broadcast_mask
-from mrax.data_struct import DataSet, Experiment, Quantity
+from mrax.data_struct import DataSet, Experiment, Quantity, SpatialGeometry
 from mrax.data_struct.dimensions import (
     dim_observable_map,
     frame_count_from_dims,
@@ -33,6 +34,7 @@ from mrax.data_struct.dimensions import (
     reshape_frames_to_dims,
     spatial_names,
 )
+from mrax.versioning import missing_mrax_version_message, validate_mrax_file_version
 
 from ._deps import GUI_INSTALL_HINT, MissingGuiDependencyError, import_pyqtgraph, import_qt
 from .masks import (
@@ -5278,6 +5280,18 @@ class _MainWindowMixin:
         self._displayed_image_shape = displayed_shape
         self._displayed_view_key = view
         try:
+            axis_spacings = (
+                self.session.image_plane_voxel_sizes
+                if view != "k_space"
+                else (1.0, 1.0)
+            )
+            self.image_view.getView().setAspectLocked(
+                True,
+                ratio=_row_major_view_aspect_ratio(axis_spacings),
+            )
+        except Exception:
+            _LOG.debug("Could not apply physical image aspect ratio", exc_info=True)
+        try:
             viewer_levels = (
                 _image_view_state_levels(prior_view_state)
                 if can_restore_view
@@ -7857,6 +7871,7 @@ class _MainWindowMixin:
         manifest: dict[str, Any] = {
             "format": "mrax.gui.export",
             "version": 1,
+            MRAX_VERSION_TAG: MRAX_VERSION,
             "source_manifest": None if self.session.manifest_path is None else str(self.session.manifest_path),
             "experiments": {},
             "warnings": [],
@@ -7869,6 +7884,7 @@ class _MainWindowMixin:
             exp_manifest: dict[str, Any] = {
                 "name": str(exp_name),
                 "dims": dict(exp_data.get("dims") or {}),
+                "spatial_geometry": exp_data.get("spatial_geometry"),
                 "files": [],
             }
             if include_images and exp_data.get("mr_image") is not None:
@@ -7925,7 +7941,13 @@ class _MainWindowMixin:
                             from mrax.io.nifti import save_nifti
 
                             nifti_path.parent.mkdir(parents=True, exist_ok=True)
-                            save_nifti(nifti_path, arr, np.eye(4))
+                            affine = _experiment_nifti_affine(self.session, str(exp_name))
+                            if affine is None:
+                                affine = np.eye(4, dtype=float)
+                                manifest["warnings"].append(
+                                    f"{exp_name}/{map_name}: orientation unavailable; identity affine used"
+                                )
+                            save_nifti(nifti_path, arr, affine)
                         except Exception as exc:
                             manifest["warnings"].append(f"{exp_name}/{map_name}: {exc}")
                         else:
@@ -8006,8 +8028,31 @@ class _MainWindowMixin:
                 observables=dict(exp_data.get("observables") or {}),
                 exp_type=exp_data.get("exp_type"),
             )
-            dataset = DataSet(data=np.asarray(exp_data["mr_image"]), name=str(exp_name))
-            return list(export_nifti_series(experiment, dataset, output_dir, stem="mr_image"))
+            geometry_meta = exp_data.get("spatial_geometry")
+            geometry = (
+                SpatialGeometry.from_metadata(geometry_meta)
+                if isinstance(geometry_meta, Mapping)
+                else None
+            )
+            dataset = DataSet(
+                data=np.asarray(exp_data["mr_image"]),
+                name=str(exp_name),
+                spatial_geometry=geometry,
+            )
+            affine = _experiment_nifti_affine(self.session, str(exp_name))
+            if affine is None:
+                export_manifest["warnings"].append(
+                    f"{exp_name}/mr_image: orientation unavailable; identity affine used"
+                )
+            return list(
+                export_nifti_series(
+                    experiment,
+                    dataset,
+                    output_dir,
+                    stem="mr_image",
+                    affine=affine,
+                )
+            )
         except Exception as exc:
             export_manifest["warnings"].append(f"{exp_name}/mr_image: {exc}")
             return []
@@ -8035,6 +8080,7 @@ class _MainWindowMixin:
             metadata = {
                 "format": "mrax.gui.roi_label_masks",
                 "version": 1,
+                MRAX_VERSION_TAG: MRAX_VERSION,
                 "shape": list(group["shape"]),
                 "labels": group["labels"],
                 "note": "label 0 is background; nonzero labels follow the listed ROI order",
@@ -8356,7 +8402,10 @@ class _MainWindowMixin:
                 shutil.rmtree(output_dir)
             shutil.copytree(self.session.manifest_path.parent, output_dir)
             copied = output_dir / self.session.manifest_path.name
-            return copied if copied.is_file() else None
+            if copied.is_file():
+                _stamp_copied_study_snapshot(copied, self.session)
+                return copied
+            return None
         if self.session.study is not None:
             return self.session.save_imported_study(output_dir)
         return None
@@ -8384,7 +8433,12 @@ class _MainWindowMixin:
     def _load_gui_state_data(self, path: Path) -> list[str]:
         path = Path(path)
         payload = json.loads(path.read_text(encoding="utf-8"))
+        producer_version = validate_mrax_file_version(payload, file_kind="MRax GUI state")
         warnings_list: list[str] = []
+        if producer_version.tag_missing:
+            message = missing_mrax_version_message("MRax GUI state")
+            warnings_list.append(message)
+            warnings.warn(message, RuntimeWarning, stacklevel=2)
         manifest = _resolve_state_manifest_path(payload, path)
         if manifest is not None and manifest.is_file():
             session = GuiSession()
@@ -10062,6 +10116,21 @@ def _display_spatial_shape(array: Any) -> tuple[int, int]:
     return int(arr.shape[-2]), int(arr.shape[-1])
 
 
+def _row_major_view_aspect_ratio(axis_spacings: Sequence[float]) -> float:
+    """Return pyqtgraph's x/y scale ratio for row-major image-axis spacings."""
+
+    if len(axis_spacings) < 2:
+        return 1.0
+    row_spacing, column_spacing = (float(value) for value in axis_spacings[:2])
+    if (
+        not np.isfinite((row_spacing, column_spacing)).all()
+        or row_spacing <= 0
+        or column_spacing <= 0
+    ):
+        return 1.0
+    return column_spacing / row_spacing
+
+
 def _viewer_display_levels(
     image: Any,
     display_levels: tuple[float, float] | None,
@@ -11681,10 +11750,14 @@ def _load_experiment_array_from_dialog(
         raise FileNotFoundError("Choose a data file")
     metadata["source_path"] = str(path)
     if source == "nifti":
-        from mrax.io.nifti import load_nifti
+        from mrax.io.nifti import load_nifti, nifti_spatial_geometry
 
         arr, affine = load_nifti(path)
         metadata["affine"] = _metadata_to_jsonable(np.asarray(affine))
+        metadata["spatial_geometry"] = nifti_spatial_geometry(
+            affine,
+            spatial_shape=arr.shape,
+        ).to_metadata()
         if shape:
             metadata["memory_order"] = _normalize_memory_order(memory_order)
         return _reshape_import_array(arr, shape, memory_order=memory_order), metadata
@@ -12057,6 +12130,13 @@ def _load_experiment_metadata_template_from_file(
     with metadata_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     if _looks_like_study_manifest_payload(payload):
+        version_info = validate_mrax_file_version(payload, file_kind="MRax study manifest")
+        if version_info.tag_missing:
+            warnings.warn(
+                missing_mrax_version_message("MRax study manifest"),
+                RuntimeWarning,
+                stacklevel=2,
+            )
         experiments = dict(payload.get("experiments") or {})
         if experiment_name:
             name = str(experiment_name)
@@ -12075,10 +12155,27 @@ def _load_experiment_metadata_template_from_file(
         child_path = (metadata_path.parent / str(rel_metadata)).resolve()
         with child_path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
+        child_version = validate_mrax_file_version(
+            payload,
+            file_kind=f"MRax experiment metadata for '{name}'",
+        )
+        if child_version.tag_missing:
+            warnings.warn(
+                missing_mrax_version_message(f"MRax experiment metadata for '{name}'"),
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return _experiment_metadata_template_from_payload(
             payload,
             label=f"{metadata_path.name}:{name}",
             fallback_name=name,
+        )
+    version_info = validate_mrax_file_version(payload, file_kind="MRax experiment metadata")
+    if version_info.tag_missing:
+        warnings.warn(
+            missing_mrax_version_message("MRax experiment metadata"),
+            RuntimeWarning,
+            stacklevel=2,
         )
     return _experiment_metadata_template_from_payload(
         payload,
@@ -12555,6 +12652,7 @@ def _default_gui_config() -> dict[str, Any]:
     return {
         "format": "mrax.gui.config",
         "version": 1,
+        MRAX_VERSION_TAG: MRAX_VERSION,
         "custom_pools": {
             "ab_mt_n": {},
             "multipool_lorentzian": {},
@@ -12581,9 +12679,16 @@ def _load_gui_config(path: Path | None = None) -> dict[str, Any]:
         return default
     config = _default_gui_config()
     if isinstance(data, dict):
-        config.update({key: value for key, value in data.items() if key not in {"format", "version"}})
+        config.update(
+            {
+                key: value
+                for key, value in data.items()
+                if key not in {"format", "version", MRAX_VERSION_TAG}
+            }
+        )
         config["format"] = "mrax.gui.config"
         config["version"] = 1
+        config[MRAX_VERSION_TAG] = MRAX_VERSION
     if not isinstance(config.get("custom_pools"), dict):
         config["custom_pools"] = {"ab_mt_n": {}, "multipool_lorentzian": {}, "zaiss_full": {}}
     custom = dict(config.get("custom_pools") or {})
@@ -12602,6 +12707,7 @@ def _save_gui_config(config: dict[str, Any], path: Path | None = None) -> Path:
     payload.update(dict(config or {}))
     payload["format"] = "mrax.gui.config"
     payload["version"] = 1
+    payload[MRAX_VERSION_TAG] = MRAX_VERSION
     config_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return config_path
 
@@ -12763,12 +12869,45 @@ def _write_mrax_package_manifest(root: Path, entries: dict[str, str], *, warning
     payload = {
         "format": "mrax.gui.package",
         "version": 1,
+        MRAX_VERSION_TAG: MRAX_VERSION,
         "entries": entries,
     }
     if warnings:
         payload["warnings"] = list(warnings)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
+
+
+def _stamp_copied_study_snapshot(manifest_path: Path, session: GuiSession) -> None:
+    """Stamp a copied legacy snapshot without placing metadata in MRD payloads."""
+
+    manifest_path = Path(manifest_path)
+    root = manifest_path.parent.resolve()
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["format"] = "mrax.study"
+    payload["format_version"] = 1
+    payload[MRAX_VERSION_TAG] = MRAX_VERSION
+    geometry_by_name: dict[str, Any] = {}
+    session_experiments = ((session.data or {}).get("experiments") or {})
+    for name, pointer in dict(payload.get("experiments") or {}).items():
+        exp_data = session_experiments.get(name) or {}
+        geometry_by_name[str(name)] = _session_spatial_geometry_metadata(
+            session,
+            str(name),
+            exp_data,
+        )
+        if not isinstance(pointer, Mapping) or not pointer.get("metadata"):
+            continue
+        metadata_path = (root / str(pointer["metadata"])).resolve()
+        if not _is_relative_to(metadata_path, root) or not metadata_path.is_file():
+            continue
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata[MRAX_VERSION_TAG] = MRAX_VERSION
+        if str(name) in geometry_by_name:
+            metadata["spatial_geometry"] = geometry_by_name[str(name)]
+        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    payload["spatial_geometry"] = geometry_by_name
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _mrax_package_entries(root: Path) -> dict[str, Path]:
@@ -12778,6 +12917,16 @@ def _mrax_package_entries(root: Path) -> dict[str, Path]:
     if manifest.is_file():
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         if payload.get("format") == "mrax.gui.package":
+            package_version = validate_mrax_file_version(
+                payload,
+                file_kind="MRax package manifest",
+            )
+            if package_version.tag_missing:
+                warnings.warn(
+                    missing_mrax_version_message("MRax package manifest"),
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
             for key, value in dict(payload.get("entries") or {}).items():
                 candidate = (root / str(value)).resolve()
                 if not _is_relative_to(candidate, root):
@@ -12863,6 +13012,28 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
+def _session_spatial_geometry_metadata(
+    session: GuiSession,
+    experiment_name: str,
+    exp_data: Mapping[str, Any],
+) -> dict[str, Any]:
+    geometry = exp_data.get("spatial_geometry")
+    if isinstance(geometry, Mapping):
+        return _metadata_to_jsonable(dict(geometry))
+    if session.study is not None and experiment_name in (session.study.names or ()):
+        index = list(session.study.names).index(experiment_name)
+        dataset_geometry = session.study.datasets[index].spatial_geometry
+        if dataset_geometry is not None:
+            return dataset_geometry.to_metadata()
+    dims = dict(session.summary_by_name.get(experiment_name, {}).get("dims") or {})
+    shape = tuple(int(dims[name]) for name in spatial_names(dims)) or None
+    return SpatialGeometry(
+        spatial_shape=shape,
+        source="unknown",
+        status="unknown",
+    ).to_metadata()
+
+
 def _serialize_gui_state(
     session: GuiSession,
     *,
@@ -12876,6 +13047,7 @@ def _serialize_gui_state(
     arrays: dict[str, np.ndarray] = {}
     states: dict[str, Any] = {}
     fitted_map_rows: dict[str, list[dict[str, Any]]] = {}
+    spatial_geometry_rows: dict[str, Any] = {}
     original_image_rows: dict[str, dict[str, str]] = {}
     shared_roi_rows = _serialize_roi_rows(session.shared_rois, "shared_roi", arrays)
     for exp_name, state in session.view_states.items():
@@ -12894,6 +13066,11 @@ def _serialize_gui_state(
             "rois": roi_rows,
         }
     for exp_name, exp_data in ((session.data or {}).get("experiments") or {}).items():
+        spatial_geometry_rows[str(exp_name)] = _session_spatial_geometry_metadata(
+            session,
+            str(exp_name),
+            exp_data,
+        )
         original = exp_data.get("original_mr_image")
         if original is not None:
             key = f"original_{_safe_key(str(exp_name))}_mr_image"
@@ -12929,7 +13106,9 @@ def _serialize_gui_state(
     return (
         {
             "format": "mrax.gui.state",
-            "version": 2,
+            "version": 3,
+            MRAX_VERSION_TAG: MRAX_VERSION,
+            "spatial_plane_contract": "fixed_xyz_v1",
             "data_manifest": data_manifest_text,
             "fit_manifest": fit_manifest_text,
             "source_kind": session.source_kind,
@@ -12938,6 +13117,7 @@ def _serialize_gui_state(
             "view_states": states,
             "original_images": original_image_rows,
             "fitted_maps": fitted_map_rows,
+            "spatial_geometry": spatial_geometry_rows,
             "drift_results": drift_rows,
             "preview_results": {
                 key: _preview_result_to_json(value)
@@ -12969,7 +13149,7 @@ def _serialize_roi_rows(rois: list[ROI] | tuple[ROI, ...], prefix: str, arrays: 
 
 
 def _warn_restore(warnings: list[str] | None, message: str) -> None:
-    if warnings is not None:
+    if warnings is not None and str(message) not in warnings:
         warnings.append(str(message))
 
 
@@ -13092,10 +13272,12 @@ def _visual_state_from_dict(data: Mapping[str, Any]) -> VisualViewState:
     )
 
 
-_GUI_STATE_CURRENT_VERSION = 2
+_GUI_STATE_CURRENT_VERSION = 3
 _GUI_STATE_KNOWN_KEYS = {
     "format",
     "version",
+    MRAX_VERSION_TAG,
+    "spatial_plane_contract",
     "data_manifest",
     "fit_manifest",
     "source_kind",
@@ -13104,6 +13286,7 @@ _GUI_STATE_KNOWN_KEYS = {
     "view_states",
     "original_images",
     "fitted_maps",
+    "spatial_geometry",
     "drift_results",
     "preview_results",
     "fit_results",
@@ -13121,18 +13304,48 @@ def _restore_gui_state(
     fmt = str(payload.get("format") or "")
     if fmt != "mrax.gui.state":
         raise ValueError("GUI state format must be 'mrax.gui.state'.")
+    producer_version = validate_mrax_file_version(payload, file_kind="MRax GUI state")
+    if producer_version.tag_missing:
+        _warn_restore(warnings, missing_mrax_version_message("MRax GUI state"))
     if "version" not in payload:
         raise ValueError("GUI state version is required.")
     version = _safe_int_value(payload.get("version"), -1)
-    if version != _GUI_STATE_CURRENT_VERSION:
+    if version not in {2, _GUI_STATE_CURRENT_VERSION}:
         raise ValueError(
-            f"GUI state version {version} is not supported; expected {_GUI_STATE_CURRENT_VERSION}."
+            f"GUI state version {version} is not supported; expected 2 or {_GUI_STATE_CURRENT_VERSION}."
         )
+    legacy_dynamic_planes = version == 2
+    if not legacy_dynamic_planes and payload.get("spatial_plane_contract") != "fixed_xyz_v1":
+        raise ValueError("GUI state spatial_plane_contract must be 'fixed_xyz_v1'.")
     unknown_keys = sorted(str(key) for key in payload.keys() if str(key) not in _GUI_STATE_KNOWN_KEYS)
     if unknown_keys:
         raise ValueError(
             f"Unsupported GUI state top-level entr{'y' if len(unknown_keys) == 1 else 'ies'}: {', '.join(unknown_keys)}."
         )
+
+    if session.data is None:
+        raise RuntimeError("GUI state restoration requires a loaded MRax study.")
+    for exp_name, geometry_value in _safe_dict_value(payload.get("spatial_geometry")).items():
+        if exp_name not in session.experiment_names:
+            _warn_restore(
+                warnings,
+                f"Spatial geometry for missing experiment '{exp_name}' skipped.",
+            )
+            continue
+        if not isinstance(geometry_value, Mapping):
+            _warn_restore(
+                warnings,
+                f"Spatial geometry for '{exp_name}' skipped: expected mapping.",
+            )
+            continue
+        try:
+            geometry = SpatialGeometry.from_metadata(geometry_value)
+            session.data["experiments"][exp_name]["spatial_geometry"] = geometry.to_metadata()
+            if session.study is not None and exp_name in (session.study.names or ()):
+                index = list(session.study.names).index(exp_name)
+                session.study.datasets[index].spatial_geometry = geometry
+        except Exception as exc:
+            _warn_restore(warnings, f"Spatial geometry for '{exp_name}' skipped: {exc}")
 
     for exp_name, row in _safe_dict_value(payload.get("original_images")).items():
         if exp_name not in session.experiment_names:
@@ -13209,6 +13422,12 @@ def _restore_gui_state(
             active_indices = {}
         native_image_plane = session.native_image_plane_for_experiment(str(exp_name))
         active_image_plane = str(state_data.get("active_image_plane") or native_image_plane).lower()
+        if legacy_dynamic_planes:
+            active_image_plane = "axial"
+            _warn_restore(
+                warnings,
+                f"Image plane for '{exp_name}' reset to axial while migrating to fixed x/y/z planes.",
+            )
         if active_image_plane not in {"axial", "coronal", "sagittal"}:
             _warn_restore(
                 warnings,
@@ -13603,6 +13822,17 @@ def _experiment_nifti_affine(
         return None
     exp_data = (session.data.get("experiments") or {}).get(str(experiment_name))
     if not isinstance(exp_data, Mapping):
+        return None
+
+    geometry_value = exp_data.get("spatial_geometry")
+    if not isinstance(geometry_value, Mapping):
+        extra_value = exp_data.get("extra_metadata")
+        if isinstance(extra_value, Mapping):
+            geometry_value = extra_value.get("spatial_geometry")
+    if isinstance(geometry_value, Mapping):
+        geometry_affine = SpatialGeometry.from_metadata(geometry_value).affine_for_frame(frame_index)
+        if geometry_affine is not None:
+            return geometry_affine
         return None
 
     metadata_sources = [

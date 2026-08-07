@@ -19,7 +19,7 @@ import numpy as np
 from pydicom import dcmread
 from pydicom.dataset import Dataset as PydicomDataset
 
-from mrax.data_struct import DataSet, Experiment, Quantity, Study
+from mrax.data_struct import DataSet, Experiment, Quantity, SpatialGeometry, Study
 from mrax.library.default_experiments import default_model_for_type
 
 from .import_definitions import (
@@ -316,6 +316,29 @@ def _materialize_dicom_series(
     exp_type = str(override_type or detect_experiment_type(normalized))
     observables = extract_observables_from_metadata(exp_type, normalized, len(volumes))
     dataset_name = str(name or _compact_series_name(datasets[0]))
+    first_geometry_row = volume_metadata[0] if volume_metadata else {}
+    pixel_spacing = tuple(first_geometry_row.get("pixel_spacing") or ())
+    slice_spacing = _slice_spacing(first_geometry_row)
+    first_affine = next((affine for affine in affines if affine is not None), None)
+    if first_affine is not None:
+        position_spacing = float(np.linalg.norm(np.asarray(first_affine)[:3, 2]))
+        if np.isfinite(position_spacing) and position_spacing > 0:
+            slice_spacing = position_spacing
+    voxel_sizes = (
+        (*tuple(float(value) for value in pixel_spacing[:2]), float(slice_spacing))
+        if len(spatial_shape) == 3 and len(pixel_spacing) >= 2
+        else tuple(float(value) for value in pixel_spacing[: len(spatial_shape)])
+    )
+    spatial_geometry = SpatialGeometry.from_affines(
+        affines,
+        spatial_shape=spatial_shape,
+        voxel_sizes=voxel_sizes or None,
+        axis_anatomical_labels=_dicom_axis_anatomical_labels(
+            first_geometry_row,
+            spatial_ndim=len(spatial_shape),
+        ),
+        source="dicom",
+    )
     experiment, dataset = build_imported_experiment_dataset(
         ImportDefinition(
             name=dataset_name,
@@ -324,6 +347,7 @@ def _materialize_dicom_series(
             spatial_shape=spatial_shape,
             exp_type=exp_type,
             observables=observables,
+            spatial_geometry=spatial_geometry,
         )
     )
 
@@ -345,6 +369,7 @@ def _materialize_dicom_series(
         "spatial_shape": spatial_shape,
         "affine": affines[0] if _all_affines_equal(affines) else None,
         "affines": None if _all_affines_equal(affines) else affines,
+        "spatial_geometry": spatial_geometry.to_metadata(),
         "magnetic_field_strength_t": _finite_float(getattr(first, "MagneticFieldStrength", None)),
         "manual_type_override_required": bool(
             override_type is None and needs_manual_type_override(normalized, exp_type)
@@ -619,10 +644,10 @@ def _frame_signature(metadata: Mapping[str, object]) -> tuple[object, ...]:
 
 def _assemble_volumes(
     volumes: Sequence[Sequence[_FrameRecord]],
-) -> tuple[np.ndarray, tuple[int, ...], list[dict[str, object]], list[np.ndarray]]:
+) -> tuple[np.ndarray, tuple[int, ...], list[dict[str, object]], list[np.ndarray | None]]:
     arrays: list[np.ndarray] = []
     metadata: list[dict[str, object]] = []
-    affines: list[np.ndarray] = []
+    affines: list[np.ndarray | None] = []
     for volume in volumes:
         if not volume:
             continue
@@ -643,14 +668,14 @@ def _assemble_volumes(
     return np.stack(arrays, axis=0), tuple(arrays[0].shape), metadata, affines
 
 
-def _dicom_affine(volume: Sequence[_FrameRecord]) -> np.ndarray:
+def _dicom_affine(volume: Sequence[_FrameRecord]) -> np.ndarray | None:
     first = volume[0].metadata
     orientation = np.asarray(first.get("image_orientation_patient") or (), dtype=float)
     position = np.asarray(first.get("image_position_patient") or (), dtype=float)
     spacing = np.asarray(first.get("pixel_spacing") or (), dtype=float)
-    affine_lps = np.eye(4, dtype=float)
     if orientation.size != 6 or position.size != 3 or spacing.size < 2:
-        return affine_lps
+        return None
+    affine_lps = np.eye(4, dtype=float)
     x_direction = orientation[:3]
     y_direction = orientation[3:]
     normal = np.cross(x_direction, y_direction)
@@ -668,6 +693,28 @@ def _dicom_affine(volume: Sequence[_FrameRecord]) -> np.ndarray:
     affine = np.eye(4, dtype=float)
     affine[:3, :] = _LPS_TO_RAS @ affine_lps[:3, :]
     return affine
+
+
+def _dicom_axis_anatomical_labels(
+    metadata: Mapping[str, object],
+    *,
+    spatial_ndim: int,
+) -> tuple[str, ...] | None:
+    """Map native DICOM array axes (rows, columns, slices) to anatomy."""
+
+    orientation = np.asarray(metadata.get("image_orientation_patient") or (), dtype=float)
+    if orientation.size != 6 or spatial_ndim not in {2, 3}:
+        return None
+    directions = [orientation[3:], orientation[:3]]
+    if spatial_ndim == 3:
+        directions.append(np.cross(orientation[:3], orientation[3:]))
+    direction_matrix = np.column_stack(directions)
+    norms = np.linalg.norm(direction_matrix, axis=0)
+    if np.any(norms <= 1e-8):
+        return None
+    dominant = np.argmax(np.abs(direction_matrix / norms[None, :]), axis=0)
+    labels = tuple("xyz"[int(index)] for index in dominant)
+    return labels if len(set(labels)) == spatial_ndim else None
 
 
 def _normalized_standard_metadata(
@@ -805,8 +852,15 @@ def _compact_series_name(
     return base[:_MAX_EXPERIMENT_NAME_LENGTH].rstrip("_") or "dicom"
 
 
-def _all_affines_equal(affines: Sequence[np.ndarray]) -> bool:
-    return bool(affines) and all(np.allclose(affine, affines[0]) for affine in affines[1:])
+def _all_affines_equal(affines: Sequence[np.ndarray | None]) -> bool:
+    if not affines:
+        return False
+    first = affines[0]
+    return all(
+        (first is None and affine is None)
+        or (first is not None and affine is not None and np.allclose(affine, first))
+        for affine in affines[1:]
+    )
 
 
 def _unique_name(value: str, used: set[str]) -> str:

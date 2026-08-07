@@ -1,9 +1,12 @@
+import json
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 import mrax.core.study_runner as study_runner
+from mrax import __version__
 from mrax.analysis.dti import dti_design_rank, fit_dti_log_linear
 from mrax.analysis.roi import ROI, collect_roi_stats
 from mrax.core.loss_builder import build_loss, make_model_callable
@@ -14,6 +17,7 @@ from mrax.data_struct import (
     Experiment,
     Model,
     Quantity,
+    SpatialGeometry,
     Study,
     load_study_results,
     save_study_results,
@@ -23,6 +27,7 @@ from mrax.library.default_models import make_dti_tensor_model
 from mrax.opt.regularizers import total_variation_penalty
 from mrax.preprocessing import denoise_filter, regularized_denoise
 from mrax.reco import fftnc, ifftnc, reconstruct_ifft
+from mrax.versioning import MRaxVersionIncompatibilityError
 
 
 def _small_t2_study():
@@ -40,7 +45,17 @@ def _small_t2_study():
         "bias": jnp.full((2, 2), 0.03, dtype=jnp.float32),
     }
     data = make_model_callable(experiment, model)(truth)
-    dataset = DataSet(data=data, name="t2_demo")
+    dataset = DataSet(
+        data=data,
+        name="t2_demo",
+        spatial_geometry=SpatialGeometry(
+            affine=np.diag([0.4, 0.5, 1.0, 1.0]),
+            spatial_shape=(2, 2),
+            voxel_sizes=(0.4, 0.5),
+            source="synthetic",
+            status="known",
+        ),
+    )
     study = Study(
         [experiment],
         [dataset],
@@ -208,6 +223,7 @@ def test_fit_study_storage_and_roi_workflow(tmp_path):
 
     assert results[0]["loss_history"][-1] < results[0]["loss_history"][0]
     assert {"amplitude", "t2", "bias"} <= set(field_cache["t2_demo"])
+    assert results[0]["spatial_geometry"]["source"] == "synthetic"
 
     manifest = save_study_results(
         study,
@@ -230,9 +246,57 @@ def test_fit_study_storage_and_roi_workflow(tmp_path):
     )
 
     assert loaded["manifest"]["study_name"] == "workflow"
+    assert loaded["experiments"]["t2_demo"]["spatial_geometry"]["status"] == "known"
     assert loaded_map.si_unit == "ms"
     assert next(row for row in rows if row["stat"] == "count")["value"] == 4
     assert np.isfinite(next(row for row in rows if row["stat"] == "mean")["value"])
+
+
+def test_mrax_save_versions_json_geometry_but_not_mrd_payload(tmp_path):
+    import ismrmrd
+
+    study, model = _small_t2_study()
+    manifest_path = save_study_results(
+        study,
+        [{"name": "t2_demo", "model": model.name, "fields": {}}],
+        tmp_path / "versioned",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    metadata_path = manifest_path.parent / manifest["experiments"]["t2_demo"]["metadata"]
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert manifest["mrax_version"] == __version__
+    assert metadata["mrax_version"] == __version__
+    assert manifest["spatial_geometry"]["t2_demo"]["status"] == "known"
+    assert metadata["spatial_geometry"]["source"] == "synthetic"
+
+    image_path = manifest_path.parent / metadata["paths"]["mr_images"][0]["path"]
+    dataset = ismrmrd.Dataset(str(image_path), "dataset", create_if_needed=False)
+    image = dataset.read_image("image", 0)
+    dataset.close()
+    assert "spatial_geometry" not in str(image.attribute_string)
+
+    major, minor, _patch = (int(value) for value in __version__.split(".")[:3])
+    compatible = f"{major}.{minor}.999"
+    manifest["mrax_version"] = compatible
+    metadata["mrax_version"] = compatible
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    assert "t2_demo" in load_study_results(manifest_path)["experiments"]
+
+    incompatible = f"0.{minor + 1}.0" if major == 0 else f"{major + 1}.0.0"
+    manifest["mrax_version"] = incompatible
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(MRaxVersionIncompatibilityError, match="MRax version incompatibility"):
+        load_study_results(manifest_path)
+
+    manifest.pop("mrax_version")
+    metadata.pop("mrax_version")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.warns(RuntimeWarning, match="no 'mrax_version' tag"):
+        loaded = load_study_results(manifest_path)
+    assert "t2_demo" in loaded["experiments"]
 
 
 def test_execute_study_plan_preserves_dict_run_fit_kwargs(monkeypatch):

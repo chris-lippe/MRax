@@ -7,8 +7,21 @@ import numpy as np
 from mrax.analysis.dce import analyze_dce_series, replace_isolated_spikes
 from mrax.analysis.group import compare_group_stats, summarize_group_stats
 from mrax.analysis.stats import describe_values, fdr_bh, nonparametric_test, ttest
-from mrax.data_struct import DataSet, Experiment, Quantity, join_experiments
-from mrax.io.nifti import export_nifti_4d, export_nifti_series, load_nifti, save_nifti
+from mrax.data_struct import (
+    DataSet,
+    Experiment,
+    Quantity,
+    SpatialGeometry,
+    join_experiments,
+    resolve_spatial_geometry,
+)
+from mrax.io.nifti import (
+    export_nifti_4d,
+    export_nifti_series,
+    load_nifti,
+    nifti_spatial_geometry,
+    save_nifti,
+)
 from mrax.io.study_selection import auto_select_scans, pick_scan_by_type, scan_text
 from mrax.reco.pipeline import FFTStage, POCSStage, RecoPipeline, ZeroFillStage
 from mrax.reco.processing import (
@@ -30,7 +43,10 @@ def test_nifti_single_volume_and_series_round_trip(tmp_path):
     save_nifti(path, image, affine)
     loaded, loaded_affine = load_nifti(path)
     np.testing.assert_allclose(loaded, image)
-    np.testing.assert_allclose(loaded_affine, affine)
+    np.testing.assert_allclose(loaded_affine, affine, atol=1e-6)
+    geometry = nifti_spatial_geometry(loaded_affine, spatial_shape=image.shape)
+    assert geometry.voxel_sizes == (2.0, 1.5)
+    assert geometry.axis_anatomical_labels == ("y", "x")
 
     experiment = Experiment(
         dims={"echo": 2, "x": 3, "y": 4},
@@ -44,6 +60,35 @@ def test_nifti_single_volume_and_series_round_trip(tmp_path):
     assert len(outputs) == 2
     assert all(path.is_file() for path in outputs)
     assert output_4d.is_file()
+
+
+def test_nifti_export_resolves_dataset_reference_and_identity_geometry(tmp_path):
+    affine = np.asarray(
+        [[0.0, -0.7, 0.0, 12.0], [0.8, 0.0, 0.0, -4.0], [0.0, 0.0, 1.2, 3.0], [0, 0, 0, 1]]
+    )
+    known = SpatialGeometry(
+        affine=affine,
+        spatial_shape=(2, 3),
+        voxel_sizes=(0.8, 0.7),
+        source="synthetic_reference",
+        status="known",
+    )
+    unknown = SpatialGeometry(spatial_shape=(2, 3), source="synthetic", status="unknown")
+    resolved = resolve_spatial_geometry(unknown, reference=known)
+    np.testing.assert_allclose(resolved.affine, affine)
+    assert resolved.source == "reference:synthetic_reference"
+    assert resolved.identity_fallback is False
+
+    incompatible = SpatialGeometry(spatial_shape=(3, 2), source="synthetic", status="unknown")
+    fallback = resolve_spatial_geometry(incompatible, reference=known)
+    np.testing.assert_array_equal(fallback.affine, np.eye(4))
+    assert fallback.identity_fallback is True
+
+    experiment = Experiment({"x": 2, "y": 3}, exp_type="anatomical")
+    dataset = DataSet(jnp.ones((2, 3)), "geometry", spatial_geometry=known)
+    output = export_nifti_series(experiment, dataset, tmp_path / "geometry")
+    _, loaded_affine = load_nifti(output[0])
+    np.testing.assert_allclose(loaded_affine, affine, atol=1e-6)
 
 
 def test_reconstruction_pipeline_and_processing_helpers():

@@ -15,7 +15,14 @@ from mrax.analysis.dti import dti_design_rank, fit_dti_log_linear
 from mrax.analysis.timecourse import extract_timecourse as extract_timecourse_array
 from mrax.analysis.timecourse import extract_timecourse_from_experiment
 from mrax.core.loss_builder import run_fit
-from mrax.data_struct import DataSet, Experiment, Quantity, Study, save_study_results
+from mrax.data_struct import (
+    DataSet,
+    Experiment,
+    Quantity,
+    SpatialGeometry,
+    Study,
+    save_study_results,
+)
 from mrax.data_struct.dimensions import (
     frame_count_from_dims,
     non_spatial_names,
@@ -34,16 +41,6 @@ IMAGE_PLANE_DIMS: dict[str, tuple[str, str]] = {
     "axial": ("x", "y"),
     "coronal": ("x", "z"),
     "sagittal": ("y", "z"),
-}
-ANATOMICAL_PLANE_AXES: dict[str, frozenset[str]] = {
-    "axial": frozenset(("x", "y")),
-    "coronal": frozenset(("x", "z")),
-    "sagittal": frozenset(("y", "z")),
-}
-NATIVE_PLANE_AXIS_LABELS: dict[str, tuple[str, str, str]] = {
-    "axial": ("x", "y", "z"),
-    "coronal": ("x", "z", "y"),
-    "sagittal": ("y", "z", "x"),
 }
 
 
@@ -383,12 +380,17 @@ class GuiSession:
             )
         observables_map = require_quantity_dict(dict(observables or {}), "Observable")
         experiment = Experiment(dims=dims_map, observables=observables_map, exp_type=exp_type or "anatomical")
+        metadata = dict(extra_metadata or {})
+        spatial_shape = tuple(dims_map[name] for name in spatial_names(dims_map))
+        geometry = _spatial_geometry_from_metadata(metadata, spatial_shape=spatial_shape)
+        metadata["spatial_geometry"] = geometry.to_metadata()
         dataset = DataSet(
             data=arr,
             name=exp_name,
             processed=dict(processed or {}),
             kspace=None if kspace is None else jnp.asarray(kspace),
             kspace_metadata=dict(kspace_metadata or {}),
+            spatial_geometry=geometry,
         )
         model = make_model(model_name or "identity")
         experiment.validate(dataset)
@@ -416,7 +418,6 @@ class GuiSession:
         self.study = study
         self.manifest_path = None
         self.source_kind = "memory"
-        metadata = dict(extra_metadata or {})
         if data_role:
             metadata["data_role"] = str(data_role)
         if non_imaging:
@@ -725,6 +726,7 @@ class GuiSession:
                 data=jnp.asarray(_as_numpy(exp_data.get("mr_image"))),
                 name=name,
                 kspace=None if exp_data.get("raw_kspace") is None else jnp.asarray(exp_data.get("raw_kspace")),
+                spatial_geometry=_spatial_geometry_from_experiment_data(exp_data, dims=dims),
             )
             experiments.append(experiment)
             datasets.append(dataset)
@@ -999,6 +1001,8 @@ class GuiSession:
         target.kspace = None if dataset.kspace is None else jnp.asarray(dataset.kspace)
         target.processed = dict(dataset.processed or {})
         target.kspace_metadata = dict(dataset.kspace_metadata or {})
+        if dataset.spatial_geometry is not None:
+            target.spatial_geometry = dataset.spatial_geometry
 
     @property
     def fitted_maps(self) -> Mapping[str, Any]:
@@ -1119,25 +1123,97 @@ class GuiSession:
     @property
     def image_plane_dims(self) -> tuple[str, str]:
         plane = _normalize_image_plane(self.active_image_plane)
-        if not self.is_loaded:
-            return IMAGE_PLANE_DIMS[plane]
-        return _experiment_image_plane_dims(self.current_experiment).get(plane, IMAGE_PLANE_DIMS[plane])
+        return self._image_plane_dims_for_experiment()[plane]
+
+    def _image_plane_dims_for_experiment(
+        self,
+        name: str | None = None,
+    ) -> dict[str, tuple[str, str]]:
+        if not self.data:
+            return dict(IMAGE_PLANE_DIMS)
+        exp_name = name or self.selected_experiment
+        exp_data = self.data.get("experiments", {}).get(exp_name or "")
+        if not isinstance(exp_data, Mapping):
+            return dict(IMAGE_PLANE_DIMS)
+        summary = self.summary_by_name.get(exp_name or "", {})
+        dims = {
+            str(key): int(value)
+            for key, value in dict(summary.get("dims") or {}).items()
+        }
+        spatial_dims = tuple(spatial_names(dims))
+        if spatial_dims != ("x", "y", "z"):
+            return dict(IMAGE_PLANE_DIMS)
+        geometry = _spatial_geometry_from_experiment_data(exp_data, dims=dims)
+        labels = geometry.axis_anatomical_labels
+        if labels is None:
+            extra = exp_data.get("extra_metadata")
+            legacy_labels = (
+                extra.get("image_axis_anatomical_labels")
+                if isinstance(extra, Mapping)
+                else None
+            )
+            try:
+                labels = tuple(str(value).lower() for value in legacy_labels)  # type: ignore[arg-type]
+            except TypeError:
+                labels = None
+        if labels is None or len(labels) != 3 or set(labels) != {"x", "y", "z"}:
+            return dict(IMAGE_PLANE_DIMS)
+        dimension_for_axis = dict(zip(labels, spatial_dims))
+        return {
+            plane: (
+                dimension_for_axis[anatomical_axes[0]],
+                dimension_for_axis[anatomical_axes[1]],
+            )
+            for plane, anatomical_axes in IMAGE_PLANE_DIMS.items()
+        }
 
     @property
     def native_image_plane(self) -> str:
         return self.native_image_plane_for_experiment()
 
     def native_image_plane_for_experiment(self, name: str | None = None) -> str:
-        exp_name = str(name or self.selected_experiment or "")
-        exp_data = ((self.data or {}).get("experiments") or {}).get(exp_name)
-        if not isinstance(exp_data, Mapping):
-            return "axial"
-        return _experiment_native_image_plane(exp_data)
+        plane_dims = self._image_plane_dims_for_experiment(name)
+        for plane, dims in plane_dims.items():
+            if set(dims) == {"x", "y"}:
+                return plane
+        if self.data:
+            exp_name = name or self.selected_experiment
+            exp_data = self.data.get("experiments", {}).get(exp_name or "")
+            extra = exp_data.get("extra_metadata") if isinstance(exp_data, Mapping) else None
+            legacy_plane = extra.get("native_image_plane") if isinstance(extra, Mapping) else None
+            if legacy_plane:
+                try:
+                    return _normalize_image_plane(str(legacy_plane))
+                except ValueError:
+                    pass
+        return "axial"
 
     @property
     def image_slice_dim(self) -> str:
         plane = set(self.image_plane_dims)
         return next((name for name in ("x", "y", "z") if name not in plane), "z")
+
+    @property
+    def image_plane_voxel_sizes(self) -> tuple[float, float]:
+        """Physical pixel sizes for the active anatomical plane, or unit spacing."""
+
+        if not self.is_loaded:
+            return (1.0, 1.0)
+        geometry = _spatial_geometry_from_experiment_data(
+            self.current_experiment,
+            dims=self.experiment_dims,
+        )
+        spatial_dims = tuple(spatial_names(self.experiment_dims))
+        if geometry.voxel_sizes is None or len(geometry.voxel_sizes) < len(spatial_dims):
+            return (1.0, 1.0)
+        spacing_by_dim = dict(zip(spatial_dims, geometry.voxel_sizes))
+        try:
+            first, second = (float(spacing_by_dim[name]) for name in self.image_plane_dims)
+        except (KeyError, TypeError, ValueError):
+            return (1.0, 1.0)
+        if first <= 0 or second <= 0 or not np.isfinite((first, second)).all():
+            return (1.0, 1.0)
+        return first, second
 
     def supports_image_planes(self, kind: str = "image") -> bool:
         kind = kind.lower().replace("-", "_").replace(" ", "_")
@@ -1523,6 +1599,10 @@ class GuiSession:
             name=self.selected_experiment or "gui_dataset",
             processed=dict(self.processed_arrays or {}),
             kspace=None if self.kspace_array is None else jnp.asarray(self.kspace_array),
+            spatial_geometry=_spatial_geometry_from_experiment_data(
+                self.current_experiment,
+                dims=self.experiment_dims,
+            ),
         )
 
     def build_fit_inputs(self, model_name: str | None = None) -> tuple[Experiment, Any, DataSet, Study]:
@@ -1719,6 +1799,11 @@ class GuiSession:
             "loss_history": losses,
             "cached": False,
             "fit_notes": fit_notes,
+            "spatial_geometry": (
+                dataset.spatial_geometry.to_metadata()
+                if dataset.spatial_geometry is not None
+                else None
+            ),
         }
 
     def _dti_initial_params(
@@ -2429,6 +2514,56 @@ def _session_experiment_data_role(exp_data: Mapping[str, Any], dims: Mapping[str
     return "non_imaging" if _session_experiment_is_non_imaging(exp_data, dims) else "image"
 
 
+def _spatial_geometry_from_metadata(
+    metadata: Mapping[str, Any] | None,
+    *,
+    spatial_shape: Sequence[int] | None = None,
+) -> SpatialGeometry:
+    values = dict(metadata or {})
+    geometry_value = values.get("spatial_geometry")
+    if isinstance(geometry_value, Mapping):
+        geometry = SpatialGeometry.from_metadata(geometry_value)
+        if geometry.spatial_shape is not None and spatial_shape is not None:
+            if tuple(geometry.spatial_shape) != tuple(int(value) for value in spatial_shape):
+                raise ValueError(
+                    f"Spatial geometry shape {geometry.spatial_shape} does not match "
+                    f"image spatial shape {tuple(spatial_shape)}."
+                )
+        if geometry.spatial_shape is not None or spatial_shape is None:
+            return geometry
+        payload = geometry.to_metadata()
+        payload["spatial_shape"] = list(spatial_shape)
+        return SpatialGeometry.from_metadata(payload)
+    affine_values = values.get("affines")
+    if affine_values is None:
+        affine_values = values.get("affine")
+    source = str(values.get("import_format") or values.get("format") or "legacy")
+    return SpatialGeometry.from_affines(
+        affine_values,
+        spatial_shape=spatial_shape,
+        source=source,
+    )
+
+
+def _spatial_geometry_from_experiment_data(
+    exp_data: Mapping[str, Any],
+    *,
+    dims: Mapping[str, int] | None = None,
+) -> SpatialGeometry:
+    dims_map = dict(dims or exp_data.get("dims") or {})
+    spatial_shape = tuple(int(dims_map[name]) for name in spatial_names(dims_map)) or None
+    direct = exp_data.get("spatial_geometry")
+    if isinstance(direct, Mapping):
+        return _spatial_geometry_from_metadata(
+            {"spatial_geometry": direct},
+            spatial_shape=spatial_shape,
+        )
+    return _spatial_geometry_from_metadata(
+        exp_data.get("extra_metadata") if isinstance(exp_data.get("extra_metadata"), Mapping) else exp_data,
+        spatial_shape=spatial_shape,
+    )
+
+
 def _expand_kspace_for_inserted_image_axes(
     kspace: Any,
     *,
@@ -2556,6 +2691,14 @@ def _study_to_session_data(
             "processed": dict(dataset.processed or {}),
             "kspace_metadata": dict(dataset.kspace_metadata or {}),
             "extra_metadata": extra,
+            "spatial_geometry": (
+                dataset.spatial_geometry.to_metadata()
+                if dataset.spatial_geometry is not None
+                else _spatial_geometry_from_metadata(
+                    extra,
+                    spatial_shape=experiment.spatial_shape,
+                ).to_metadata()
+            ),
             "plots": {},
         }
         summary_entries.append(
@@ -2612,104 +2755,6 @@ def _normalize_image_plane(plane: str | None) -> str:
     if normalized not in IMAGE_PLANE_DIMS:
         raise ValueError("Image plane must be axial, coronal, or sagittal")
     return normalized
-
-
-def _metadata_numeric_values(value: Any) -> list[float]:
-    if isinstance(value, (int, float, np.number)):
-        return [float(value)]
-    if isinstance(value, np.ndarray):
-        return [float(item) for item in value.ravel() if np.issubdtype(type(item), np.number)]
-    if isinstance(value, (tuple, list)):
-        values: list[float] = []
-        for item in value:
-            values.extend(_metadata_numeric_values(item))
-        return values
-    return []
-
-
-def _anatomical_axis_labels_from_matrix(matrix: Any) -> tuple[str, str, str] | None:
-    arr = np.asarray(matrix, dtype=float)
-    if arr.shape == (4, 4):
-        arr = arr[:3, :3]
-    if arr.shape != (3, 3) or not np.isfinite(arr).all():
-        return None
-    norms = np.linalg.norm(arr, axis=0)
-    if np.any(norms <= 1e-8):
-        return None
-    normalized = arr / norms[None, :]
-    dominant = np.argmax(np.abs(normalized), axis=0)
-    labels = tuple("xyz"[int(index)] for index in dominant)
-    if len(set(labels)) != 3:
-        return None
-    return labels
-
-
-def _experiment_image_axis_labels(exp_data: Mapping[str, Any]) -> tuple[str, str, str] | None:
-    extra = dict(exp_data.get("extra_metadata") or {})
-    explicit = extra.get("image_axis_anatomical_labels")
-    if explicit is None:
-        explicit = exp_data.get("image_axis_anatomical_labels")
-    if isinstance(explicit, Mapping):
-        labels = tuple(str(explicit.get(dim) or "").strip().lower() for dim in ("x", "y", "z"))
-    elif isinstance(explicit, (tuple, list)) and len(explicit) >= 3:
-        labels = tuple(str(value).strip().lower() for value in explicit[:3])
-    else:
-        labels = ()
-    if len(labels) == 3 and set(labels) == {"x", "y", "z"}:
-        return labels  # type: ignore[return-value]
-
-    affine = extra.get("affine")
-    if affine is None:
-        affine = exp_data.get("affine")
-    if affine is not None:
-        try:
-            affine_labels = _anatomical_axis_labels_from_matrix(affine)
-        except (TypeError, ValueError):
-            affine_labels = None
-        if affine_labels is not None:
-            return affine_labels
-
-    visu = extra.get("visu")
-    if isinstance(visu, Mapping):
-        values = _metadata_numeric_values(visu.get("VisuCoreOrientation"))
-        if len(values) >= 9:
-            # Bruker stores scanner-axis rows; transpose to image-axis columns.
-            orientation = np.asarray(values[:9], dtype=float).reshape((3, 3)).T
-            bruker_labels = _anatomical_axis_labels_from_matrix(orientation)
-            if bruker_labels is not None:
-                return bruker_labels
-
-    native = extra.get("native_image_plane") or exp_data.get("native_image_plane")
-    try:
-        return NATIVE_PLANE_AXIS_LABELS[_normalize_image_plane(str(native))] if native else None
-    except ValueError:
-        return None
-
-
-def _experiment_image_plane_dims(exp_data: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
-    labels = _experiment_image_axis_labels(exp_data)
-    if labels is None:
-        return dict(IMAGE_PLANE_DIMS)
-    data_dims = ("x", "y", "z")
-    mapping: dict[str, tuple[str, str]] = {}
-    for plane, anatomical_axes in ANATOMICAL_PLANE_AXES.items():
-        plane_dims = tuple(dim for dim, label in zip(data_dims, labels) if label in anatomical_axes)
-        if len(plane_dims) == 2:
-            mapping[plane] = plane_dims
-    return mapping if len(mapping) == 3 else dict(IMAGE_PLANE_DIMS)
-
-
-def _experiment_native_image_plane(exp_data: Mapping[str, Any]) -> str:
-    mapping = _experiment_image_plane_dims(exp_data)
-    for plane in ("axial", "coronal", "sagittal"):
-        if mapping.get(plane) == ("x", "y"):
-            return plane
-    extra = dict(exp_data.get("extra_metadata") or {})
-    native = extra.get("native_image_plane") or exp_data.get("native_image_plane")
-    try:
-        return _normalize_image_plane(str(native)) if native else "axial"
-    except ValueError:
-        return "axial"
 
 
 def _display_slice(

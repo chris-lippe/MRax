@@ -10,7 +10,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import jax.numpy as jnp
 import numpy as np
 
-from mrax.data_struct import DataSet, Experiment, Model, Quantity, Study
+from mrax.data_struct import DataSet, Experiment, Model, Quantity, SpatialGeometry, Study
 from mrax.data_struct.quantity import require_quantity_dict
 from mrax.io.import_definitions import (
     ImportDefinition,
@@ -239,7 +239,7 @@ def _bruker_orientation(visu: dict) -> list[np.ndarray]:
 
 
 def _bruker_image_orientation_metadata(visu: dict) -> dict[str, object]:
-    """Normalize Bruker image axes to anatomical axes and acquisition plane."""
+    """Normalize decoded NumPy image axes to anatomy and acquisition plane."""
 
     orientations = _bruker_orientation(visu)
     if not orientations:
@@ -251,14 +251,49 @@ def _bruker_image_orientation_metadata(visu: dict) -> dict[str, object]:
     if np.any(norms <= 1e-8):
         return {}
     dominant = np.argmax(np.abs(orientation / norms[None, :]), axis=0)
-    labels = tuple("xyz"[int(index)] for index in dominant)
-    if len(set(labels)) != 3:
+    vendor_labels = tuple("xyz"[int(index)] for index in dominant)
+    if len(set(vendor_labels)) != 3:
         return {}
+    first_axis, second_axis = _bruker_decoded_in_plane_axis_order(visu)
+    labels = (
+        vendor_labels[first_axis],
+        vendor_labels[second_axis],
+        vendor_labels[2],
+    )
     native_plane = {"x": "sagittal", "y": "coronal", "z": "axial"}[labels[2]]
     return {
         "image_axis_anatomical_labels": list(labels),
         "native_image_plane": native_plane,
     }
+
+
+def _bruker_decoded_in_plane_axis_order(visu: dict) -> tuple[int, int]:
+    """Return Bruker orientation columns matching decoded NumPy axes 0 and 1."""
+
+    dim_val = visu.get("VisuCoreDim")
+    dim = int(dim_val) if isinstance(dim_val, (int, float, np.generic)) else 0
+    size_vals = _normalize_size(visu.get("VisuCoreSize"), dim=dim if dim > 0 else None)
+    if dim >= 3 or len(size_vals) >= 3:
+        return (0, 1)
+    frame_count = _as_positive_int(visu.get("VisuCoreFrameCount"), 1) or 1
+    frames_are_slices = (
+        len(size_vals) == 2
+        and frame_count > 1
+        and _contains_token(visu.get("VisuFGOrderDesc"), "FG_SLICE")
+        and not bool(visu.get("_mrax_mixed_slice_geometry", False))
+    )
+    reshape_order = "F" if _contains_token(visu.get("VisuFGOrderDesc"), "FG_DIFFUSION") else "C"
+    if frames_are_slices and size_vals[0] != size_vals[1]:
+        reshape_order = "F"
+    swapped = reshape_order == "C"
+
+    transpositions = _bruker_frame_transpositions(
+        visu.get("_mrax_frame_transposition", visu.get("VisuCoreTransposition")),
+        frame_count,
+    )
+    if transpositions.size and int(transpositions[0]) > 0:
+        swapped = not swapped
+    return (1, 0) if swapped else (0, 1)
 
 
 def _bruker_position(visu: dict) -> list[np.ndarray]:
@@ -409,15 +444,31 @@ def _bruker_voxel_sizes(visu: dict) -> tuple[float, float, float]:
     size_vals = _normalize_size(visu.get("VisuCoreSize"), dim=dim if dim > 0 else None)
     extent_vals = _normalize_size(visu.get("VisuCoreExtent"), dim=dim if dim > 0 else None)
     thickness_vals = _normalize_size(visu.get("VisuCoreFrameThickness"), dim=1)
+    is_multislice_2d = dim == 2 or len(size_vals) == 2 or len(extent_vals) == 2
+    slice_spacing = _bruker_slice_spacing_from_positions(visu) if is_multislice_2d else None
 
-    if dim == 2 or len(size_vals) == 2 or len(extent_vals) == 2:
+    if is_multislice_2d:
         if len(size_vals) == 1:
             size_vals = size_vals * 2
         if len(extent_vals) == 1:
             extent_vals = extent_vals * 2
-        vx = extent_vals[0] / size_vals[0] if size_vals and size_vals[0] else 1.0
-        vy = extent_vals[1] / size_vals[1] if len(size_vals) > 1 and size_vals[1] else 1.0
-        vz = thickness_vals[0] if thickness_vals else 1.0
+        vx = (
+            extent_vals[0] / size_vals[0]
+            if extent_vals and size_vals and size_vals[0]
+            else 1.0
+        )
+        vy = (
+            extent_vals[1] / size_vals[1]
+            if len(extent_vals) > 1 and len(size_vals) > 1 and size_vals[1]
+            else 1.0
+        )
+        vz = (
+            slice_spacing
+            if slice_spacing is not None
+            else thickness_vals[0]
+            if thickness_vals
+            else 1.0
+        )
         return (float(vx), float(vy), float(vz))
 
     if len(size_vals) < 3:
@@ -437,6 +488,28 @@ def _bruker_voxel_sizes(visu: dict) -> tuple[float, float, float]:
         denom = size_vals[i] if i < len(size_vals) else 1.0
         vox.append(extent_vals[i] / denom if denom else 1.0)
     return (float(vox[0]), float(vox[1]), float(vox[2]))
+
+
+def _bruker_slice_spacing_from_positions(visu: dict) -> float | None:
+    """Return center-to-center slice spacing when Bruker exports slice positions."""
+
+    positions = _bruker_position(visu)
+    orientations = _bruker_orientation(visu)
+    if len(positions) < 2 or not orientations:
+        return None
+    normal = np.asarray(orientations[0], dtype=float)[:, 2]
+    normal_norm = float(np.linalg.norm(normal))
+    if normal_norm <= 1e-8:
+        return None
+    coordinates = np.asarray(positions, dtype=float) @ (normal / normal_norm)
+    unique_coordinates = np.unique(np.round(coordinates, decimals=6))
+    if unique_coordinates.size < 2:
+        return None
+    differences = np.diff(np.sort(unique_coordinates))
+    differences = differences[np.isfinite(differences) & (differences > 1e-6)]
+    if differences.size == 0:
+        return None
+    return float(np.median(differences))
 
 
 def bruker_affine_from_visu(visu: dict, *, frame_index: int | None = None) -> np.ndarray | list[np.ndarray]:
@@ -467,6 +540,48 @@ def bruker_affine_from_visu(visu: dict, *, frame_index: int | None = None) -> np
             raise IndexError("frame_index out of range for VisuCorePosition/Orientation")
         return affines[frame_index]
     return affines[0] if len(affines) == 1 else affines
+
+
+def bruker_spatial_geometry(
+    visu: dict,
+    *,
+    spatial_shape: Sequence[int] | None = None,
+) -> SpatialGeometry:
+    """Return Bruker image geometry without changing native image/k-space axes."""
+
+    vendor_voxel_sizes = _bruker_voxel_sizes(visu)
+    first_axis, second_axis = _bruker_decoded_in_plane_axis_order(visu)
+    voxel_sizes = (
+        vendor_voxel_sizes[first_axis],
+        vendor_voxel_sizes[second_axis],
+        vendor_voxel_sizes[2],
+    )
+    orientations = _bruker_orientation(visu)
+    spatial_ndim = len(tuple(spatial_shape or ())) or 3
+    orientation_metadata = _bruker_image_orientation_metadata(visu)
+    raw_labels = orientation_metadata.get("image_axis_anatomical_labels")
+    axis_labels = (
+        tuple(str(value) for value in raw_labels[:spatial_ndim])
+        if isinstance(raw_labels, list) and len(raw_labels) >= spatial_ndim
+        else None
+    )
+    if not orientations:
+        return SpatialGeometry(
+            spatial_shape=spatial_shape,
+            voxel_sizes=voxel_sizes[:spatial_ndim],
+            axis_anatomical_labels=axis_labels,
+            source="bruker",
+            status="unknown",
+        )
+    affines = bruker_affine_from_visu(visu)
+    return SpatialGeometry.from_affines(
+        affines,
+        spatial_shape=spatial_shape,
+        voxel_sizes=voxel_sizes[:spatial_ndim],
+        axis_anatomical_labels=axis_labels,
+        source="bruker",
+        status="known" if _bruker_position(visu) else "partial",
+    )
 
 
 def _dtype_from_word(word: str) -> np.dtype:
@@ -6627,6 +6742,7 @@ def load_bruker_experiment(
             kspace=raw_kspace,
             sequence_type=sequence_type,
             kspace_metadata=raw_meta or {},
+            spatial_geometry=bruker_spatial_geometry(visu, spatial_shape=spatial_shape),
         )
     )
     if debug_pre_crop_raw_image is not None:
@@ -6724,6 +6840,11 @@ def load_bruker_experiment(
         "mixed_slice_geometry": bool(visu.get("_mrax_mixed_slice_geometry", False)),
         "sequence_type": sequence_type,
         "raw_reconstruction": raw_meta or {},
+        "spatial_geometry": (
+            dataset.spatial_geometry.to_metadata()
+            if dataset.spatial_geometry is not None
+            else SpatialGeometry(source="bruker").to_metadata()
+        ),
         **_bruker_image_orientation_metadata(visu),
     }
     if non_imaging_role:
@@ -6882,6 +7003,7 @@ def load_bruker_study(
                 "reco": e.get("reco", {}),
                 "image_scaling": e.get("image_scaling", {}),
                 "raw_reconstruction": e.get("raw_reconstruction", {}),
+                "spatial_geometry": e.get("spatial_geometry"),
                 "image_axis_anatomical_labels": e.get("image_axis_anatomical_labels"),
                 "native_image_plane": e.get("native_image_plane"),
             }
@@ -6895,6 +7017,7 @@ def load_bruker_study(
 
 __all__ = [
     "bruker_affine_from_visu",
+    "bruker_spatial_geometry",
     "bruker_vendor_regrid_options",
     "bruker_word_dtype",
     "format_bruker_cartesian_image",

@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from mrax import __version__
 from mrax.analysis import ROI
 from mrax.core.loss_builder import make_model_callable
 from mrax.data_struct import DataSet, Quantity, Study, save_study_results
@@ -20,10 +21,13 @@ from mrax.gui.app import (
     _load_experiment_metadata_template_from_file,
     _rectangle_overlap_area,
     _resize_edge_names,
+    _restore_gui_state,
     _restore_pyqtgraph_image_view_state,
     _roi_nifti_reference_summary,
     _roi_overlay_mask_for_display,
+    _row_major_view_aspect_ratio,
     _screen_with_largest_overlap,
+    _serialize_gui_state,
     _workspace_experiment_metadata_template_items,
     _write_single_export_object,
 )
@@ -160,24 +164,24 @@ def test_gui_session_switches_3d_image_planes_and_spatial_slider():
 
 
 @pytest.mark.parametrize(
-    ("orientation", "expected_plane", "expected_mapping"),
+    ("axis_labels", "native_plane", "expected_dims"),
     [
         (
-            np.asarray([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]]),
+            ["z", "x", "y"],
             "coronal",
-            {"coronal": ("x", "y"), "axial": ("x", "z"), "sagittal": ("y", "z")},
+            {"axial": ("y", "z"), "coronal": ("y", "x"), "sagittal": ("z", "x")},
         ),
         (
-            np.asarray([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+            ["y", "z", "x"],
             "sagittal",
-            {"sagittal": ("x", "y"), "axial": ("x", "z"), "coronal": ("y", "z")},
+            {"axial": ("z", "x"), "coronal": ("z", "y"), "sagittal": ("x", "y")},
         ),
     ],
 )
-def test_gui_session_uses_bruker_native_orientation_for_initial_plane(
-    orientation,
-    expected_plane,
-    expected_mapping,
+def test_gui_session_orders_anatomical_planes_from_geometry(
+    axis_labels,
+    native_plane,
+    expected_dims,
 ):
     data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape((2, 3, 4, 5))
     session = GuiSession()
@@ -187,15 +191,108 @@ def test_gui_session_uses_bruker_native_orientation_for_initial_plane(
         data,
         dims={"frame": 2, "x": 3, "y": 4, "z": 5},
         extra_metadata={
-            "visu": {"VisuCoreOrientation": orientation.T.reshape((-1,)).tolist()},
+            "spatial_geometry": {
+                "spatial_shape": [3, 4, 5],
+                "voxel_sizes": [0.2, 0.3, 1.1],
+                "axis_anatomical_labels": axis_labels,
+                "source": "synthetic",
+                "status": "unknown",
+            },
         },
     )
 
-    assert session.active_image_plane == expected_plane
-    assert session.native_image_plane == expected_plane
-    for plane, dims in expected_mapping.items():
+    assert session.active_image_plane == native_plane
+    assert session.native_image_plane == native_plane
+    for plane, dims in expected_dims.items():
         session.set_image_plane(plane)
         assert session.image_plane_dims == dims
+
+
+def test_gui_session_uses_geometry_spacing_for_ordered_anatomical_planes():
+    session = GuiSession()
+    session.create_empty_study("physical_spacing")
+    session.add_experiment(
+        "volume",
+        np.zeros((3, 4, 5), dtype=np.float32),
+        dims={"x": 3, "y": 4, "z": 5},
+        extra_metadata={
+            "spatial_geometry": {
+                "version": 1,
+                "axis_convention": "native_v1",
+                "affine_convention": "nifti_xyz_ras",
+                "status": "unknown",
+                "source": "synthetic",
+                "spatial_shape": [3, 4, 5],
+                "voxel_sizes": [0.2, 0.3, 1.1],
+                "axis_anatomical_labels": ["z", "x", "y"],
+            }
+        },
+    )
+
+    assert session.active_image_plane == "coronal"
+    assert session.image_plane_dims == ("y", "x")
+    assert session.image_plane_voxel_sizes == pytest.approx((0.3, 0.2))
+    session.set_image_plane("axial")
+    assert session.image_plane_dims == ("y", "z")
+    assert session.image_plane_voxel_sizes == pytest.approx((0.3, 1.1))
+    session.set_image_plane("sagittal")
+    assert session.image_plane_dims == ("z", "x")
+    assert session.image_plane_voxel_sizes == pytest.approx((1.1, 0.2))
+
+
+def test_row_major_image_aspect_uses_column_over_row_spacing():
+    shape = (28, 256)
+    spacings = (0.75, 0.15625)
+
+    ratio = _row_major_view_aspect_ratio(spacings)
+
+    assert ratio == pytest.approx(spacings[1] / spacings[0])
+    displayed_width_to_height = shape[1] * ratio / shape[0]
+    physical_width_to_height = (shape[1] * spacings[1]) / (shape[0] * spacings[0])
+    assert displayed_width_to_height == pytest.approx(physical_width_to_height)
+
+
+def test_gui_state_saves_mrax_version_and_spatial_geometry():
+    session = GuiSession()
+    session.create_empty_study("versioned_state")
+    session.add_experiment(
+        "volume",
+        np.zeros((3, 4), dtype=np.float32),
+        dims={"x": 3, "y": 4},
+        extra_metadata={
+            "spatial_geometry": {
+                "version": 1,
+                "axis_convention": "native_v1",
+                "affine_convention": "nifti_xyz_ras",
+                "status": "unknown",
+                "source": "synthetic",
+                "spatial_shape": [3, 4],
+                "voxel_sizes": [0.2, 0.3],
+            }
+        },
+    )
+    payload, arrays = _serialize_gui_state(
+        session,
+        preview_results={},
+        fit_results={},
+    )
+
+    assert payload["mrax_version"] == __version__
+    assert payload["spatial_geometry"]["volume"]["voxel_sizes"] == [0.2, 0.3]
+
+    incompatible = dict(payload)
+    major, minor, _patch = (int(value) for value in __version__.split(".")[:3])
+    incompatible["mrax_version"] = (
+        f"0.{minor + 1}.0" if major == 0 else f"{major + 1}.0.0"
+    )
+    with pytest.raises(ValueError, match="MRax version incompatibility"):
+        _restore_gui_state(session, incompatible, arrays)
+
+    legacy = dict(payload)
+    legacy.pop("mrax_version")
+    warnings_list: list[str] = []
+    _restore_gui_state(session, legacy, arrays, warnings=warnings_list)
+    assert any("no 'mrax_version' tag" in message for message in warnings_list)
 
 
 def test_gui_roi_overlay_follows_selected_3d_plane():
@@ -237,6 +334,7 @@ def test_gui_roi_mask_round_trip_and_raw_import(tmp_path):
 
     assert npz_path.exists()
     assert json_path.exists()
+    assert json.loads(json_path.read_text(encoding="utf-8"))["mrax_version"] == __version__
     assert loaded[0].name == "diag"
     assert loaded[0].dims == ("x", "y")
     assert loaded[0].metadata["color"] == "#abcdef"
@@ -461,6 +559,7 @@ def test_observable_compatibility_resizes_frame_tables():
 
 def test_experiment_metadata_template_from_metadata_file_and_manifest(tmp_path):
     metadata = {
+        "mrax_version": __version__,
         "model": "identity",
         "exp_type": "t2_se",
         "dataset_name": "scan_a",
@@ -474,7 +573,14 @@ def test_experiment_metadata_template_from_metadata_file_and_manifest(tmp_path):
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     manifest_path = tmp_path / "study_manifest.json"
     manifest_path.write_text(
-        json.dumps({"experiments": {"scan_a": {"metadata": "experiments/scan_a/metadata.json"}}}),
+        json.dumps(
+            {
+                "mrax_version": __version__,
+                "experiments": {
+                    "scan_a": {"metadata": "experiments/scan_a/metadata.json"}
+                },
+            }
+        ),
         encoding="utf-8",
     )
 

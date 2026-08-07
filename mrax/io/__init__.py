@@ -22,6 +22,7 @@ from .nifti import (
     export_nifti_series,
     load_nifti,
     mrax_to_nifti_volume,
+    nifti_spatial_geometry,
     nifti_to_mrax_volume,
     save_nifti,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "export_nifti_4d",
     "load_nifti",
     "mrax_to_nifti_volume",
+    "nifti_spatial_geometry",
     "nifti_to_mrax_volume",
     "save_nifti",
     "load_dipy_gradients",
