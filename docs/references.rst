@@ -130,3 +130,15 @@ Reconstruction and optimization
 .. [BeckTeboulle2009] Beck, A. and Teboulle, M. A fast iterative
    shrinkage-thresholding algorithm for linear inverse problems. *SIAM Journal
    on Imaging Sciences* 2(1), 183-202 (2009). https://doi.org/10.1137/080716542.
+
+Phase unwrapping
+-------------------------------
+
+.. [GhigliaRomero1994] D. C. Ghiglia and L. A. Romero, "Robust two-dimensional
+   weighted and unweighted phase unwrapping that uses fast transforms and iterative
+   methods," *JOSA A* 11(1), 107-117 (1994).
+   https://doi.org/10.1364/JOSAA.11.000107
+
+.. [Itoh1982] K. Itoh, "Analysis of the phase unwrapping algorithm," *Applied
+   Optics* 21(14), 2470 (1982). https://doi.org/10.1364/AO.21.002470
+

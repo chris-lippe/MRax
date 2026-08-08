@@ -34,7 +34,7 @@ def _version_tuple(value: object) -> tuple[int, int, int]:
     match = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?(?:[-+].*)?", text)
     if match is None:
         raise MRaxVersionTagError(
-            f"Invalid MRax producer-version tag {text!r}; expected a semantic version such as '0.1.0'."
+            f"Invalid MRax producer-version tag {text!r}; expected a semantic version such as '1.2.3'."
         )
     return int(match.group(1)), int(match.group(2)), int(match.group(3) or 0)
 

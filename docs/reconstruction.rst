@@ -43,14 +43,6 @@ equivalent to its input modulo ``2*pi``.
 Callers with a complex image can use ``weights=abs(image)``. Without weights, the fast
 unweighted cosine-transform solution is returned.
 
-.. [GhigliaRomero1994] D. C. Ghiglia and L. A. Romero, "Robust two-dimensional
-   weighted and unweighted phase unwrapping that uses fast transforms and iterative
-   methods," *JOSA A* 11(1), 107-117 (1994).
-   https://doi.org/10.1364/JOSAA.11.000107
-
-.. [Itoh1982] K. Itoh, "Analysis of the phase unwrapping algorithm," *Applied
-   Optics* 21(14), 2470 (1982). https://doi.org/10.1364/AO.21.002470
-
 Processing Blocks
 -----------------
 

@@ -31,9 +31,12 @@ Import Workflows
    :caption: Import
 
    importer_development
+   dicom_import
    bruker_import
    pulseq_import
 
+- DICOM import supports individual series and recursive study folders, with
+  identifiers excluded from returned metadata by default.
 - Bruker import has been tested on ParaVision 360 3.6 data.
 - Pulseq walkthrough notebook: :doc:`notebooks/pulseq_import_demo`
 - Pulseq notebook download: :download:`pulseq_import_demo.ipynb <notebooks/pulseq_import_demo.ipynb>`

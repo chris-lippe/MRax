@@ -51,11 +51,13 @@ study manifest is loaded first, then saved view settings, ROIs, fitted maps, fra
 selections, and fit controls are restored. Warnings and handled errors are shown on
 the Diagnostics page and can be saved with ``Save Diagnostic Report``.
 
-The GUI can import a Bruker ParaVision study folder through
-:func:`mrax.io.bruker_import.load_bruker_study`. The import is converted into MRax
-objects immediately. Use ``Save Study`` to write an MRax manifest plus ISMRMRD
-files. Direct Pulseq, NIfTI, and NumPy import dialogs are not included; use the
-Python import APIs first, save a manifest, then open that manifest in the GUI.
+``Import...`` accepts a Bruker ParaVision study folder or a folder containing DICOM
+files. DICOM discovery is recursive, groups image objects by series, and creates one
+short-named MRax experiment per series. ``Add Experiment`` also accepts an individual
+DICOM file or series. Imports are converted into MRax objects immediately; use
+``Save...`` to write a bundle or package. Direct Pulseq, NIfTI, and NumPy import
+dialogs are not included; use the Python import APIs first, save a manifest, then open
+that manifest in the GUI.
 
 Saving and Exporting
 --------------------
@@ -95,6 +97,9 @@ enabled by default and can be disabled in the reconstruction controls.
 
 The viewer supports:
 
+- axial, coronal, and sagittal views for 3D images. Plane selection changes the
+  active spatial slider and uses stored voxel spacing for the display aspect ratio;
+  fixed ``x/y/z`` array semantics are independent of native acquisition orientation,
 - controls for frame, slice, echo, b-value, offset, or other non-displayed axes
   inferred from experiment dimensions,
 - k-space display modes ``log_magnitude``, ``magnitude``, ``phase``, ``real``,
