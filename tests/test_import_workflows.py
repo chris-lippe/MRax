@@ -428,6 +428,11 @@ def test_bruker_multicycle_slice_stack_sorts_vendor_images_and_raw_kspace(tmp_pa
         rtol=1e-5,
         atol=1e-5,
     )
+    coil_images = np.asarray(dataset.processed["raw_reconstruction_coils"])
+    assert coil_images.shape == (3, 2, 3, 2, 2)
+    assert np.iscomplexobj(coil_images)
+    np.testing.assert_allclose(np.abs(coil_images[:, 0]), expected_images, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(coil_images[:, 1], 0.0, atol=1e-6)
 
 
 def test_standard_dicom_series_import_builds_mrax_experiment(tmp_path):

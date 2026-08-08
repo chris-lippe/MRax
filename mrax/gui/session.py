@@ -32,6 +32,7 @@ from mrax.data_struct.dimensions import (
 )
 from mrax.data_struct.quantity import require_quantity_dict
 from mrax.data_struct.storage import load_study_results
+from mrax.reco.components import reconstruction_coil_count, reconstruction_variant
 
 from .models import make_model, normalize_model_key
 
@@ -132,6 +133,9 @@ class ExperimentViewState:
     active_map: str | None = None
     active_kspace_mode: str = "log_magnitude"
     active_kspace_centering: str = "auto"
+    active_reconstruction_component: str = "magnitude"
+    active_reconstruction_coil: int | None = None
+    active_reconstruction_unwrap_phase: bool = True
     rois: list[ROI] = field(default_factory=list)
     fit_settings: FitSettings = field(default_factory=FitSettings)
     frame_mask: FrameMask | None = None
@@ -182,6 +186,9 @@ class GuiSession:
     active_map: str | None = None
     active_kspace_mode: str = "log_magnitude"
     active_kspace_centering: str = "auto"
+    active_reconstruction_component: str = "magnitude"
+    active_reconstruction_coil: int | None = None
+    active_reconstruction_unwrap_phase: bool = True
     rois: list[ROI] = field(default_factory=list)
     shared_rois: list[ROI] = field(default_factory=list)
     fit_settings: FitSettings = field(default_factory=FitSettings)
@@ -635,6 +642,9 @@ class GuiSession:
             active_map=self.active_map,
             active_kspace_mode=self.active_kspace_mode,
             active_kspace_centering=self.active_kspace_centering,
+            active_reconstruction_component=self.active_reconstruction_component,
+            active_reconstruction_coil=self.active_reconstruction_coil,
+            active_reconstruction_unwrap_phase=self.active_reconstruction_unwrap_phase,
             rois=[_copy_roi(roi) for roi in self.rois],
             fit_settings=replace(self.fit_settings),
             frame_mask=None if self.frame_mask is None else FrameMask(self.frame_mask.as_array().copy()),
@@ -655,6 +665,19 @@ class GuiSession:
         self.active_map = state.active_map if state.active_map in self.map_names else (self.map_names[0] if self.map_names else None)
         self.active_kspace_mode = state.active_kspace_mode
         self.active_kspace_centering = state.active_kspace_centering
+        component = str(state.active_reconstruction_component or "magnitude").lower()
+        self.active_reconstruction_component = (
+            component if component in {"magnitude", "phase"} else "magnitude"
+        )
+        coil = state.active_reconstruction_coil
+        self.active_reconstruction_coil = (
+            int(coil)
+            if coil is not None and 0 <= int(coil) < self.reconstruction_coil_count
+            else None
+        )
+        self.active_reconstruction_unwrap_phase = bool(
+            state.active_reconstruction_unwrap_phase
+        )
         self.rois = [_copy_roi(roi) for roi in state.rois]
         self.fit_settings = replace(state.fit_settings)
         if self.fit_settings.model_name is None:
@@ -674,6 +697,9 @@ class GuiSession:
         self.active_map = self.map_names[0] if self.map_names else None
         self.active_kspace_mode = "log_magnitude"
         self.active_kspace_centering = "auto"
+        self.active_reconstruction_component = "magnitude"
+        self.active_reconstruction_coil = None
+        self.active_reconstruction_unwrap_phase = True
         # Shared ROIs are available in the ROI list, but a newly visited experiment
         # starts with them disabled. "Apply All" creates explicit per-experiment
         # states when the user wants every experiment activated.
@@ -876,8 +902,41 @@ class GuiSession:
 
     @property
     def reconstruction_array(self) -> np.ndarray | None:
-        value = self.processed_arrays.get("raw_reconstruction")
-        return None if value is None else _as_numpy(value)
+        try:
+            return reconstruction_variant(self.processed_arrays, component="magnitude")
+        except (RuntimeError, ValueError):
+            return None
+
+    @property
+    def reconstruction_coil_count(self) -> int:
+        return reconstruction_coil_count(self.processed_arrays)
+
+    def reconstruction_display_array(
+        self,
+        *,
+        component: str | None = None,
+        coil: int | None = None,
+        frame: int | None = None,
+        combined: bool = False,
+        unwrap_phase: bool | None = None,
+    ) -> np.ndarray:
+        """Return the selected real reconstruction component before 2D slicing."""
+
+        component_name = component or self.active_reconstruction_component
+        coil_index = None if combined else (self.active_reconstruction_coil if coil is None else int(coil))
+        should_unwrap = (
+            self.active_reconstruction_unwrap_phase
+            if unwrap_phase is None
+            else bool(unwrap_phase)
+        )
+        return reconstruction_variant(
+            self.processed_arrays,
+            component=component_name,
+            coil=coil_index,
+            frame=frame,
+            unwrap_phase=bool(should_unwrap and component_name == "phase"),
+            spatial_ndim=len(self.spatial_dim_names),
+        )
 
     @property
     def kspace_array(self) -> np.ndarray | None:
@@ -891,7 +950,10 @@ class GuiSession:
         if exp_data.get("raw_kspace") is not None:
             return True
         processed = exp_data.get("processed") or {}
-        return processed.get("raw_reconstruction") is not None
+        return (
+            processed.get("raw_reconstruction") is not None
+            or processed.get("raw_reconstruction_coils") is not None
+        )
 
     def can_lazy_load_raw_data(self, name: str | None = None) -> bool:
         if self.source_kind != "bruker" or not self.data:
@@ -1095,7 +1157,14 @@ class GuiSession:
             arr = self.kspace_array
             return [] if arr is None else _axis_controls_for_kspace(arr, self.experiment_dims)
         if kind in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"}:
-            arr = self.reconstruction_array
+            try:
+                arr = (
+                    self.reconstruction_display_array(unwrap_phase=False)
+                    if kind == "mrax_reconstruction"
+                    else self.reconstruction_display_array(component="magnitude", combined=True)
+                )
+            except (RuntimeError, ValueError, IndexError):
+                arr = None
             return (
                 []
                 if arr is None
@@ -1222,7 +1291,14 @@ class GuiSession:
         if not {"x", "y", "z"}.issubset(self.experiment_dims):
             return False
         if kind in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"}:
-            array = self.reconstruction_array
+            try:
+                array = (
+                    self.reconstruction_display_array(unwrap_phase=False)
+                    if kind == "mrax_reconstruction"
+                    else self.reconstruction_display_array(component="magnitude", combined=True)
+                )
+            except (RuntimeError, ValueError, IndexError):
+                array = None
         elif kind == "map":
             try:
                 array = self.map_array()
@@ -1237,6 +1313,30 @@ class GuiSession:
         if normalized == self.active_image_plane:
             return
         self.active_image_plane = normalized
+        self._slice_cache.clear()
+
+    def set_reconstruction_component(self, component: str) -> None:
+        component_name = str(component or "magnitude").strip().lower()
+        if component_name not in {"magnitude", "phase"}:
+            raise ValueError("Reconstruction component must be 'magnitude' or 'phase'.")
+        self.active_reconstruction_component = component_name
+        self._slice_cache.clear()
+
+    def set_reconstruction_coil(self, coil: int | None) -> None:
+        if coil is None:
+            self.active_reconstruction_coil = None
+        else:
+            coil_index = int(coil)
+            count = self.reconstruction_coil_count
+            if coil_index < 0 or coil_index >= count:
+                raise IndexError(
+                    f"Reconstruction coil {coil_index + 1} is outside the available range 1..{count}."
+                )
+            self.active_reconstruction_coil = coil_index
+        self._slice_cache.clear()
+
+    def set_reconstruction_phase_unwrap(self, enabled: bool) -> None:
+        self.active_reconstruction_unwrap_phase = bool(enabled)
         self._slice_cache.clear()
 
     def set_active_index(self, key: str, value: int) -> None:
@@ -1310,18 +1410,36 @@ class GuiSession:
             selected = np.take(selected, 0, axis=0)
         return np.asarray(selected).reshape((-1,))
 
-    def reconstruction_image(self, frame: int | None = None, z: int | None = None) -> np.ndarray:
-        reconstruction = self.reconstruction_array
-        if reconstruction is None:
-            raise RuntimeError("Current experiment does not contain an MRax raw reconstruction")
+    def reconstruction_image(
+        self,
+        frame: int | None = None,
+        z: int | None = None,
+        *,
+        component: str | None = None,
+        coil: int | None = None,
+        combined: bool = False,
+        unwrap_phase: bool | None = None,
+    ) -> np.ndarray:
         frame_idx = self._bounded_frame(frame)
+        reconstruction = self.reconstruction_display_array(
+            component=component,
+            coil=coil,
+            frame=frame_idx,
+            combined=combined,
+            unwrap_phase=unwrap_phase,
+        )
         z_idx = self.active_z if z is None else max(0, int(z))
         indices = dict(self.active_indices)
         indices["frame"] = frame_idx
         indices["z"] = z_idx
+        display_indices = dict(indices)
+        display_indices["frame"] = 0
         key = (
             "reconstruction",
             self.selected_experiment,
+            component or self.active_reconstruction_component,
+            None if combined else (self.active_reconstruction_coil if coil is None else int(coil)),
+            self.active_reconstruction_unwrap_phase if unwrap_phase is None else bool(unwrap_phase),
             self.active_image_plane,
             tuple(sorted(indices.items())),
         )
@@ -1329,7 +1447,7 @@ class GuiSession:
             self._slice_cache[key] = _display_slice(
                 reconstruction,
                 dims=self.experiment_dims,
-                indices=indices,
+                indices=display_indices,
                 kind="image",
                 plane_dims=self.image_plane_dims,
             )
@@ -1486,6 +1604,9 @@ class GuiSession:
                     active_map=None,
                     active_kspace_mode=self.active_kspace_mode,
                     active_kspace_centering=self.active_kspace_centering,
+                    active_reconstruction_component=self.active_reconstruction_component,
+                    active_reconstruction_coil=self.active_reconstruction_coil,
+                    active_reconstruction_unwrap_phase=self.active_reconstruction_unwrap_phase,
                     rois=[_copy_roi(roi) for roi in current_rois],
                     fit_settings=FitSettings(
                         model_name=normalize_model_key((self.data["experiments"][name] or {}).get("model")),

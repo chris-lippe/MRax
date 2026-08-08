@@ -26,7 +26,7 @@ from mrax.library import build_default_experiment, default_model_for_type, make_
 from mrax.library.default_models import make_dti_tensor_model
 from mrax.opt.regularizers import total_variation_penalty
 from mrax.preprocessing import denoise_filter, regularized_denoise
-from mrax.reco import fftnc, ifftnc, reconstruct_ifft
+from mrax.reco import fftnc, ifftnc, reconstruct_ifft, reconstruct_regrid, unwrap_phase_image
 from mrax.versioning import MRaxVersionIncompatibilityError
 
 
@@ -299,6 +299,29 @@ def test_mrax_save_versions_json_geometry_but_not_mrd_payload(tmp_path):
     assert "t2_demo" in loaded["experiments"]
 
 
+def test_mrax_save_roundtrips_combined_and_per_coil_reconstructions(tmp_path):
+    study, model = _small_t2_study()
+    coil_1 = np.full((4, 2, 2), 2.0 + 1.0j, dtype=np.complex64)
+    coil_2 = np.full((4, 2, 2), 1.0 - 0.5j, dtype=np.complex64)
+    coils = np.stack([coil_1, coil_2], axis=1)
+    combined = np.sqrt(np.sum(np.abs(coils) ** 2, axis=1)).astype(np.float32)
+    study.datasets[0].processed = {
+        "raw_reconstruction": combined,
+        "raw_reconstruction_coils": coils,
+    }
+
+    manifest = save_study_results(
+        study,
+        [{"name": "t2_demo", "model": model.name, "fields": {}}],
+        tmp_path / "reconstruction_roundtrip",
+    )
+    loaded = load_study_results(manifest)["experiments"]["t2_demo"]["processed"]
+
+    np.testing.assert_allclose(loaded["raw_reconstruction"], combined)
+    np.testing.assert_allclose(loaded["raw_reconstruction_coils"], coils)
+    assert np.iscomplexobj(loaded["raw_reconstruction_coils"])
+
+
 def test_execute_study_plan_preserves_dict_run_fit_kwargs(monkeypatch):
     study, _model = _small_t2_study()
     plan = plan_study_fits(study)
@@ -360,6 +383,79 @@ def test_models_dimensions_reconstruction_and_preprocessing_workflow():
     assert denoised.shape == noisy.shape
     assert len(history) == 3
     assert np.isfinite(np.asarray(denoised)).all()
+
+
+def test_non_cartesian_reconstruction_can_return_complex_coil_images():
+    trajectory = np.asarray(
+        [[-0.5, -0.5], [-0.5, 0.0], [0.0, -0.5], [0.0, 0.0]],
+        dtype=np.float32,
+    )
+    samples = np.asarray(
+        [
+            [
+                [1.0 + 1.0j, 2.0, 3.0, 4.0],
+                [0.5 - 1.0j, 1.0, 1.5, 2.0],
+            ]
+        ],
+        dtype=np.complex64,
+    )
+    coil_images = reconstruct_regrid(
+        samples,
+        trajectory,
+        spatial_shape=(2, 2),
+        density=np.ones((4,), dtype=np.float32),
+        return_coils=True,
+    )
+    combined = reconstruct_regrid(
+        samples,
+        trajectory,
+        spatial_shape=(2, 2),
+        density=np.ones((4,), dtype=np.float32),
+    )
+
+    assert coil_images.shape == (1, 2, 2, 2)
+    assert np.iscomplexobj(np.asarray(coil_images))
+    np.testing.assert_allclose(np.sum(coil_images, axis=1), combined, atol=1e-6)
+
+
+def test_phase_unwrapping_is_spatial_and_independent_per_frame():
+    x = np.linspace(0.0, 5.0 * np.pi, 24, dtype=np.float32)
+    y = np.linspace(0.0, 1.5 * np.pi, 16, dtype=np.float32)
+    truth = x[:, None] + y[None, :]
+    wrapped = np.angle(np.exp(1j * truth)).astype(np.float32)
+    shifted_truth = truth + 0.4
+    shifted_wrapped = np.angle(np.exp(1j * shifted_truth)).astype(np.float32)
+    frames = np.stack([wrapped, shifted_wrapped], axis=0)
+
+    unwrapped = jax.jit(lambda value: unwrap_phase_image(value, spatial_ndim=2))(frames)
+
+    assert unwrapped.shape == frames.shape
+    for frame, expected in zip(unwrapped, (truth, shifted_truth), strict=True):
+        offset = float(frame[0, 0] - expected[0, 0])
+        np.testing.assert_allclose(frame - offset, expected, atol=1e-4)
+
+
+def test_weighted_phase_unwrapping_confines_low_confidence_noise():
+    x, y = np.mgrid[-1.0:1.0:48j, -1.0:1.0:48j]
+    truth = 8.0 * np.pi * np.exp(-2.5 * (x**2 + y**2))
+    wrapped = np.angle(np.exp(1j * truth)).astype(np.float32)
+    supported = x**2 + y**2 < 0.45**2
+    weights = np.where(supported, 1.0, 0.01).astype(np.float32)
+    rng = np.random.default_rng(7)
+    wrapped[~supported] = rng.uniform(-np.pi, np.pi, np.count_nonzero(~supported))
+
+    unwrapped = np.asarray(
+        unwrap_phase_image(wrapped, spatial_ndim=2, weights=weights)
+    )
+    difference = unwrapped[supported] - truth[supported]
+    difference -= np.median(difference)
+
+    np.testing.assert_allclose(difference, 0.0, atol=1e-4)
+    np.testing.assert_allclose(
+        np.angle(np.exp(1j * (unwrapped - wrapped))),
+        0.0,
+        atol=1e-4,
+    )
 
 
 def test_dti_log_linear_workflow_recovers_tensor_maps():

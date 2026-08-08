@@ -1097,6 +1097,43 @@ def format_bruker_cartesian_image(
     return _apply_framewise_transposition(magnitude, transpositions)
 
 
+def format_bruker_cartesian_coil_images(
+    image: np.ndarray,
+    reco: dict,
+    *,
+    frame_transposition: Sequence[int] | None = None,
+) -> np.ndarray:
+    """Format complex Bruker coil images without discarding phase or channels.
+
+    The returned layout is always ``(frame, coil, *spatial)`` and applies the same
+    FFT normalization, image cutoff, spatial ordering, and frame transposition as
+    :func:`format_bruker_cartesian_image`.
+    """
+
+    arr = np.asarray(image)
+    spatial_ndim = _bruker_spatial_ndim_for_array(arr, reco)
+    if arr.ndim >= spatial_ndim:
+        fft_norm = float(np.sqrt(np.prod(arr.shape[-spatial_ndim:])))
+        if fft_norm > 0:
+            arr = arr / fft_norm
+    arr, _ = _apply_bruker_image_cutoff(arr, reco)
+    if arr.ndim == spatial_ndim + 1:
+        arr = np.expand_dims(arr, axis=1)
+    if arr.ndim < spatial_ndim + 2:
+        raise ValueError(
+            "Bruker coil images must have frame and spatial axes, with an optional coil axis."
+        )
+    if spatial_ndim == 3:
+        # (frame, coil, slice, phase, read) -> (frame, coil, read, phase, slice)
+        arr = np.transpose(arr, (0, 1, 4, 3, 2))
+        return np.asarray(arr, dtype=np.complex64)
+    transpositions = frame_transposition if frame_transposition is not None else reco.get("RECO_transposition")
+    return np.asarray(
+        _apply_framewise_transposition(arr, transpositions),
+        dtype=np.complex64,
+    )
+
+
 def reconstruct_bruker_cartesian_kspace(
     kspace: np.ndarray,
     reco: dict,
@@ -2071,6 +2108,39 @@ def _pack_bruker_2d_frame_images(
         return image
     packed = frames.reshape((int(frame_count), z, x, y))
     return np.moveaxis(packed, 1, -1)
+
+
+def _pack_bruker_2d_frame_coil_images(
+    image: np.ndarray | None,
+    *,
+    frame_count: int,
+    raw_frame_count: int,
+    spatial_shape: tuple[int, ...],
+    prefer_transpose: bool = False,
+) -> np.ndarray | None:
+    """Pack 2D coil images into ``(frame, coil, x, y, z)`` layout."""
+
+    if image is None or len(spatial_shape) != 3:
+        return image
+    arr = np.asarray(image)
+    x, y, z = (int(spatial_shape[0]), int(spatial_shape[1]), int(spatial_shape[2]))
+    expected_objects = int(frame_count) * z
+    if (
+        arr.ndim == 5
+        and int(arr.shape[0]) == int(frame_count)
+        and tuple(int(v) for v in arr.shape[2:]) == (x, y, z)
+    ):
+        return arr
+    if arr.ndim != 4 or int(arr.shape[0]) != expected_objects or int(raw_frame_count) != expected_objects:
+        return image
+    if tuple(int(v) for v in arr.shape[2:]) == (x, y):
+        objects = np.swapaxes(arr, -2, -1) if prefer_transpose else arr
+    elif tuple(int(v) for v in arr.shape[2:]) == (y, x):
+        objects = np.swapaxes(arr, -2, -1)
+    else:
+        return image
+    packed = objects.reshape((int(frame_count), z, int(arr.shape[1]), x, y))
+    return np.transpose(packed, (0, 2, 3, 4, 1))
 
 
 def _pack_bruker_2d_frame_kspace(
@@ -4473,6 +4543,10 @@ def _reconstruct_bruker_epi_raw_job(
     _phase_coeffs, phase_meta = _reshape_bruker_epi_phase_correction(method, int(coil_count))
     raw = np.memmap(raw_path, dtype=dtype, mode="r", shape=(scan_count, int(coil_count), int(job_scan_size)))
     kspace_out = np.empty((int(frame_count), int(coil_count), x_out, y_out, z_out), dtype=np.complex64)
+    coil_image_out = np.empty(
+        (int(frame_count), int(coil_count), x_out, y_out, z_out),
+        dtype=np.complex64,
+    )
     raw_image_out = np.empty((int(frame_count), x_out, y_out, z_out), dtype=np.float32)
     debug_pre_crop_enabled = str(os.environ.get("MRAX_BRUKER_EPI_DEBUG_PRE_CROP", "0") or "0").strip().lower() in {
         "1",
@@ -4789,6 +4863,10 @@ def _reconstruct_bruker_epi_raw_job(
             np.sqrt(np.sum(np.abs(image) ** 2, axis=0)).astype(np.float32, copy=False)
             for image in object_coil_images
         ]
+        coil_image_out[frame_idx] = np.mean(
+            np.stack(object_coil_images, axis=0),
+            axis=0,
+        ).astype(np.complex64)
         raw_image_out[frame_idx] = np.mean(np.stack(object_magnitudes, axis=0), axis=0).astype(np.float32)
         if debug_pre_crop_out is not None:
             pre_crop_magnitudes = [
@@ -4833,12 +4911,14 @@ def _reconstruct_bruker_epi_raw_job(
     sampling_mask[:, np.clip(acquired_ky, 0, y_out - 1), :] = True
 
     raw_image_result = raw_image_out[..., 0] if output_is_2d_stack else raw_image_out
+    coil_image_result = coil_image_out[..., 0] if output_is_2d_stack else coil_image_out
     kspace_result = kspace_out[..., 0] if output_is_2d_stack else kspace_out
     sampling_mask_result = sampling_mask[..., 0] if output_is_2d_stack else sampling_mask
     output_axis_swap = bool(output_is_2d_stack and int(x_out) == int(y_out))
     kspace_axis_order = "read_phase" if output_is_2d_stack else "slice_read_phase"
     if output_axis_swap:
         raw_image_result = np.swapaxes(raw_image_result, -2, -1)
+        coil_image_result = np.swapaxes(coil_image_result, -2, -1)
         kspace_result = np.swapaxes(kspace_result, -2, -1)
         sampling_mask_result = np.swapaxes(sampling_mask_result, -2, -1)
         kspace_axis_order = "phase_read"
@@ -4947,6 +5027,7 @@ def _reconstruct_bruker_epi_raw_job(
             "RecoRegridFilter ramp interpolation kernel is not fully reproduced; measured trajectory span scales the polarity delay estimate",
         ],
         "_debug_pre_crop_raw_image": debug_pre_crop_result,
+        "_raw_reconstruction_coils": coil_image_result,
     }
 
 
@@ -4990,6 +5071,11 @@ def _reconstruct_bruker_epi_best_effort_raw_job(
     )
     frame_transposition = _bruker_frame_transpositions(reco.get("RECO_transposition"), frame_count)
     image = cartesian_ifft(kspace_for_reco, axes=fft_axes)
+    coil_image_out = format_bruker_cartesian_coil_images(
+        image,
+        reco,
+        frame_transposition=frame_transposition,
+    )
     raw_image_out = format_bruker_cartesian_image(
         image,
         reco,
@@ -5005,6 +5091,7 @@ def _reconstruct_bruker_epi_best_effort_raw_job(
         "candidate_layout": candidate_layout,
         "fft_axes": list(fft_axes),
         "kspace_corrections": correction_meta,
+        "_raw_reconstruction_coils": coil_image_out,
         "approximations": list(sorting_meta.get("approximations", []))
         + [
             "best-effort Cartesian EPI preview used because graph-ordered EPI reconstruction was not applicable",
@@ -5231,15 +5318,18 @@ def _load_bruker_raw_kspace(
                 "kspace_corrections_applied": applied_corrections,
             },
         )
-        raw_image_out = np.asarray(
+        coil_image_out = np.asarray(
             reconstruct_regrid(
                 kspace_def.samples,
                 np.asarray(kspace_def.trajectory),
                 spatial_shape=spatial_nc,
                 density=np.asarray(density, dtype=np.float32),
+                return_coils=True,
             )
         )
-        raw_image_out = np.abs(raw_image_out).astype(np.float32)
+        if coil_image_out.ndim == spatial_ndim + 1:
+            coil_image_out = coil_image_out[None, ...]
+        raw_image_out = np.abs(np.sum(coil_image_out, axis=1)).astype(np.float32)
         if spatial_ndim == 2:
             raw_image_out = _pack_bruker_2d_frame_images(
                 raw_image_out,
@@ -5248,7 +5338,16 @@ def _load_bruker_raw_kspace(
                 spatial_shape=spatial_shape,
                 prefer_transpose=True,
             )
-        return kspace_def, raw_image_out, None, dict(kspace_def.metadata)
+            coil_image_out = _pack_bruker_2d_frame_coil_images(
+                coil_image_out,
+                frame_count=frame_count,
+                raw_frame_count=raw_frame_count,
+                spatial_shape=spatial_shape,
+                prefer_transpose=True,
+            )
+        output_metadata = dict(kspace_def.metadata)
+        output_metadata["_raw_reconstruction_coils"] = np.asarray(coil_image_out)
+        return kspace_def, raw_image_out, None, output_metadata
 
     if sequence_type == "epi":
         candidate_errors: list[dict[str, str]] = []
@@ -5298,6 +5397,7 @@ def _load_bruker_raw_kspace(
             }
 
         debug_pre_crop_raw_image = sorting_meta.pop("_debug_pre_crop_raw_image", None)
+        raw_coil_image = sorting_meta.pop("_raw_reconstruction_coils", None)
 
         frame_transposition = _bruker_frame_transpositions(reco.get("RECO_transposition"), raw_frame_count)
         if not np.any(frame_transposition > 0) and visu is not None:
@@ -5305,11 +5405,19 @@ def _load_bruker_raw_kspace(
 
         kspace = _reorder_bruker_frames(kspace, frame_order)
         raw_image_out = _reorder_bruker_frames(raw_image_out, frame_order)
+        if isinstance(raw_coil_image, np.ndarray):
+            raw_coil_image = _reorder_bruker_frames(raw_coil_image, frame_order)
         if isinstance(debug_pre_crop_raw_image, np.ndarray):
             debug_pre_crop_raw_image = _reorder_bruker_frames(debug_pre_crop_raw_image, frame_order)
         frame_transposition = _reorder_bruker_frames(frame_transposition, frame_order)
         raw_image_out = _pack_bruker_2d_frame_images(
             raw_image_out,
+            frame_count=frame_count,
+            raw_frame_count=raw_frame_count,
+            spatial_shape=spatial_shape,
+        )
+        raw_coil_image = _pack_bruker_2d_frame_coil_images(
+            raw_coil_image,
             frame_count=frame_count,
             raw_frame_count=raw_frame_count,
             spatial_shape=spatial_shape,
@@ -5526,6 +5634,7 @@ def _load_bruker_raw_kspace(
             "sampling_mask_shape": tuple(int(v) for v in sampling_mask.shape),
             "kspace_corrections_applied": applied_corrections,
             "_debug_pre_crop_raw_image": debug_pre_crop_raw_image,
+            "_raw_reconstruction_coils": raw_coil_image,
         }
         return kspace, raw_image_out, sampling_mask, meta
 
@@ -5753,9 +5862,24 @@ def _load_bruker_raw_kspace(
         if image is not None
         else None
     )
+    raw_coil_image = (
+        format_bruker_cartesian_coil_images(
+            image,
+            reco,
+            frame_transposition=frame_transposition,
+        )
+        if image is not None
+        else None
+    )
 
     raw_image_out = _pack_bruker_2d_frame_images(
         raw_image_out,
+        frame_count=frame_count,
+        raw_frame_count=raw_frame_count,
+        spatial_shape=spatial_shape,
+    )
+    raw_coil_image = _pack_bruker_2d_frame_coil_images(
+        raw_coil_image,
         frame_count=frame_count,
         raw_frame_count=raw_frame_count,
         spatial_shape=spatial_shape,
@@ -5819,6 +5943,7 @@ def _load_bruker_raw_kspace(
             float(np.sqrt(np.prod(kspace_out.shape[-len(raw_shape) :]))) if kspace_out is not None else None
         ),
         "kspace_corrections_applied": encoding_corrections + correction_meta.get("applied_kspace_corrections", []),
+        "_raw_reconstruction_coils": raw_coil_image,
     }
     sampling_mask = None
     if mask is not None and not np.all(mask):
@@ -6675,6 +6800,7 @@ def load_bruker_experiment(
     processed: dict[str, object] = {}
     raw_kspace = None
     raw_image = None
+    raw_coil_image = None
     debug_pre_crop_raw_image = None
     sampling_mask = None
     raw_meta: dict | None = None
@@ -6710,6 +6836,14 @@ def load_bruker_experiment(
                 raw_image = np.asarray(raw_image)[fair_order]
         if raw_meta is not None:
             debug_pre_crop_raw_image = raw_meta.pop("_debug_pre_crop_raw_image", None)
+            raw_coil_image = raw_meta.pop("_raw_reconstruction_coils", None)
+        if (
+            fair_order is not None
+            and raw_coil_image is not None
+            and np.asarray(raw_coil_image).ndim >= 1
+            and np.asarray(raw_coil_image).shape[0] == fair_order.size
+        ):
+            raw_coil_image = np.asarray(raw_coil_image)[fair_order]
         if (
             fair_order is not None
             and debug_pre_crop_raw_image is not None
@@ -6722,6 +6856,8 @@ def load_bruker_experiment(
                 dataset_data = np.asarray(raw_image)
             else:
                 processed["raw_reconstruction"] = np.asarray(raw_image)
+        if raw_coil_image is not None:
+            processed["raw_reconstruction_coils"] = np.asarray(raw_coil_image)
         if sampling_mask is not None:
             processed["sampling_mask"] = np.asarray(sampling_mask)
     else:

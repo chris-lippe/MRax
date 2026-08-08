@@ -124,6 +124,87 @@ def test_gui_session_loads_manifest_and_extracts_roi_analysis(tmp_path):
     assert np.asarray(timecourse["timecourse"]).shape == (2,)
 
 
+def test_gui_reconstruction_views_and_exports_combined_and_individual_coils(tmp_path):
+    coil_1 = np.full((2, 2, 3), 2.0 + 2.0j, dtype=np.complex64)
+    coil_2 = np.full((2, 2, 3), 1.0 - 1.0j, dtype=np.complex64)
+    coil_1[1] = 2.0 - 2.0j
+    coil_2[1] = 1.0 + 1.0j
+    coil_images = np.stack([coil_1, coil_2], axis=1)
+    combined_magnitude = np.sqrt(np.sum(np.abs(coil_images) ** 2, axis=1)).astype(np.float32)
+
+    session = GuiSession()
+    session.create_empty_study("reconstruction_components")
+    session.add_experiment(
+        "multi_coil",
+        np.zeros((2, 2, 3), dtype=np.float32),
+        dims={"frame": 2, "x": 2, "y": 3},
+        processed={
+            "raw_reconstruction": combined_magnitude,
+            "raw_reconstruction_coils": coil_images,
+        },
+    )
+
+    assert session.reconstruction_coil_count == 2
+    np.testing.assert_allclose(
+        session.reconstruction_image(component="magnitude", combined=True),
+        combined_magnitude[0],
+    )
+    np.testing.assert_allclose(
+        session.reconstruction_image(component="phase", combined=True),
+        np.angle(coil_1[0] + coil_2[0]),
+    )
+    np.testing.assert_allclose(
+        session.reconstruction_image(
+            frame=1,
+            component="phase",
+            combined=True,
+            unwrap_phase=False,
+        ),
+        np.angle(coil_1[1] + coil_2[1]),
+    )
+    session.set_reconstruction_coil(1)
+    session.set_reconstruction_component("phase")
+    session.set_reconstruction_phase_unwrap(False)
+    np.testing.assert_allclose(session.reconstruction_image(), np.angle(coil_2[0]))
+    assert session.dimension_controls("mrax_reconstruction") == [
+        {"key": "frame", "label": "frame", "axis": 0, "size": 2}
+    ]
+    session.add_experiment(
+        "other",
+        np.zeros((2, 3), dtype=np.float32),
+        dims={"x": 2, "y": 3},
+    )
+    session.select_experiment("multi_coil")
+    assert session.active_reconstruction_component == "phase"
+    assert session.active_reconstruction_coil == 1
+    assert not session.active_reconstruction_unwrap_phase
+
+    reconstruction_records = [
+        record
+        for record in _export_object_records_for_session(session)
+        if record["kind"] == "reconstruction"
+    ]
+    assert [record["name"] for record in reconstruction_records] == [
+        "combined_magnitude",
+        "combined_phase",
+        "combined_phase_wrapped",
+        "coil_001_magnitude",
+        "coil_001_phase",
+        "coil_001_phase_wrapped",
+        "coil_002_magnitude",
+        "coil_002_phase",
+        "coil_002_phase_wrapped",
+    ]
+    combined_phase_record = reconstruction_records[1]
+    assert combined_phase_record["unit"] == "rad"
+    saved = _write_single_export_object(
+        combined_phase_record,
+        tmp_path / "combined_phase.npy",
+        "npy",
+    )
+    np.testing.assert_allclose(np.load(saved[0]), np.angle(coil_1 + coil_2))
+
+
 def test_gui_session_switches_3d_image_planes_and_spatial_slider():
     data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape((2, 3, 4, 5))
     session = GuiSession()

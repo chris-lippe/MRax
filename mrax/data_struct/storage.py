@@ -862,10 +862,33 @@ def save_study_results(
             except Exception as exc:
                 _record_io_warning(manifest, f"{name}/fitted_maps/{field_name}: {type(exc).__name__}: {exc}")
 
+        processed_paths: Dict[str, str] = {}
+        processed_shapes: Dict[str, list[int]] = {}
+        for processed_name in (
+            "raw_reconstruction",
+            "raw_reconstruction_complex",
+            "raw_reconstruction_coils",
+        ):
+            value = dict(getattr(dataset, "processed", {}) or {}).get(processed_name)
+            if value is None:
+                continue
+            try:
+                processed_path = exp_dir / "processed" / f"{processed_name}{file_extension}"
+                processed_array = np.asarray(value)
+                save_ismrmrd_array(processed_path, processed_array, group="processed")
+                processed_paths[processed_name] = _relative(processed_path, base)
+                processed_shapes[processed_name] = list(processed_array.shape)
+            except Exception as exc:
+                _record_io_warning(
+                    manifest,
+                    f"{name}/processed/{processed_name}: {type(exc).__name__}: {exc}",
+                )
+
         paths = {
             "mr_images": mr_image_slices,
             "raw_kspace_images": kspace_slices or [],
             "fitted_maps": fitted_paths,
+            "processed": processed_paths,
         }
         if non_image_paths:
             paths["non_images"] = non_image_paths
@@ -885,6 +908,7 @@ def save_study_results(
                 "mr_image": list(np.asarray(dataset.data).shape),
                 "raw_kspace": kspace_save_shape if kspace_save_shape is not None else None,
                 "fitted_maps": {k: list(np.asarray(fields[k]).shape) for k in fitted_paths},
+                "processed": processed_shapes,
             },
             "fitted_map_units": fitted_units,
             "plots": {},
@@ -1037,6 +1061,18 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
             except Exception as exc:
                 warn_skipped(f"{name}/fitted_maps/{key}: {type(exc).__name__}: {exc}")
 
+        processed = {}
+        processed_shapes = shapes.get("processed", {})
+        for key, rel_path in paths.get("processed", {}).items():
+            try:
+                processed[key] = load_ismrmrd_array(
+                    _resolve_manifest_path(base, rel_path, label="processed reconstruction"),
+                    group="processed",
+                    expected_shape=tuple(processed_shapes.get(key, ())),
+                )
+            except Exception as exc:
+                warn_skipped(f"{name}/processed/{key}: {type(exc).__name__}: {exc}")
+
         observable_values = entry.get("observable_values", {})
         observable_units = entry.get("observable_units", {})
         observables: dict[str, Quantity] = {}
@@ -1053,6 +1089,7 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
             "mr_image": mr_image,
             "raw_kspace": kspace,
             "fitted_maps": fitted_maps,
+            "processed": processed,
             "model": entry.get("model"),
             "exp_type": entry.get("exp_type"),
             "data_role": (entry.get("extra_metadata") or {}).get("data_role") or entry.get("exp_type"),

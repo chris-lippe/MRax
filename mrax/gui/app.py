@@ -34,6 +34,7 @@ from mrax.data_struct.dimensions import (
     reshape_frames_to_dims,
     spatial_names,
 )
+from mrax.reco.components import available_reconstruction_variants
 from mrax.versioning import missing_mrax_version_message, validate_mrax_file_version
 
 from ._deps import GUI_INSTALL_HINT, MissingGuiDependencyError, import_pyqtgraph, import_qt
@@ -1229,6 +1230,34 @@ class _MainWindowMixin:
         self.kspace_centering.addItems(["auto", "none", "fftshift"])
         self.kspace_centering.currentTextChanged.connect(self.on_kspace_centering_changed)
         layout.addWidget(self.kspace_centering)
+
+        self.reconstruction_component_label = QtWidgets.QLabel("Reconstruction component")
+        self.reconstruction_component = QtWidgets.QComboBox()
+        self.reconstruction_component.addItem("Magnitude", "magnitude")
+        self.reconstruction_component.addItem("Phase (radians)", "phase")
+        self.reconstruction_component.currentIndexChanged.connect(
+            self.on_reconstruction_component_changed
+        )
+        layout.addWidget(self.reconstruction_component_label)
+        layout.addWidget(self.reconstruction_component)
+
+        self.reconstruction_coil_label = QtWidgets.QLabel("Reconstruction channels")
+        self.reconstruction_coil = QtWidgets.QComboBox()
+        self.reconstruction_coil.currentIndexChanged.connect(
+            self.on_reconstruction_coil_changed
+        )
+        layout.addWidget(self.reconstruction_coil_label)
+        layout.addWidget(self.reconstruction_coil)
+
+        self.reconstruction_unwrap_phase = QtWidgets.QCheckBox("Unwrap phase spatially")
+        self.reconstruction_unwrap_phase.setChecked(True)
+        self.reconstruction_unwrap_phase.setStatusTip(
+            "Unwrap phase independently within each spatial image; frames and observables remain separate."
+        )
+        self.reconstruction_unwrap_phase.toggled.connect(
+            self.on_reconstruction_phase_unwrap_changed
+        )
+        layout.addWidget(self.reconstruction_unwrap_phase)
 
         layout.addWidget(QtWidgets.QLabel("Maps"))
         self.map_list = QtWidgets.QListWidget()
@@ -3267,6 +3296,7 @@ class _MainWindowMixin:
         self.experiment_list.blockSignals(False)
 
         self.refresh_map_list()
+        self.refresh_reconstruction_controls()
         self.refresh_visual_state_controls()
         self.kspace_mode.blockSignals(True)
         self.kspace_mode.setCurrentText(self.session.active_kspace_mode)
@@ -4160,7 +4190,7 @@ class _MainWindowMixin:
         elif view == "vendor_mrax_diff":
             vendor, mrax = _matched_2d_pair(
                 self.session.frame_image(original=bool(self.session.visual_state.show_original)),
-                self.session.reconstruction_image(),
+                self.session.reconstruction_image(component="magnitude", combined=True),
             )
             image = vendor - mrax
             source = "vendor_mrax_diff"
@@ -5026,6 +5056,82 @@ class _MainWindowMixin:
         self.session._slice_cache.clear()
         self.update_view()
 
+    def refresh_reconstruction_controls(self):
+        if not hasattr(self, "reconstruction_component"):
+            return
+        visible = _view_key(self.view_combo.currentText()) == "mrax_reconstruction"
+        for widget in (
+            self.reconstruction_component_label,
+            self.reconstruction_component,
+            self.reconstruction_coil_label,
+            self.reconstruction_coil,
+            self.reconstruction_unwrap_phase,
+        ):
+            widget.setVisible(visible)
+
+        self.reconstruction_component.blockSignals(True)
+        preferred_component = self.session.active_reconstruction_component
+        self.reconstruction_component.clear()
+        self.reconstruction_component.addItem("Magnitude", "magnitude")
+        try:
+            self.session.reconstruction_display_array(
+                component="phase",
+                combined=True,
+                unwrap_phase=False,
+            )
+        except (RuntimeError, ValueError):
+            phase_available = False
+        else:
+            phase_available = True
+            self.reconstruction_component.addItem("Phase (radians)", "phase")
+        component_index = self.reconstruction_component.findData(preferred_component)
+        if component_index < 0:
+            component_index = 0
+            self.session.active_reconstruction_component = "magnitude"
+        self.reconstruction_component.setCurrentIndex(component_index)
+        self.reconstruction_component.setEnabled(visible and phase_available)
+        self.reconstruction_component.blockSignals(False)
+
+        self.reconstruction_coil.blockSignals(True)
+        self.reconstruction_coil.clear()
+        self.reconstruction_coil.addItem("Combined", None)
+        coil_count = self.session.reconstruction_coil_count
+        for coil_index in range(coil_count):
+            self.reconstruction_coil.addItem(f"Coil {coil_index + 1}", coil_index)
+        active_coil = self.session.active_reconstruction_coil
+        coil_index = self.reconstruction_coil.findData(active_coil)
+        if coil_index < 0:
+            coil_index = 0
+            self.session.active_reconstruction_coil = None
+        self.reconstruction_coil.setCurrentIndex(coil_index)
+        self.reconstruction_coil.setEnabled(visible and coil_count > 0)
+        self.reconstruction_coil.blockSignals(False)
+        self.reconstruction_unwrap_phase.blockSignals(True)
+        self.reconstruction_unwrap_phase.setChecked(
+            self.session.active_reconstruction_unwrap_phase
+        )
+        self.reconstruction_unwrap_phase.setVisible(
+            visible and self.session.active_reconstruction_component == "phase"
+        )
+        self.reconstruction_unwrap_phase.blockSignals(False)
+
+    def on_reconstruction_component_changed(self, _index: int):
+        component = str(self.reconstruction_component.currentData() or "magnitude")
+        self.session.set_reconstruction_component(component)
+        self.refresh_reconstruction_controls()
+        self.refresh_frame_controls()
+        self.update_view()
+
+    def on_reconstruction_coil_changed(self, _index: int):
+        value = self.reconstruction_coil.currentData()
+        self.session.set_reconstruction_coil(None if value is None else int(value))
+        self.refresh_frame_controls()
+        self.update_view()
+
+    def on_reconstruction_phase_unwrap_changed(self, enabled: bool):
+        self.session.set_reconstruction_phase_unwrap(enabled)
+        self.update_view()
+
     def refresh_plot_x_axis_combo(self):
         self.plot_x_combo.blockSignals(True)
         self.plot_x_combo.clear()
@@ -5105,6 +5211,7 @@ class _MainWindowMixin:
 
     def on_view_changed(self, _text: str):
         self.refresh_map_list()
+        self.refresh_reconstruction_controls()
         self.refresh_frame_controls()
         self.refresh_registration_tab()
         self.update_view()
@@ -5230,12 +5337,26 @@ class _MainWindowMixin:
                 self._displayed_image_unit = None
             elif view == "mrax_reconstruction":
                 image = self.session.reconstruction_image()
-                self._displayed_image_label = "MRax reconstruction"
-                self._displayed_image_unit = None
+                channel_label = (
+                    "combined"
+                    if self.session.active_reconstruction_coil is None
+                    else f"coil {self.session.active_reconstruction_coil + 1}"
+                )
+                component_label = self.session.active_reconstruction_component
+                phase_label = (
+                    " unwrapped"
+                    if component_label == "phase"
+                    and self.session.active_reconstruction_unwrap_phase
+                    else ""
+                )
+                self._displayed_image_label = (
+                    f"MRax {channel_label} {component_label}{phase_label}"
+                )
+                self._displayed_image_unit = "rad" if component_label == "phase" else None
             elif view == "vendor_vs_mrax":
                 vendor, mrax = _matched_2d_pair(
                     self.session.frame_image(original=use_original_image),
-                    self.session.reconstruction_image(),
+                    self.session.reconstruction_image(component="magnitude", combined=True),
                 )
                 image = _side_by_side_images(vendor, mrax)
                 self._displayed_image_label = "vendor | MRax"
@@ -5243,7 +5364,7 @@ class _MainWindowMixin:
             elif view == "vendor_mrax_diff":
                 vendor, mrax = _matched_2d_pair(
                     self.session.frame_image(original=use_original_image),
-                    self.session.reconstruction_image(),
+                    self.session.reconstruction_image(component="magnitude", combined=True),
                 )
                 image = vendor - mrax
                 self._displayed_image_label = "vendor - MRax"
@@ -5709,6 +5830,7 @@ class _MainWindowMixin:
         return False
 
     def on_lazy_raw_data_loaded(self, _loaded: bool):
+        self.refresh_reconstruction_controls()
         self.refresh_frame_controls()
         self.update_view()
         self.update_diagnostics()
@@ -7625,6 +7747,16 @@ class _MainWindowMixin:
 
         include_images = QtWidgets.QCheckBox("Images")
         include_images.setChecked(True)
+        include_reconstructions = QtWidgets.QCheckBox(
+            "MRax reconstructions (combined and individual coils)"
+        )
+        include_reconstructions.setChecked(
+            any(
+                (exp_data.get("processed") or {}).get("raw_reconstruction") is not None
+                or (exp_data.get("processed") or {}).get("raw_reconstruction_coils") is not None
+                for exp_data in ((self.session.data or {}).get("experiments") or {}).values()
+            )
+        )
         include_kspace = QtWidgets.QCheckBox("K-space")
         include_kspace.setChecked(True)
         include_maps = QtWidgets.QCheckBox("Fitted maps")
@@ -7635,7 +7767,15 @@ class _MainWindowMixin:
         numpy_check.setChecked(True)
         nifti_check = QtWidgets.QCheckBox("NIfTI files (.nii)")
         nifti_check.setChecked(False)
-        for widget in (include_images, include_kspace, include_maps, include_rois, numpy_check, nifti_check):
+        for widget in (
+            include_images,
+            include_reconstructions,
+            include_kspace,
+            include_maps,
+            include_rois,
+            numpy_check,
+            nifti_check,
+        ):
             bulk_layout.addWidget(widget)
         transform_rois_check = QtWidgets.QCheckBox("Apply available registration transform to ROIs")
         transform_rois_check.setChecked(False)
@@ -7787,6 +7927,7 @@ class _MainWindowMixin:
                     include_rois=include_rois.isChecked(),
                     export_numpy=numpy_check.isChecked(),
                     export_nifti=nifti_check.isChecked(),
+                    include_reconstructions=include_reconstructions.isChecked(),
                     roi_transform_key=(
                         str(export_transform_combo.currentData())
                         if transform_rois_check.isChecked() and export_transform_combo.currentData()
@@ -7862,6 +8003,7 @@ class _MainWindowMixin:
         include_rois: bool,
         export_numpy: bool,
         export_nifti: bool,
+        include_reconstructions: bool = True,
         roi_transform_key: str | None = None,
         roi_transform_direction: str = "reference_to_moving",
     ) -> list[Path]:
@@ -7881,9 +8023,14 @@ class _MainWindowMixin:
             exp_key = _safe_filename(str(exp_name))
             exp_dir = output_dir / exp_key
             exp_dir.mkdir(parents=True, exist_ok=True)
+            exp_dims = dict(
+                exp_data.get("dims")
+                or self.session.summary_by_name.get(str(exp_name), {}).get("dims")
+                or {}
+            )
             exp_manifest: dict[str, Any] = {
                 "name": str(exp_name),
-                "dims": dict(exp_data.get("dims") or {}),
+                "dims": exp_dims,
                 "spatial_geometry": exp_data.get("spatial_geometry"),
                 "files": [],
             }
@@ -7900,6 +8047,60 @@ class _MainWindowMixin:
                     arr = None
                 if export_nifti:
                     saved.extend(self._export_image_nifti(exp_name, exp_data, exp_dir / "nifti" / "mr_image", manifest))
+            if include_reconstructions:
+                for variant_name, component, coil_index, arr in available_reconstruction_variants(
+                    exp_data.get("processed") or {},
+                    spatial_ndim=len(spatial_names(exp_dims)),
+                ):
+                    reconstruction_dir = exp_dir / "reconstruction"
+                    if export_numpy:
+                        try:
+                            reconstruction_dir.mkdir(parents=True, exist_ok=True)
+                            path = reconstruction_dir / f"{variant_name}.npy"
+                            np.save(path, arr)
+                        except Exception as exc:
+                            manifest["warnings"].append(
+                                f"warning: skipped {exp_name}/{variant_name} NumPy export: {exc}"
+                            )
+                        else:
+                            saved.append(path)
+                            exp_manifest["files"].append(
+                                {
+                                    "kind": "reconstruction",
+                                    "component": component,
+                                    "coil": None if coil_index is None else int(coil_index) + 1,
+                                    "phase_unwrapped": bool(
+                                        component == "phase" and not variant_name.endswith("_wrapped")
+                                    ),
+                                    "format": "npy",
+                                    "path": _package_relative(path, output_dir),
+                                }
+                            )
+                    if export_nifti:
+                        nifti_dir = exp_dir / "nifti" / "reconstruction" / variant_name
+                        nifti_paths = self._export_reconstruction_nifti(
+                            exp_name,
+                            exp_data,
+                            np.asarray(arr),
+                            nifti_dir,
+                            variant_name,
+                            manifest,
+                        )
+                        saved.extend(nifti_paths)
+                        exp_manifest["files"].extend(
+                            {
+                                "kind": "reconstruction",
+                                "component": component,
+                                "coil": None if coil_index is None else int(coil_index) + 1,
+                                "phase_unwrapped": bool(
+                                    component == "phase" and not variant_name.endswith("_wrapped")
+                                ),
+                                "format": "nifti",
+                                "unit": "rad" if component == "phase" else "",
+                                "path": _package_relative(path, output_dir),
+                            }
+                            for path in nifti_paths
+                        )
             if include_kspace and exp_data.get("raw_kspace") is not None and export_numpy:
                 try:
                     path = exp_dir / "raw_kspace.npy"
@@ -8055,6 +8256,52 @@ class _MainWindowMixin:
             )
         except Exception as exc:
             export_manifest["warnings"].append(f"{exp_name}/mr_image: {exc}")
+            return []
+
+    def _export_reconstruction_nifti(
+        self,
+        exp_name: str,
+        exp_data: dict[str, Any],
+        array: np.ndarray,
+        output_dir: Path,
+        stem: str,
+        export_manifest: dict[str, Any],
+    ) -> list[Path]:
+        try:
+            from mrax.io.nifti import export_nifti_series
+
+            experiment = Experiment(
+                dims={str(k): int(v) for k, v in dict(exp_data.get("dims") or {}).items()},
+                observables=dict(exp_data.get("observables") or {}),
+                exp_type=exp_data.get("exp_type"),
+            )
+            geometry_meta = exp_data.get("spatial_geometry")
+            geometry = (
+                SpatialGeometry.from_metadata(geometry_meta)
+                if isinstance(geometry_meta, Mapping)
+                else None
+            )
+            dataset = DataSet(
+                data=np.asarray(array),
+                name=f"{exp_name}_{stem}",
+                spatial_geometry=geometry,
+            )
+            affine = _experiment_nifti_affine(self.session, str(exp_name))
+            if affine is None:
+                export_manifest["warnings"].append(
+                    f"{exp_name}/{stem}: orientation unavailable; identity affine used"
+                )
+            return list(
+                export_nifti_series(
+                    experiment,
+                    dataset,
+                    output_dir,
+                    stem=stem,
+                    affine=affine,
+                )
+            )
+        except Exception as exc:
+            export_manifest["warnings"].append(f"{exp_name}/{stem}: {exc}")
             return []
 
     def _export_roi_label_masks(
@@ -13060,6 +13307,9 @@ def _serialize_gui_state(
             "active_map": state.active_map,
             "active_kspace_mode": state.active_kspace_mode,
             "active_kspace_centering": state.active_kspace_centering,
+            "active_reconstruction_component": state.active_reconstruction_component,
+            "active_reconstruction_coil": state.active_reconstruction_coil,
+            "active_reconstruction_unwrap_phase": state.active_reconstruction_unwrap_phase,
             "visual_state": _visual_state_to_dict(state.visual_state),
             "fit_settings": _fit_settings_to_dict(state.fit_settings),
             "frame_mask": None if state.frame_mask is None else state.frame_mask.as_array().astype(bool).tolist(),
@@ -13443,6 +13693,17 @@ def _restore_gui_state(
                 active_map=state_data.get("active_map"),
                 active_kspace_mode=str(state_data.get("active_kspace_mode") or "log_magnitude"),
                 active_kspace_centering=str(state_data.get("active_kspace_centering") or "auto"),
+                active_reconstruction_component=str(
+                    state_data.get("active_reconstruction_component") or "magnitude"
+                ),
+                active_reconstruction_coil=(
+                    None
+                    if state_data.get("active_reconstruction_coil") is None
+                    else _safe_int_value(state_data.get("active_reconstruction_coil"), 0)
+                ),
+                active_reconstruction_unwrap_phase=bool(
+                    state_data.get("active_reconstruction_unwrap_phase", True)
+                ),
                 rois=rois,
                 fit_settings=_fit_settings_from_dict(state_data.get("fit_settings") or {}),
                 frame_mask=None if frame_mask is None else FrameMask(np.asarray(frame_mask, dtype=bool)),
@@ -13554,7 +13815,11 @@ def _export_object_records_for_session(session: GuiSession) -> list[dict[str, An
     experiments = (session.data or {}).get("experiments") or {}
     for exp_name, exp_data in experiments.items():
         group = f"Experiment: {exp_name}"
-        dims = dict(exp_data.get("dims") or {})
+        dims = dict(
+            exp_data.get("dims")
+            or session.summary_by_name.get(str(exp_name), {}).get("dims")
+            or {}
+        )
         if exp_data.get("mr_image") is not None:
             current_image = np.asarray(exp_data["mr_image"])
             records.append(
@@ -13584,18 +13849,36 @@ def _export_object_records_for_session(session: GuiSession) -> list[dict[str, An
                         )
                     )
         processed = dict(exp_data.get("processed") or {})
-        if processed.get("raw_reconstruction") is not None:
-            records.append(
-                _export_record(
-                    "reconstruction",
-                    f"{exp_name} / MRax reconstruction",
-                    np.asarray(processed["raw_reconstruction"]),
-                    group=group,
-                    experiment=exp_name,
-                    name="raw_reconstruction",
-                    dims=dims,
-                )
+        for variant_name, component, coil_index, array in available_reconstruction_variants(
+            processed,
+            spatial_ndim=len(spatial_names(dims)),
+        ):
+            channel_label = "combined" if coil_index is None else f"coil {coil_index + 1}"
+            record = _export_record(
+                "reconstruction",
+                f"{exp_name} / MRax reconstruction / {channel_label} / {component}",
+                array,
+                group=group,
+                experiment=exp_name,
+                name=variant_name,
+                dims=dims,
+                unit="rad" if component == "phase" else "",
+                metadata={
+                    "component": component,
+                    "coil": None if coil_index is None else int(coil_index) + 1,
+                    "phase_unwrapped": bool(
+                        component == "phase" and not variant_name.endswith("_wrapped")
+                    ),
+                    "coil_combination": "vendor magnitude / coherent phase"
+                    if coil_index is None
+                    else "individual",
+                },
             )
+            record["nifti_reference"] = {
+                "experiment": str(exp_name),
+                "affine": _experiment_nifti_affine(session, str(exp_name)),
+            }
+            records.append(record)
         if exp_data.get("raw_kspace") is not None:
             records.append(
                 _export_record(

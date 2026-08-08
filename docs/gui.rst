@@ -72,6 +72,13 @@ files, CSV tables for suitable 1D/2D real arrays, NIfTI for compatible 2D/3D ima
 data, ROI sets, or metadata JSON. Each export folder includes
 ``export_manifest.json`` with file paths and any conversion warnings.
 
+MRax raw reconstructions can be exported as combined magnitude, combined phase,
+and per-coil magnitude/phase arrays. Phase is expressed in radians. The combined
+magnitude preserves the vendor-style magnitude combination, while combined phase
+uses the coherent sum of the channel-corrected complex coil images. Exported phase
+is spatially unwrapped by default; an additional ``*_phase_wrapped`` export retains
+the original wrapped values.
+
 When registration transforms are stored, ROI export can resample masks between the
 moving and reference image grids. Nearest-neighbor interpolation is used for masks
 so binary and integer label values are preserved.
@@ -80,8 +87,11 @@ Viewing
 -------
 
 The left panel keeps experiment selection and the current view mode visible.
-``Image`` displays reconstructed image data, ``K-space`` displays raw k-space when
-present, and ``Map`` displays fitted maps.
+``Image`` displays vendor image data, ``MRax reconstruction`` displays reconstructions
+from raw k-space, ``K-space`` displays raw k-space when present, and ``Map`` displays
+fitted maps. The MRax reconstruction view can switch between magnitude and phase and
+between the combined image and each available receiver coil. Phase unwrapping is
+enabled by default and can be disabled in the reconstruction controls.
 
 The viewer supports:
 

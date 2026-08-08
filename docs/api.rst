@@ -315,6 +315,8 @@ Vendor-agnostic reconstruction utilities for both Cartesian and non-Cartesian k-
 .. autofunction:: mrax.reco.processing.apply_readout_phase_shift
 .. autofunction:: mrax.reco.processing.crop_along_axis
 .. autofunction:: mrax.reco.processing.readout_crop_bounds
+.. autofunction:: mrax.reco.phase.unwrap_phase_image
+.. autofunction:: mrax.reco.components.reconstruction_variant
 
 .. autoclass:: mrax.reco.variational.MRIEncodingOperator
    :members: forward, adjoint, coil_count, is_non_cartesian
