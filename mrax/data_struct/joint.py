@@ -192,6 +192,7 @@ def select_experiment_frames(
         density=dataset.density,
         sampling_mask=jnp.asarray(sampling_mask_sel) if sampling_mask_sel is not None else None,
         kspace_metadata=dataset.kspace_metadata,
+        spatial_geometry=dataset.spatial_geometry,
     )
     return new_exp, new_ds
 
@@ -406,6 +407,12 @@ def join_experiments(
         noise_level=None,
         processed=None,
         kspace=jnp.asarray(joined_kspace) if joined_kspace is not None else None,
+        spatial_geometry=(
+            datasets[0].spatial_geometry
+            if datasets
+            and all(dataset.spatial_geometry == datasets[0].spatial_geometry for dataset in datasets[1:])
+            else None
+        ),
     )
 
     frame_map = {name: np.asarray(idxs, dtype=int) for name, idxs in frame_offsets.items()}

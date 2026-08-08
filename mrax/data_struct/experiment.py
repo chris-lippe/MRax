@@ -235,3 +235,10 @@ class Experiment:
                 f"Dataset shape {dataset.shape} does not match experiment dims {self.shape}."
             )
         require_quantity_dict(self.observables, "Observable")
+        geometry = dataset.spatial_geometry
+        if geometry is not None and geometry.spatial_shape is not None:
+            if tuple(geometry.spatial_shape) != tuple(self.spatial_shape):
+                raise ValueError(
+                    f"Spatial geometry shape {geometry.spatial_shape} does not match "
+                    f"experiment spatial shape {self.spatial_shape}."
+                )

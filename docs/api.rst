@@ -92,7 +92,10 @@ Build and run differentiable losses with Optax/Proximal variants. All functions 
 per-parameter regularizer configs/weights that override model defaults.
 
 - ``build_loss(experiment, model, dataset, ...)`` → ``(loss_fn, init_params, unpack)``
-  where ``loss_fn(params)`` returns a scalar data+regularization loss.
+  where ``loss_fn(params)`` returns a scalar data+regularization loss. Pass known
+  observation variances with ``data_variance`` for precision weighting; uniform
+  variance is the default, ``data_variance="auto"`` estimates robust per-frame
+  variances before fitting, and the RMS loss normalization is retained.
 - ``run_fit(experiment, model, dataset, optimizer_name="adam", step_size=0.02, num_steps=200, ...)``
   fits a single experiment; returns ``(fitted_fields_with_units, loss_history)`` or
   ``(fitted_fields_with_units, loss_history, model_fn)`` when
@@ -114,10 +117,18 @@ per-parameter regularizer configs/weights that override model defaults.
   ``run_fit`` options such as ``regularizer_weights`` are passed through unchanged.
 - ``check_fit_sanity(experiment, model, dataset, study_globals=None)`` runs a fast
   pre-fit check and returns a :class:`mrax.core.fit_sanity.FitSanityReport`.
+- ``estimate_data_variance(experiment, dataset, mask=None, ...)`` estimates robust
+  per-frame observation variances from background noise, with a spatial
+  wavelet-MAD fallback, and returns diagnostics in a
+  :class:`mrax.core.variance.VarianceEstimate`. The optional mask must identify a
+  noise-only region; fitting masks are separate.
 
 .. autofunction:: mrax.core.loss_builder.build_loss
 .. autofunction:: mrax.core.loss_builder.run_fit
 .. autofunction:: mrax.core.loss_builder.make_model_callable
+.. autofunction:: mrax.core.variance.estimate_data_variance
+.. autoclass:: mrax.core.variance.VarianceEstimate
+   :members:
 .. autofunction:: mrax.core.loss_builder.build_study_losses
 .. autofunction:: mrax.core.study_runner.plan_study_fits
 .. autofunction:: mrax.core.study_runner.execute_study_plan
@@ -304,6 +315,8 @@ Vendor-agnostic reconstruction utilities for both Cartesian and non-Cartesian k-
 .. autofunction:: mrax.reco.processing.apply_readout_phase_shift
 .. autofunction:: mrax.reco.processing.crop_along_axis
 .. autofunction:: mrax.reco.processing.readout_crop_bounds
+.. autofunction:: mrax.reco.phase.unwrap_phase_image
+.. autofunction:: mrax.reco.components.reconstruction_variant
 
 .. autoclass:: mrax.reco.variational.MRIEncodingOperator
    :members: forward, adjoint, coil_count, is_non_cartesian
@@ -326,6 +339,22 @@ Vendor-agnostic reconstruction utilities for both Cartesian and non-Cartesian k-
 
 Import Helpers
 --------------
+
+DICOM Importers
+~~~~~~~~~~~~~~~
+
+Discover and load classic or enhanced DICOM image series. The general layer handles
+pixel scaling, functional groups, geometry, slice/frame ordering, dimensions, and
+standard MR observables. Vendor adapters only add origin-specific metadata; the
+built-in Bruker adapter does not own pixel decoding or geometry.
+
+.. autoclass:: mrax.io.dicom.DicomSeriesInfo
+.. autoclass:: mrax.io.dicom.DicomMetadataPatch
+.. autoclass:: mrax.io.dicom.DicomMetadataAdapter
+.. autoclass:: mrax.io.dicom_bruker.BrukerDicomMetadataAdapter
+.. autofunction:: mrax.io.dicom.discover_dicom_series
+.. autofunction:: mrax.io.dicom.load_dicom_series
+.. autofunction:: mrax.io.dicom.load_dicom_study
 
 Import definitions
 ~~~~~~~~~~~~~~~~~~

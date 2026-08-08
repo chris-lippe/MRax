@@ -14,6 +14,8 @@ from mrax.data_struct.model import Model
 from mrax.data_struct.quantity import Quantity, attach_units, require_quantity_dict
 from mrax.data_struct.study import Study
 
+from .variance import VarianceEstimate, estimate_data_variance
+
 
 def warn_if_fit_requires_model_override(experiment: Experiment, model: Model) -> None:
     """Warn when an imported default model is being used as a fit model."""
@@ -225,6 +227,75 @@ def _masked_rms(data: jnp.ndarray, mask: jnp.ndarray) -> jnp.ndarray:
     denom = jnp.sum(weight) + 1e-8
     mean_square = jnp.sum(weight * jnp.abs(safe) ** 2) / denom
     return jnp.sqrt(mean_square)
+
+
+def _prepare_data_variance(
+    data_variance: object | None,
+    experiment: Experiment,
+    data_shape: tuple[int, ...],
+) -> jnp.ndarray:
+    """Validate observation variances and broadcast them to flattened data."""
+    if data_variance is None:
+        return jnp.ones(data_shape)
+
+    variance = data_variance.values if isinstance(data_variance, Quantity) else data_variance
+    variance_array = jnp.asarray(variance)
+    target_shape = tuple(int(size) for size in data_shape)
+    frame_count = int(experiment.frame_count)
+    spatial_shape = tuple(int(size) for size in experiment.spatial_shape)
+    non_spatial_shape = tuple(int(size) for size in experiment.non_spatial_shape)
+
+    try:
+        if variance_array.ndim == 0:
+            prepared = jnp.broadcast_to(variance_array, target_shape)
+        elif tuple(variance_array.shape) == tuple(experiment.shape):
+            prepared = _flatten_to_frames(variance_array, experiment)
+        elif tuple(variance_array.shape) == target_shape:
+            prepared = variance_array
+        elif tuple(variance_array.shape) in {(frame_count,), non_spatial_shape}:
+            prepared = variance_array.reshape((frame_count,) + (1,) * len(spatial_shape))
+            prepared = jnp.broadcast_to(prepared, target_shape)
+        elif spatial_shape and tuple(variance_array.shape) == spatial_shape:
+            prepared = variance_array.reshape((1,) + spatial_shape)
+            prepared = jnp.broadcast_to(prepared, target_shape)
+        else:
+            prepared = jnp.broadcast_to(variance_array, tuple(experiment.shape))
+            prepared = _flatten_to_frames(prepared, experiment)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "data_variance must be scalar, per-frame, spatial, or broadcastable "
+            f"to data shape {tuple(experiment.shape)}"
+        ) from exc
+
+    variance_values = np.asarray(prepared)
+    if np.iscomplexobj(variance_values):
+        raise ValueError("data_variance must be real")
+    if not np.isfinite(variance_values).all() or np.any(variance_values <= 0):
+        raise ValueError("data_variance must contain only finite positive values")
+    return jnp.asarray(prepared)
+
+
+def _resolve_data_variance(
+    data_variance: object | None,
+    experiment: Experiment,
+    dataset: DataSet,
+    data_shape: tuple[int, ...],
+    variance_estimation_mask: object | None,
+    variance_estimation_mask_dims: tuple[str, ...] | None,
+) -> tuple[jnp.ndarray, VarianceEstimate | None]:
+    estimate = None
+    variance = data_variance
+    if isinstance(data_variance, str):
+        if data_variance.lower() != "auto":
+            raise ValueError("data_variance string value must be 'auto'")
+        estimate = estimate_data_variance(
+            experiment,
+            dataset,
+            mask=variance_estimation_mask,
+            mask_dims=variance_estimation_mask_dims,
+        )
+        variance = estimate.variance
+    return _prepare_data_variance(variance, experiment, data_shape), estimate
 
 
 def _extract_spatial_metadata(experiment: Experiment) -> tuple[tuple[int, ...], list[str]]:
@@ -543,9 +614,21 @@ def build_loss(
     mask_fill_value: float | int | jnp.ndarray | None = 0.0,
     study_globals: dict[str, Quantity] | None = None,
     frame_mask: object | None = None,
+    data_variance: object | None = None,
+    variance_estimation_mask: object | None = None,
+    variance_estimation_mask_dims: tuple[str, ...] | None = None,
     auto_mask_nan_observables: bool = True,
 ) -> Tuple[Callable[[dict], jnp.ndarray], dict, Callable[[dict], dict]]:
-    """Build loss(params) combining data misfit and model regularization."""
+    """Build loss(params) combining data misfit and model regularization.
+
+    ``data_variance`` supplies known relative observation variances as a scalar,
+    per-frame array, spatial array, or array broadcastable to the data. Pass
+    ``"auto"`` to robustly estimate per-frame variances before constructing the
+    loss. The data misfit is an inverse-variance-weighted mean of RMS-scaled
+    squared residuals. Consequently, multiplying every variance by the same
+    constant does not change the loss, and ``None`` is equivalent to uniform
+    variance.
+    """
     experiment.validate(dataset)
     spatial_shape, spatial_dim_names = _extract_spatial_metadata(experiment)
     field_shape, field_dim_names, extra_dim_names = _field_metadata(experiment, model=model)
@@ -628,28 +711,36 @@ def build_loss(
     unpack._mrax_mask_fields = mask_fields
 
     mask_flat = _flatten_to_frames(jnp.asarray(mask_data), experiment) if mask_data is not None else None
+    variance_flat, variance_estimate = _resolve_data_variance(
+        data_variance,
+        experiment,
+        dataset,
+        tuple(data_flat.shape),
+        variance_estimation_mask,
+        variance_estimation_mask_dims,
+    )
+    precision_flat = 1.0 / variance_flat
+    unpack._mrax_variance_estimate = variance_estimate
     frame_weights = _prepare_frame_mask(frame_mask, experiment)
     if auto_mask_nan_observables and auto_frame_mask is not None:
         frame_weights = auto_frame_mask if frame_weights is None else (frame_weights * auto_frame_mask)
 
-    weights_flat = None
+    included_flat = jnp.ones(data_flat.shape, dtype=bool)
     if frame_weights is not None:
         fw = jnp.asarray(frame_weights)
         fw = fw.reshape((int(experiment.frame_count),) + (1,) * len(spatial_shape))
-        weights_flat = fw
+        included_flat = included_flat & jnp.broadcast_to(fw > 0, data_flat.shape)
     if mask_flat is not None:
-        weights_flat = mask_flat if weights_flat is None else (weights_flat * mask_flat)
+        included_flat = included_flat & jnp.broadcast_to(mask_flat > 0, data_flat.shape)
+    weights_flat = jnp.where(included_flat, precision_flat, 0.0)
 
     def loss_fn(p):
         fields = unpack(p)
         predicted = model_fn(fields, offsets_array, observable_arrays)
         predicted = _align_predicted(jnp.asarray(predicted), experiment)
         residual = (predicted - data_flat) * scale
-        if weights_flat is not None:
-            residual = jnp.where(weights_flat > 0, residual, 0.0)
-            misfit = jnp.sum(residual**2) / (jnp.sum(weights_flat) + 1e-8)
-        else:
-            misfit = jnp.mean(residual**2)
+        squared_residual = jnp.abs(residual) ** 2
+        misfit = jnp.sum(weights_flat * squared_residual) / (jnp.sum(weights_flat) + 1e-8)
 
         reg_term = 0.0
         for key, field in fields.items():
@@ -727,6 +818,9 @@ def run_fit(
     mask_fill_value: float | int | jnp.ndarray | None = 0.0,
     study_globals: dict[str, Quantity] | None = None,
     frame_mask: object | None = None,
+    data_variance: object | None = None,
+    variance_estimation_mask: object | None = None,
+    variance_estimation_mask_dims: tuple[str, ...] | None = None,
     auto_mask_nan_observables: bool = True,
     return_model_callable: bool = False,
     compute_derived_maps: bool | None = None,
@@ -740,6 +834,12 @@ def run_fit(
     Custom Optax optimizers can be injected via ``optimizer`` or ``optimizer_factory``.
     ``frame_mask`` and ``auto_mask_nan_observables`` let you ignore frames with
     missing per-frame observables (e.g., incomplete sat_time/b1 grids).
+    ``data_variance`` applies inverse-variance weighting while retaining RMS loss
+    scaling. Pass ``"auto"`` to estimate robust per-frame variances before
+    optimization; ``None`` (the default) gives every included sample uniform
+    variance.
+    ``variance_estimation_mask`` optionally identifies a background/noise-only
+    region for automatic estimation and is independent of the fitting ``mask``.
     ``mask_fill_value`` controls how masked output fields are filled (use ``None`` to skip masking).
     NaN/inf entries in data or masks are treated as masked during fitting.
     ``compute_derived_maps`` controls derived map evaluation. When ``None``, derived maps
@@ -773,6 +873,9 @@ def run_fit(
         mask_fill_value=mask_fill_value,
         study_globals=study_globals,
         frame_mask=frame_mask,
+        data_variance=data_variance,
+        variance_estimation_mask=variance_estimation_mask,
+        variance_estimation_mask_dims=variance_estimation_mask_dims,
         auto_mask_nan_observables=auto_mask_nan_observables,
     )
     constant_param_axes = getattr(unpack, "_mrax_constant_param_axes", {})

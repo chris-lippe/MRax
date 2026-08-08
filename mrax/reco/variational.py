@@ -629,6 +629,7 @@ def reconstruct_regrid(
     image_mask: str | Array | np.ndarray | None = None,
     coil_combine: Literal["sum", "rss", "sense"] = "sense",
     magnitude: bool = False,
+    return_coils: bool = False,
     axes: Sequence[int] | None = None,
 ) -> Array:
     """Quick non-Cartesian reconstruction via regridding + IFFT (not iterative).
@@ -647,6 +648,8 @@ def reconstruct_regrid(
     - ``apodization_correction`` applies a separable Kaiser-Bessel deapodization.
     - ``image_mask="ellipse"`` masks the final image support.
     - ``coil_combine="rss"`` uses root-sum-of-squares coil combination.
+    - ``return_coils=True`` returns the complex coil images before combination in
+      ``(batch, coil, *spatial)`` layout.
     """
 
     y = jnp.asarray(kspace_samples)
@@ -697,6 +700,11 @@ def reconstruct_regrid(
     if apodization_correction is not None:
         coil_images = _apply_regrid_apodization_correction(coil_images, apodization_correction, output_shape)
     coil_images = _apply_image_mask(coil_images, image_mask, output_shape)
+
+    if return_coils:
+        if np.asarray(kspace_samples).ndim == 1 and coil_images.shape[0] == 1:
+            return coil_images[0]
+        return coil_images
 
     if combine == "rss":
         combined = jnp.sqrt(jnp.sum(jnp.abs(coil_images) ** 2, axis=-(spatial_ndim + 1)))

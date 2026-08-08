@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 
+from .geometry import SpatialGeometry
+
 
 @dataclass
 class DataSet:
@@ -24,6 +26,7 @@ class DataSet:
     density: jnp.ndarray | None = None
     sampling_mask: jnp.ndarray | None = None
     kspace_metadata: dict | None = None
+    spatial_geometry: SpatialGeometry | None = None
 
     @property
     def shape(self) -> tuple[int, ...]:

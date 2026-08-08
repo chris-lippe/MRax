@@ -1,18 +1,33 @@
+import json
+
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 import mrax.core.study_runner as study_runner
+from mrax import __version__
 from mrax.analysis.dti import dti_design_rank, fit_dti_log_linear
 from mrax.analysis.roi import ROI, collect_roi_stats
-from mrax.core.loss_builder import make_model_callable
+from mrax.core.loss_builder import build_loss, make_model_callable
 from mrax.core.study_runner import execute_study_plan, plan_study_fits
-from mrax.data_struct import DataSet, Quantity, Study, load_study_results, save_study_results
+from mrax.core.variance import estimate_data_variance
+from mrax.data_struct import (
+    DataSet,
+    Experiment,
+    Model,
+    Quantity,
+    SpatialGeometry,
+    Study,
+    load_study_results,
+    save_study_results,
+)
 from mrax.library import build_default_experiment, default_model_for_type, make_t2_se_model
 from mrax.library.default_models import make_dti_tensor_model
 from mrax.opt.regularizers import total_variation_penalty
 from mrax.preprocessing import denoise_filter, regularized_denoise
-from mrax.reco import fftnc, ifftnc, reconstruct_ifft
+from mrax.reco import fftnc, ifftnc, reconstruct_ifft, reconstruct_regrid, unwrap_phase_image
+from mrax.versioning import MRaxVersionIncompatibilityError
 
 
 def _small_t2_study():
@@ -30,7 +45,17 @@ def _small_t2_study():
         "bias": jnp.full((2, 2), 0.03, dtype=jnp.float32),
     }
     data = make_model_callable(experiment, model)(truth)
-    dataset = DataSet(data=data, name="t2_demo")
+    dataset = DataSet(
+        data=data,
+        name="t2_demo",
+        spatial_geometry=SpatialGeometry(
+            affine=np.diag([0.4, 0.5, 1.0, 1.0]),
+            spatial_shape=(2, 2),
+            voxel_sizes=(0.4, 0.5),
+            source="synthetic",
+            status="known",
+        ),
+    )
     study = Study(
         [experiment],
         [dataset],
@@ -39,6 +64,152 @@ def _small_t2_study():
         study_globals={"field_strength_mhz": Quantity(jnp.asarray(400.0), "MHz")},
     )
     return study, model
+
+
+def _constant_signal_problem():
+    experiment = Experiment(
+        dims={"frame": 2, "x": 1, "y": 1},
+        observables={"sample_index": Quantity(jnp.arange(2), "1")},
+    )
+
+    def model_apply(fields, _offsets, _observables=None):
+        return jnp.broadcast_to(fields["level"], experiment.shape)
+
+    def parametrization_factory(spatial_shape):
+        params = {"level": jnp.zeros(spatial_shape)}
+        return params, lambda values: values
+
+    model = Model(
+        name="constant_signal",
+        model_apply=model_apply,
+        parametrization_factory=parametrization_factory,
+        parameter_units={"level": "a.u."},
+    )
+    dataset = DataSet(data=jnp.asarray([0.0, 2.0]).reshape(experiment.shape))
+    return experiment, model, dataset
+
+
+def test_loss_combines_inverse_variance_weighting_with_rms_scaling():
+    experiment, model, dataset = _constant_signal_problem()
+    params = {"level": jnp.zeros((1, 1))}
+
+    uniform_loss, _, _ = build_loss(experiment, model, dataset)
+    scalar_variance_loss, _, _ = build_loss(
+        experiment, model, dataset, data_variance=7.0
+    )
+    weighted_loss, _, _ = build_loss(
+        experiment, model, dataset, data_variance=jnp.asarray([1.0, 4.0])
+    )
+    rescaled_variance_loss, _, _ = build_loss(
+        experiment, model, dataset, data_variance=jnp.asarray([10.0, 40.0])
+    )
+
+    assert float(uniform_loss(params)) == pytest.approx(1.0)
+    assert float(scalar_variance_loss(params)) == pytest.approx(1.0)
+    assert float(weighted_loss(params)) == pytest.approx(0.4)
+    assert float(rescaled_variance_loss(params)) == pytest.approx(0.4)
+
+    optimum = {"level": jnp.full((1, 1), 0.4)}
+    gradient = jax.grad(weighted_loss)(optimum)["level"]
+    assert np.allclose(np.asarray(gradient), 0.0, atol=1e-6)
+
+
+@pytest.mark.parametrize("variance", ([1.0, 0.0], [1.0, np.nan], [1.0, 2.0, 3.0]))
+def test_loss_rejects_invalid_data_variance(variance):
+    experiment, model, dataset = _constant_signal_problem()
+
+    with pytest.raises(ValueError, match="data_variance"):
+        build_loss(experiment, model, dataset, data_variance=jnp.asarray(variance))
+
+
+def test_auto_data_variance_estimates_heteroscedastic_frame_noise():
+    rng = np.random.default_rng(7)
+    sigma = np.asarray([0.5, 1.0, 2.0], dtype=np.float32)
+    data = 4.0 + rng.normal(size=(3, 96, 96)).astype(np.float32) * sigma[:, None, None]
+    experiment = Experiment(
+        dims={"frame": 3, "x": 96, "y": 96},
+        observables={"sample_index": Quantity(jnp.arange(3), "1")},
+    )
+    dataset = DataSet(data=jnp.asarray(data))
+
+    estimate = estimate_data_variance(experiment, dataset, shrinkage=0.0)
+    estimated_relative = estimate.relative_variance / estimate.relative_variance[0]
+    expected_relative = sigma**2 / sigma[0] ** 2
+
+    assert estimate.method == "wavelet_mad"
+    assert np.all(estimate.sample_count > 2000)
+    assert np.allclose(estimated_relative, expected_relative, rtol=0.15)
+
+
+def test_auto_data_variance_uses_magnitude_background_when_available():
+    rng = np.random.default_rng(17)
+    sigma = np.asarray([1.0, 2.0, 3.0], dtype=np.float32)
+    grid_x, grid_y = np.ogrid[:96, :96]
+    tissue = (grid_x - 48) ** 2 + (grid_y - 48) ** 2 < 30**2
+    frames = []
+    for frame_sigma in sigma:
+        real_noise = rng.normal(scale=frame_sigma, size=(96, 96))
+        imag_noise = rng.normal(scale=frame_sigma, size=(96, 96))
+        frame = np.sqrt(real_noise**2 + imag_noise**2)
+        frame[tissue] = np.abs(50.0 + real_noise[tissue])
+        frames.append(frame)
+    data = np.asarray(frames, dtype=np.float32)
+    experiment = Experiment(
+        dims={"frame": 3, "x": 96, "y": 96},
+        observables={"sample_index": Quantity(jnp.arange(3), "1")},
+    )
+    dataset = DataSet(data=jnp.asarray(data))
+
+    estimate = estimate_data_variance(experiment, dataset, min_samples=128, shrinkage=0.0)
+    estimated_relative = estimate.variance / estimate.variance[0]
+    expected_relative = sigma**2 / sigma[0] ** 2
+
+    assert estimate.method == "background_rayleigh"
+    assert np.all(estimate.sample_count >= 128)
+    assert np.allclose(estimated_relative, expected_relative, rtol=0.25)
+
+
+def test_auto_data_variance_builds_same_loss_as_explicit_estimate():
+    rng = np.random.default_rng(11)
+    sigma = np.asarray([0.5, 1.5], dtype=np.float32)
+    data = 2.0 + rng.normal(size=(2, 32, 32)).astype(np.float32) * sigma[:, None, None]
+    experiment = Experiment(
+        dims={"frame": 2, "x": 32, "y": 32},
+        observables={"sample_index": Quantity(jnp.arange(2), "1")},
+    )
+    dataset = DataSet(data=jnp.asarray(data))
+
+    def model_apply(fields, _offsets, _observables=None):
+        return jnp.broadcast_to(fields["level"], experiment.shape)
+
+    def parametrization_factory(spatial_shape):
+        params = {"level": jnp.zeros(spatial_shape)}
+        return params, lambda values: values
+
+    model = Model(
+        name="auto_variance_constant_signal",
+        model_apply=model_apply,
+        parametrization_factory=parametrization_factory,
+        parameter_units={"level": "a.u."},
+    )
+    estimate = estimate_data_variance(experiment, dataset)
+    auto_loss, params, unpack = build_loss(experiment, model, dataset, data_variance="auto")
+    explicit_loss, _, _ = build_loss(
+        experiment,
+        model,
+        dataset,
+        data_variance=estimate.variance,
+    )
+
+    assert np.asarray(unpack._mrax_variance_estimate.variance).shape == (2,)
+    assert float(auto_loss(params)) == pytest.approx(float(explicit_loss(params)), rel=1e-6)
+
+
+def test_loss_rejects_unknown_data_variance_mode():
+    experiment, model, dataset = _constant_signal_problem()
+
+    with pytest.raises(ValueError, match="must be 'auto'"):
+        build_loss(experiment, model, dataset, data_variance="estimate")
 
 
 def test_fit_study_storage_and_roi_workflow(tmp_path):
@@ -52,6 +223,7 @@ def test_fit_study_storage_and_roi_workflow(tmp_path):
 
     assert results[0]["loss_history"][-1] < results[0]["loss_history"][0]
     assert {"amplitude", "t2", "bias"} <= set(field_cache["t2_demo"])
+    assert results[0]["spatial_geometry"]["source"] == "synthetic"
 
     manifest = save_study_results(
         study,
@@ -74,9 +246,80 @@ def test_fit_study_storage_and_roi_workflow(tmp_path):
     )
 
     assert loaded["manifest"]["study_name"] == "workflow"
+    assert loaded["experiments"]["t2_demo"]["spatial_geometry"]["status"] == "known"
     assert loaded_map.si_unit == "ms"
     assert next(row for row in rows if row["stat"] == "count")["value"] == 4
     assert np.isfinite(next(row for row in rows if row["stat"] == "mean")["value"])
+
+
+def test_mrax_save_versions_json_geometry_but_not_mrd_payload(tmp_path):
+    import ismrmrd
+
+    study, model = _small_t2_study()
+    manifest_path = save_study_results(
+        study,
+        [{"name": "t2_demo", "model": model.name, "fields": {}}],
+        tmp_path / "versioned",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    metadata_path = manifest_path.parent / manifest["experiments"]["t2_demo"]["metadata"]
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert manifest["mrax_version"] == __version__
+    assert metadata["mrax_version"] == __version__
+    assert manifest["spatial_geometry"]["t2_demo"]["status"] == "known"
+    assert metadata["spatial_geometry"]["source"] == "synthetic"
+
+    image_path = manifest_path.parent / metadata["paths"]["mr_images"][0]["path"]
+    dataset = ismrmrd.Dataset(str(image_path), "dataset", create_if_needed=False)
+    image = dataset.read_image("image", 0)
+    dataset.close()
+    assert "spatial_geometry" not in str(image.attribute_string)
+
+    major, minor, _patch = (int(value) for value in __version__.split(".")[:3])
+    compatible = f"{major}.{minor}.999"
+    manifest["mrax_version"] = compatible
+    metadata["mrax_version"] = compatible
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    assert "t2_demo" in load_study_results(manifest_path)["experiments"]
+
+    incompatible = f"0.{minor + 1}.0" if major == 0 else f"{major + 1}.0.0"
+    manifest["mrax_version"] = incompatible
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(MRaxVersionIncompatibilityError, match="MRax version incompatibility"):
+        load_study_results(manifest_path)
+
+    manifest.pop("mrax_version")
+    metadata.pop("mrax_version")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.warns(RuntimeWarning, match="no 'mrax_version' tag"):
+        loaded = load_study_results(manifest_path)
+    assert "t2_demo" in loaded["experiments"]
+
+
+def test_mrax_save_roundtrips_combined_and_per_coil_reconstructions(tmp_path):
+    study, model = _small_t2_study()
+    coil_1 = np.full((4, 2, 2), 2.0 + 1.0j, dtype=np.complex64)
+    coil_2 = np.full((4, 2, 2), 1.0 - 0.5j, dtype=np.complex64)
+    coils = np.stack([coil_1, coil_2], axis=1)
+    combined = np.sqrt(np.sum(np.abs(coils) ** 2, axis=1)).astype(np.float32)
+    study.datasets[0].processed = {
+        "raw_reconstruction": combined,
+        "raw_reconstruction_coils": coils,
+    }
+
+    manifest = save_study_results(
+        study,
+        [{"name": "t2_demo", "model": model.name, "fields": {}}],
+        tmp_path / "reconstruction_roundtrip",
+    )
+    loaded = load_study_results(manifest)["experiments"]["t2_demo"]["processed"]
+
+    np.testing.assert_allclose(loaded["raw_reconstruction"], combined)
+    np.testing.assert_allclose(loaded["raw_reconstruction_coils"], coils)
+    assert np.iscomplexobj(loaded["raw_reconstruction_coils"])
 
 
 def test_execute_study_plan_preserves_dict_run_fit_kwargs(monkeypatch):
@@ -140,6 +383,79 @@ def test_models_dimensions_reconstruction_and_preprocessing_workflow():
     assert denoised.shape == noisy.shape
     assert len(history) == 3
     assert np.isfinite(np.asarray(denoised)).all()
+
+
+def test_non_cartesian_reconstruction_can_return_complex_coil_images():
+    trajectory = np.asarray(
+        [[-0.5, -0.5], [-0.5, 0.0], [0.0, -0.5], [0.0, 0.0]],
+        dtype=np.float32,
+    )
+    samples = np.asarray(
+        [
+            [
+                [1.0 + 1.0j, 2.0, 3.0, 4.0],
+                [0.5 - 1.0j, 1.0, 1.5, 2.0],
+            ]
+        ],
+        dtype=np.complex64,
+    )
+    coil_images = reconstruct_regrid(
+        samples,
+        trajectory,
+        spatial_shape=(2, 2),
+        density=np.ones((4,), dtype=np.float32),
+        return_coils=True,
+    )
+    combined = reconstruct_regrid(
+        samples,
+        trajectory,
+        spatial_shape=(2, 2),
+        density=np.ones((4,), dtype=np.float32),
+    )
+
+    assert coil_images.shape == (1, 2, 2, 2)
+    assert np.iscomplexobj(np.asarray(coil_images))
+    np.testing.assert_allclose(np.sum(coil_images, axis=1), combined, atol=1e-6)
+
+
+def test_phase_unwrapping_is_spatial_and_independent_per_frame():
+    x = np.linspace(0.0, 5.0 * np.pi, 24, dtype=np.float32)
+    y = np.linspace(0.0, 1.5 * np.pi, 16, dtype=np.float32)
+    truth = x[:, None] + y[None, :]
+    wrapped = np.angle(np.exp(1j * truth)).astype(np.float32)
+    shifted_truth = truth + 0.4
+    shifted_wrapped = np.angle(np.exp(1j * shifted_truth)).astype(np.float32)
+    frames = np.stack([wrapped, shifted_wrapped], axis=0)
+
+    unwrapped = jax.jit(lambda value: unwrap_phase_image(value, spatial_ndim=2))(frames)
+
+    assert unwrapped.shape == frames.shape
+    for frame, expected in zip(unwrapped, (truth, shifted_truth), strict=True):
+        offset = float(frame[0, 0] - expected[0, 0])
+        np.testing.assert_allclose(frame - offset, expected, atol=1e-4)
+
+
+def test_weighted_phase_unwrapping_confines_low_confidence_noise():
+    x, y = np.mgrid[-1.0:1.0:48j, -1.0:1.0:48j]
+    truth = 8.0 * np.pi * np.exp(-2.5 * (x**2 + y**2))
+    wrapped = np.angle(np.exp(1j * truth)).astype(np.float32)
+    supported = x**2 + y**2 < 0.45**2
+    weights = np.where(supported, 1.0, 0.01).astype(np.float32)
+    rng = np.random.default_rng(7)
+    wrapped[~supported] = rng.uniform(-np.pi, np.pi, np.count_nonzero(~supported))
+
+    unwrapped = np.asarray(
+        unwrap_phase_image(wrapped, spatial_ndim=2, weights=weights)
+    )
+    difference = unwrapped[supported] - truth[supported]
+    difference -= np.median(difference)
+
+    np.testing.assert_allclose(difference, 0.0, atol=1e-4)
+    np.testing.assert_allclose(
+        np.angle(np.exp(1j * (unwrapped - wrapped))),
+        0.0,
+        atol=1e-4,
+    )
 
 
 def test_dti_log_linear_workflow_recovers_tensor_maps():

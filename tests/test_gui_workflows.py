@@ -1,22 +1,37 @@
 import json
+import os
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from mrax import __version__
 from mrax.analysis import ROI
 from mrax.core.loss_builder import make_model_callable
 from mrax.data_struct import DataSet, Quantity, Study, save_study_results
 from mrax.gui import GuiSession, import_mask, load_roi_set, save_roi_set
 from mrax.gui.app import (
     StudyWorkspace,
+    _apply_local_runtime_env,
     _apply_observable_dim_compatibility,
     _capture_pyqtgraph_image_view_state,
+    _centered_top_left,
     _experiment_metadata_template_from_session,
+    _export_object_records_for_session,
     _load_experiment_metadata_template_from_file,
+    _rectangle_overlap_area,
+    _resize_edge_names,
+    _restore_gui_state,
     _restore_pyqtgraph_image_view_state,
+    _roi_nifti_reference_summary,
+    _roi_overlay_mask_for_display,
+    _row_major_view_aspect_ratio,
+    _screen_with_largest_overlap,
+    _serialize_gui_state,
     _workspace_experiment_metadata_template_items,
+    _write_single_export_object,
 )
+from mrax.io.nifti import load_nifti
 from mrax.library import build_default_experiment, make_t2_se_model
 
 
@@ -50,6 +65,44 @@ def _write_small_manifest(tmp_path):
     )
 
 
+def test_gui_window_geometry_prefers_majority_screen_and_centers_within_it():
+    left_screen = (0, 0, 1920, 1080)
+    right_screen = (1920, 0, 2560, 1440)
+    mostly_right = (1500, 120, 1400, 900)
+
+    assert _rectangle_overlap_area(mostly_right, left_screen) == 420 * 900
+    assert _rectangle_overlap_area(mostly_right, right_screen) == 980 * 900
+    assert _screen_with_largest_overlap(mostly_right, [left_screen, right_screen]) is right_screen
+    assert _centered_top_left((1320, 860), right_screen) == (2540, 290)
+    assert _resize_edge_names((16, 16), (16, 16, 800, 600)) == ("left", "top")
+    assert _resize_edge_names((815, 615), (16, 16, 800, 600)) == ("right", "bottom")
+    assert _resize_edge_names((400, 300), (16, 16, 800, 600)) == ()
+
+
+@pytest.mark.parametrize(
+    ("wayland_display", "display", "expected_platform"),
+    [("wayland-test", ":1", "wayland"), (None, ":1", "xcb")],
+)
+def test_gui_runtime_selects_native_display_backend(
+    monkeypatch,
+    tmp_path,
+    wayland_display,
+    display,
+    expected_platform,
+):
+    monkeypatch.setenv("MRAX_GUI_LOCAL_LIB_DIR", str(tmp_path / "missing-local-libs"))
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    if wayland_display is None:
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    else:
+        monkeypatch.setenv("WAYLAND_DISPLAY", wayland_display)
+    monkeypatch.setenv("DISPLAY", display)
+
+    _apply_local_runtime_env()
+
+    assert os.environ["QT_QPA_PLATFORM"] == expected_platform
+
+
 def test_gui_session_loads_manifest_and_extracts_roi_analysis(tmp_path):
     session = GuiSession.from_manifest(_write_small_manifest(tmp_path))
 
@@ -71,6 +124,287 @@ def test_gui_session_loads_manifest_and_extracts_roi_analysis(tmp_path):
     assert np.asarray(timecourse["timecourse"]).shape == (2,)
 
 
+def test_gui_reconstruction_views_and_exports_combined_and_individual_coils(tmp_path):
+    coil_1 = np.full((2, 2, 3), 2.0 + 2.0j, dtype=np.complex64)
+    coil_2 = np.full((2, 2, 3), 1.0 - 1.0j, dtype=np.complex64)
+    coil_1[1] = 2.0 - 2.0j
+    coil_2[1] = 1.0 + 1.0j
+    coil_images = np.stack([coil_1, coil_2], axis=1)
+    combined_magnitude = np.sqrt(np.sum(np.abs(coil_images) ** 2, axis=1)).astype(np.float32)
+
+    session = GuiSession()
+    session.create_empty_study("reconstruction_components")
+    session.add_experiment(
+        "multi_coil",
+        np.zeros((2, 2, 3), dtype=np.float32),
+        dims={"frame": 2, "x": 2, "y": 3},
+        processed={
+            "raw_reconstruction": combined_magnitude,
+            "raw_reconstruction_coils": coil_images,
+        },
+    )
+
+    assert session.reconstruction_coil_count == 2
+    np.testing.assert_allclose(
+        session.reconstruction_image(component="magnitude", combined=True),
+        combined_magnitude[0],
+    )
+    np.testing.assert_allclose(
+        session.reconstruction_image(component="phase", combined=True),
+        np.angle(coil_1[0] + coil_2[0]),
+    )
+    np.testing.assert_allclose(
+        session.reconstruction_image(
+            frame=1,
+            component="phase",
+            combined=True,
+            unwrap_phase=False,
+        ),
+        np.angle(coil_1[1] + coil_2[1]),
+    )
+    session.set_reconstruction_coil(1)
+    session.set_reconstruction_component("phase")
+    session.set_reconstruction_phase_unwrap(False)
+    np.testing.assert_allclose(session.reconstruction_image(), np.angle(coil_2[0]))
+    assert session.dimension_controls("mrax_reconstruction") == [
+        {"key": "frame", "label": "frame", "axis": 0, "size": 2}
+    ]
+    session.add_experiment(
+        "other",
+        np.zeros((2, 3), dtype=np.float32),
+        dims={"x": 2, "y": 3},
+    )
+    session.select_experiment("multi_coil")
+    assert session.active_reconstruction_component == "phase"
+    assert session.active_reconstruction_coil == 1
+    assert not session.active_reconstruction_unwrap_phase
+
+    reconstruction_records = [
+        record
+        for record in _export_object_records_for_session(session)
+        if record["kind"] == "reconstruction"
+    ]
+    assert [record["name"] for record in reconstruction_records] == [
+        "combined_magnitude",
+        "combined_phase",
+        "combined_phase_wrapped",
+        "coil_001_magnitude",
+        "coil_001_phase",
+        "coil_001_phase_wrapped",
+        "coil_002_magnitude",
+        "coil_002_phase",
+        "coil_002_phase_wrapped",
+    ]
+    combined_phase_record = reconstruction_records[1]
+    assert combined_phase_record["unit"] == "rad"
+    saved = _write_single_export_object(
+        combined_phase_record,
+        tmp_path / "combined_phase.npy",
+        "npy",
+    )
+    np.testing.assert_allclose(np.load(saved[0]), np.angle(coil_1 + coil_2))
+
+
+def test_gui_session_switches_3d_image_planes_and_spatial_slider():
+    data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape((2, 3, 4, 5))
+    session = GuiSession()
+    session.create_empty_study("volume_views")
+    session.add_experiment(
+        "volume",
+        data,
+        dims={"frame": 2, "x": 3, "y": 4, "z": 5},
+    )
+    session.set_active_index("frame", 1)
+    session.set_active_index("z", 3)
+
+    assert session.supports_image_planes()
+    assert session.image_plane_dims == ("x", "y")
+    assert [control["key"] for control in session.dimension_controls()] == ["frame", "z"]
+    np.testing.assert_array_equal(session.frame_image(), data[1, :, :, 3])
+
+    session.set_image_plane("coronal")
+    session.set_active_index("y", 2)
+    assert session.image_plane_dims == ("x", "z")
+    assert [control["key"] for control in session.dimension_controls()] == ["frame", "y"]
+    np.testing.assert_array_equal(session.frame_image(), data[1, :, 2, :])
+
+    session.set_image_plane("sagittal")
+    session.set_active_index("x", 1)
+    assert session.image_plane_dims == ("y", "z")
+    assert [control["key"] for control in session.dimension_controls()] == ["frame", "x"]
+    np.testing.assert_array_equal(session.frame_image(), data[1, 1, :, :])
+
+    session.add_experiment(
+        "second_volume",
+        np.zeros((3, 4, 5), dtype=np.float32),
+        dims={"x": 3, "y": 4, "z": 5},
+    )
+    session.select_experiment("volume")
+    assert session.active_image_plane == "sagittal"
+    assert session.active_indices["x"] == 1
+
+
+@pytest.mark.parametrize(
+    ("axis_labels", "native_plane", "expected_dims"),
+    [
+        (
+            ["z", "x", "y"],
+            "coronal",
+            {"axial": ("y", "z"), "coronal": ("y", "x"), "sagittal": ("z", "x")},
+        ),
+        (
+            ["y", "z", "x"],
+            "sagittal",
+            {"axial": ("z", "x"), "coronal": ("z", "y"), "sagittal": ("x", "y")},
+        ),
+    ],
+)
+def test_gui_session_orders_anatomical_planes_from_geometry(
+    axis_labels,
+    native_plane,
+    expected_dims,
+):
+    data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape((2, 3, 4, 5))
+    session = GuiSession()
+    session.create_empty_study("native_orientation")
+    session.add_experiment(
+        "volume",
+        data,
+        dims={"frame": 2, "x": 3, "y": 4, "z": 5},
+        extra_metadata={
+            "spatial_geometry": {
+                "spatial_shape": [3, 4, 5],
+                "voxel_sizes": [0.2, 0.3, 1.1],
+                "axis_anatomical_labels": axis_labels,
+                "source": "synthetic",
+                "status": "unknown",
+            },
+        },
+    )
+
+    assert session.active_image_plane == native_plane
+    assert session.native_image_plane == native_plane
+    for plane, dims in expected_dims.items():
+        session.set_image_plane(plane)
+        assert session.image_plane_dims == dims
+
+
+def test_gui_session_uses_geometry_spacing_for_ordered_anatomical_planes():
+    session = GuiSession()
+    session.create_empty_study("physical_spacing")
+    session.add_experiment(
+        "volume",
+        np.zeros((3, 4, 5), dtype=np.float32),
+        dims={"x": 3, "y": 4, "z": 5},
+        extra_metadata={
+            "spatial_geometry": {
+                "version": 1,
+                "axis_convention": "native_v1",
+                "affine_convention": "nifti_xyz_ras",
+                "status": "unknown",
+                "source": "synthetic",
+                "spatial_shape": [3, 4, 5],
+                "voxel_sizes": [0.2, 0.3, 1.1],
+                "axis_anatomical_labels": ["z", "x", "y"],
+            }
+        },
+    )
+
+    assert session.active_image_plane == "coronal"
+    assert session.image_plane_dims == ("y", "x")
+    assert session.image_plane_voxel_sizes == pytest.approx((0.3, 0.2))
+    session.set_image_plane("axial")
+    assert session.image_plane_dims == ("y", "z")
+    assert session.image_plane_voxel_sizes == pytest.approx((0.3, 1.1))
+    session.set_image_plane("sagittal")
+    assert session.image_plane_dims == ("z", "x")
+    assert session.image_plane_voxel_sizes == pytest.approx((1.1, 0.2))
+
+
+def test_row_major_image_aspect_uses_column_over_row_spacing():
+    shape = (28, 256)
+    spacings = (0.75, 0.15625)
+
+    ratio = _row_major_view_aspect_ratio(spacings)
+
+    assert ratio == pytest.approx(spacings[1] / spacings[0])
+    displayed_width_to_height = shape[1] * ratio / shape[0]
+    physical_width_to_height = (shape[1] * spacings[1]) / (shape[0] * spacings[0])
+    assert displayed_width_to_height == pytest.approx(physical_width_to_height)
+
+
+def test_gui_state_saves_mrax_version_and_spatial_geometry():
+    session = GuiSession()
+    session.create_empty_study("versioned_state")
+    session.add_experiment(
+        "volume",
+        np.zeros((3, 4), dtype=np.float32),
+        dims={"x": 3, "y": 4},
+        extra_metadata={
+            "spatial_geometry": {
+                "version": 1,
+                "axis_convention": "native_v1",
+                "affine_convention": "nifti_xyz_ras",
+                "status": "unknown",
+                "source": "synthetic",
+                "spatial_shape": [3, 4],
+                "voxel_sizes": [0.2, 0.3],
+            }
+        },
+    )
+    payload, arrays = _serialize_gui_state(
+        session,
+        preview_results={},
+        fit_results={},
+    )
+
+    assert payload["mrax_version"] == __version__
+    assert payload["spatial_geometry"]["volume"]["voxel_sizes"] == [0.2, 0.3]
+
+    incompatible = dict(payload)
+    major, minor, _patch = (int(value) for value in __version__.split(".")[:3])
+    incompatible["mrax_version"] = (
+        f"0.{minor + 1}.0" if major == 0 else f"{major + 1}.0.0"
+    )
+    with pytest.raises(ValueError, match="MRax version incompatibility"):
+        _restore_gui_state(session, incompatible, arrays)
+
+    legacy = dict(payload)
+    legacy.pop("mrax_version")
+    warnings_list: list[str] = []
+    _restore_gui_state(session, legacy, arrays, warnings=warnings_list)
+    assert any("no 'mrax_version' tag" in message for message in warnings_list)
+
+
+def test_gui_roi_overlay_follows_selected_3d_plane():
+    mask = np.zeros((3, 4, 5), dtype=bool)
+    mask[1, 2, 4] = True
+    roi = ROI("point", mask, dims=("x", "y", "z"))
+
+    axial = _roi_overlay_mask_for_display(
+        roi,
+        display_shape=(3, 4),
+        indices={"z": 4},
+        plane_dims=("x", "y"),
+    )
+    coronal = _roi_overlay_mask_for_display(
+        roi,
+        display_shape=(3, 5),
+        indices={"y": 2},
+        plane_dims=("x", "z"),
+    )
+    sagittal = _roi_overlay_mask_for_display(
+        roi,
+        display_shape=(4, 5),
+        indices={"x": 1},
+        plane_dims=("y", "z"),
+    )
+
+    assert axial is not None and axial[1, 2]
+    assert coronal is not None and coronal[1, 4]
+    assert sagittal is not None and sagittal[2, 4]
+
+
 def test_gui_roi_mask_round_trip_and_raw_import(tmp_path):
     mask = np.asarray([[True, False], [False, True]])
     roi = ROI("diag", mask, dims=("x", "y"), metadata={"color": "#abcdef"})
@@ -81,11 +415,62 @@ def test_gui_roi_mask_round_trip_and_raw_import(tmp_path):
 
     assert npz_path.exists()
     assert json_path.exists()
+    assert json.loads(json_path.read_text(encoding="utf-8"))["mrax_version"] == __version__
     assert loaded[0].name == "diag"
     assert loaded[0].dims == ("x", "y")
     assert loaded[0].metadata["color"] == "#abcdef"
     np.testing.assert_array_equal(loaded[0].mask, mask)
     np.testing.assert_array_equal(imported.mask, mask)
+
+
+def test_gui_roi_nifti_export_uses_reference_experiment_affine(tmp_path):
+    affine = np.asarray(
+        [
+            [0.0, -1.5, 0.0, 12.0],
+            [2.0, 0.0, 0.0, -8.0],
+            [0.0, 0.0, 3.0, 4.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    session = GuiSession()
+    session.create_empty_study("affine_export")
+    session.add_experiment(
+        "reference_scan",
+        np.zeros((2, 3), dtype=np.float32),
+        dims={"x": 2, "y": 3},
+        extra_metadata={"affine": affine.tolist()},
+    )
+    mask = np.asarray([[True, False, False], [False, True, False]])
+    session.add_roi(
+        ROI(
+            "mask",
+            mask,
+            dims=("x", "y"),
+            metadata={"source_experiment": "reference_scan", "slice_indices": {"frame": 0}},
+        )
+    )
+
+    roi_record = next(record for record in _export_object_records_for_session(session) if record["kind"] == "roi")
+    output = _write_single_export_object(roi_record, tmp_path / "mask.nii", "nifti")[0]
+    loaded_mask, loaded_affine = load_nifti(output)
+
+    np.testing.assert_array_equal(loaded_mask, mask.astype(np.float32))
+    np.testing.assert_allclose(loaded_affine, affine, atol=1e-6)
+    assert roi_record["nifti_reference"]["identity_fallback"] is False
+    assert "reference_scan: 1 mask(s), reference affine" in _roi_nifti_reference_summary(session)
+
+
+def test_gui_roi_nifti_export_keeps_identity_fallback_without_reference_geometry():
+    session = GuiSession()
+    session.create_empty_study("identity_export")
+    session.add_experiment("reference_scan", np.zeros((2, 2)), dims={"x": 2, "y": 2})
+    session.add_roi(ROI("mask", np.ones((2, 2), dtype=bool), dims=("x", "y")))
+
+    roi_record = next(record for record in _export_object_records_for_session(session) if record["kind"] == "roi")
+
+    np.testing.assert_array_equal(roi_record["nifti_reference"]["affine"], np.eye(4))
+    assert roi_record["nifti_reference"]["identity_fallback"] is True
+    assert "reference_scan: 1 mask(s), identity fallback" in _roi_nifti_reference_summary(session)
 
 
 def test_pyqtgraph_image_view_state_round_trip_preserves_range_and_levels():
@@ -255,6 +640,7 @@ def test_observable_compatibility_resizes_frame_tables():
 
 def test_experiment_metadata_template_from_metadata_file_and_manifest(tmp_path):
     metadata = {
+        "mrax_version": __version__,
         "model": "identity",
         "exp_type": "t2_se",
         "dataset_name": "scan_a",
@@ -268,7 +654,14 @@ def test_experiment_metadata_template_from_metadata_file_and_manifest(tmp_path):
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     manifest_path = tmp_path / "study_manifest.json"
     manifest_path.write_text(
-        json.dumps({"experiments": {"scan_a": {"metadata": "experiments/scan_a/metadata.json"}}}),
+        json.dumps(
+            {
+                "mrax_version": __version__,
+                "experiments": {
+                    "scan_a": {"metadata": "experiments/scan_a/metadata.json"}
+                },
+            }
+        ),
         encoding="utf-8",
     )
 

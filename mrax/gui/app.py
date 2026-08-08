@@ -23,8 +23,9 @@ from typing import Any, Callable, Mapping, MutableMapping, Sequence
 import jax.numpy as jnp
 import numpy as np
 
+from mrax import MRAX_VERSION, MRAX_VERSION_TAG
 from mrax.analysis import ROI, broadcast_mask
-from mrax.data_struct import DataSet, Experiment, Quantity
+from mrax.data_struct import DataSet, Experiment, Quantity, SpatialGeometry
 from mrax.data_struct.dimensions import (
     dim_observable_map,
     frame_count_from_dims,
@@ -33,6 +34,8 @@ from mrax.data_struct.dimensions import (
     reshape_frames_to_dims,
     spatial_names,
 )
+from mrax.reco.components import available_reconstruction_variants
+from mrax.versioning import missing_mrax_version_message, validate_mrax_file_version
 
 from ._deps import GUI_INSTALL_HINT, MissingGuiDependencyError, import_pyqtgraph, import_qt
 from .masks import (
@@ -266,6 +269,91 @@ def _is_workspace_metadata_template_item(value: Any) -> bool:
     return str(value[0]) == "workspace"
 
 
+def _rect_xywh(rect: Any) -> tuple[int, int, int, int]:
+    """Return a QRect-like object (or tuple) as integer x/y/width/height."""
+
+    if isinstance(rect, (tuple, list)) and len(rect) == 4:
+        return tuple(int(value) for value in rect)
+    values = []
+    for name in ("x", "y", "width", "height"):
+        value = getattr(rect, name)
+        values.append(int(value() if callable(value) else value))
+    return tuple(values)
+
+
+def _rectangle_overlap_area(first: Any, second: Any) -> int:
+    first_x, first_y, first_width, first_height = _rect_xywh(first)
+    second_x, second_y, second_width, second_height = _rect_xywh(second)
+    overlap_width = max(
+        0,
+        min(first_x + first_width, second_x + second_width) - max(first_x, second_x),
+    )
+    overlap_height = max(
+        0,
+        min(first_y + first_height, second_y + second_height) - max(first_y, second_y),
+    )
+    return overlap_width * overlap_height
+
+
+def _screen_with_largest_overlap(window_geometry: Any, screens: Sequence[Any]) -> Any | None:
+    """Choose the screen containing the largest area of a window."""
+
+    best_screen = None
+    best_area = 0
+    for screen in screens:
+        screen_geometry = screen.availableGeometry() if hasattr(screen, "availableGeometry") else screen
+        overlap_area = _rectangle_overlap_area(window_geometry, screen_geometry)
+        if overlap_area > best_area:
+            best_screen = screen
+            best_area = overlap_area
+    return best_screen
+
+
+def _centered_top_left(size: Any, available_geometry: Any) -> tuple[int, int]:
+    """Return a clamped top-left position centered in an available screen area."""
+
+    if isinstance(size, (tuple, list)) and len(size) == 2:
+        width, height = (int(value) for value in size)
+    else:
+        width_value = size.width
+        height_value = size.height
+        width = int(width_value() if callable(width_value) else width_value)
+        height = int(height_value() if callable(height_value) else height_value)
+    x, y, available_width, available_height = _rect_xywh(available_geometry)
+    fitted_width = min(width, available_width)
+    fitted_height = min(height, available_height)
+    return (
+        x + (available_width - fitted_width) // 2,
+        y + (available_height - fitted_height) // 2,
+    )
+
+
+def _resize_edge_names(point: Any, geometry: Any, *, margin: int = 8) -> tuple[str, ...]:
+    """Return resizable window edges near a point in global coordinates."""
+
+    if isinstance(point, (tuple, list)) and len(point) == 2:
+        point_x, point_y = (int(value) for value in point)
+    else:
+        point_x_value = point.x
+        point_y_value = point.y
+        point_x = int(point_x_value() if callable(point_x_value) else point_x_value)
+        point_y = int(point_y_value() if callable(point_y_value) else point_y_value)
+    x, y, width, height = _rect_xywh(geometry)
+    inset = max(1, int(margin))
+    right = x + max(0, width - 1)
+    bottom = y + max(0, height - 1)
+    names = []
+    if x <= point_x <= x + inset:
+        names.append("left")
+    elif right - inset <= point_x <= right:
+        names.append("right")
+    if y <= point_y <= y + inset:
+        names.append("top")
+    elif bottom - inset <= point_y <= bottom:
+        names.append("bottom")
+    return tuple(names)
+
+
 def main(argv: list[str] | None = None) -> int:
     _apply_local_runtime_env()
     _reexec_with_local_lib_bundle_if_needed(argv)
@@ -296,11 +384,14 @@ def _local_bundle_root() -> Path:
 
 def _apply_local_runtime_env() -> None:
     root = _local_bundle_root()
-    if os.environ.get("DISPLAY") and not os.environ.get("QT_QPA_PLATFORM"):
-        # VS Code/dev containers often expose both DISPLAY and WAYLAND_DISPLAY.
-        # Qt tries Wayland first, emits a plugin warning, then falls back. Prefer
-        # XCB directly when an X display is available.
-        os.environ["QT_QPA_PLATFORM"] = "xcb"
+    if not os.environ.get("QT_QPA_PLATFORM"):
+        # Prefer native Wayland when a dev container exposes it. XWayland can
+        # report incorrect window bounds across monitors with different scale
+        # factors, causing maximized windows to be clipped off-screen.
+        if os.environ.get("WAYLAND_DISPLAY"):
+            os.environ["QT_QPA_PLATFORM"] = "wayland"
+        elif os.environ.get("DISPLAY"):
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
     fonts = root / "etc" / "fonts"
     if fonts.is_dir() and not os.environ.get("FONTCONFIG_PATH"):
         os.environ["FONTCONFIG_PATH"] = str(fonts)
@@ -359,6 +450,7 @@ def _run_gui(args: argparse.Namespace) -> int:
     MainWindow = _build_main_window(QtCore, QtGui, QtWidgets, pg)
     window = MainWindow(startup_path=args.manifest)
     window.show()
+    QtCore.QTimer.singleShot(0, window._position_on_active_screen)
     if args.quit_after_ms is not None:
         QtCore.QTimer.singleShot(max(0, int(args.quit_after_ms)), app.quit)
     return int(app.exec())
@@ -466,32 +558,115 @@ class _MainWindowMixin:
         self._dirty = False
         self._dirty_reason = ""
         self._ui_scale = 1.0
-        self._ui_scale_bucket = 100
+        self._startup_screen = None
         self.gui_config_path = _gui_config_path()
         self.gui_config = _load_gui_config(self.gui_config_path)
         self._create_workspace("Untitled", self.session, activate=True)
         self.setWindowTitle("MRax[*]")
         self.resize(1320, 860)
         self._build_ui()
+        self.setWindowFlag(QtCore.Qt.WindowMaximizeButtonHint, False)
         self._install_gui_diagnostic_hooks()
         self._apply_theme()
         QtWidgets.QApplication.instance().installEventFilter(self)
+        self._position_on_active_screen()
         if startup_path:
             self.load_manifest(Path(startup_path))
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if not hasattr(self, "_ui_scale_bucket"):
+    def _screen_at_cursor(self):
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            try:
+                screen = app.screenAt(QtGui.QCursor.pos())
+                if screen is not None:
+                    return screen
+            except Exception:
+                _LOG.debug("Could not determine the screen at the pointer", exc_info=True)
+        return self.screen() or QtWidgets.QApplication.primaryScreen()
+
+    def _screen_for_window(self, geometry=None):
+        app = QtWidgets.QApplication.instance()
+        screens = list(app.screens()) if app is not None else []
+        geometry = geometry if geometry is not None else self.frameGeometry()
+        screen = _screen_with_largest_overlap(geometry, screens)
+        if screen is not None:
+            return screen
+        try:
+            center_screen = app.screenAt(geometry.center()) if app is not None else None
+        except Exception:
+            center_screen = None
+        return center_screen or self._screen_at_cursor()
+
+    def _move_frame_to_screen_center(self, screen, geometry=None) -> None:
+        if screen is None:
             return
-        scale = self._scale_for_window_size()
-        bucket = int(round(scale * 20.0)) * 5
-        if bucket != self._ui_scale_bucket:
-            self._ui_scale = scale
-            self._ui_scale_bucket = bucket
-            self._apply_theme()
+        available = screen.availableGeometry()
+        geometry = QtCore.QRect(geometry if geometry is not None else self.frameGeometry())
+        current_frame = self.frameGeometry()
+        frame_width = min(max(1, geometry.width()), max(1, available.width()))
+        frame_height = min(max(1, geometry.height()), max(1, available.height()))
+        horizontal_frame = max(0, current_frame.width() - self.width())
+        vertical_frame = max(0, current_frame.height() - self.height())
+        if frame_width != geometry.width() or frame_height != geometry.height():
+            self.resize(
+                max(1, frame_width - horizontal_frame),
+                max(1, frame_height - vertical_frame),
+            )
+            geometry = self.frameGeometry()
+        x, y = _centered_top_left((geometry.width(), geometry.height()), available)
+        self.move(x, y)
+
+    def _position_on_active_screen(self) -> None:
+        """Center the initial window on the screen currently used by the user."""
+
+        if self.isMaximized() or self.isFullScreen():
+            return
+        screen = self._startup_screen or self._screen_at_cursor()
+        self._startup_screen = screen
+        self._move_frame_to_screen_center(screen)
+
+    def _start_window_edge_resize(self, obj, event) -> bool:
+        if (
+            self.isMaximized()
+            or self.isFullScreen()
+            or not isinstance(obj, QtWidgets.QWidget)
+        ):
+            return False
+        widget = obj
+        while widget is not None and widget is not self:
+            widget = widget.parentWidget()
+        if widget is not self:
+            return False
+        try:
+            global_position = event.globalPosition().toPoint()
+        except AttributeError:
+            global_position = event.globalPos()
+        edge_names = _resize_edge_names(global_position, self.geometry(), margin=8)
+        if not edge_names:
+            return False
+        edge_enum = getattr(QtCore.Qt, "Edge", QtCore.Qt)
+        edges = edge_enum(0)
+        edge_values = {
+            "left": QtCore.Qt.LeftEdge,
+            "right": QtCore.Qt.RightEdge,
+            "top": QtCore.Qt.TopEdge,
+            "bottom": QtCore.Qt.BottomEdge,
+        }
+        for name in edge_names:
+            edges |= edge_values[name]
+        handle = self.windowHandle()
+        return bool(handle is not None and handle.startSystemResize(edges))
 
     def eventFilter(self, obj, event):
         event_type = getattr(QtCore.QEvent, "Type", QtCore.QEvent)
+        mouse_press = getattr(event_type, "MouseButtonPress", None)
+        if mouse_press is not None and event.type() == mouse_press:
+            try:
+                pressed_left = event.button() == _qt_mouse_button(QtCore, "LeftButton")
+            except Exception:
+                pressed_left = False
+            if pressed_left and self._start_window_edge_resize(obj, event):
+                return True
         if self.is_busy and event.type() == event_type.StatusTip:
             return True
         if isinstance(obj, QtWidgets.QPushButton):
@@ -689,12 +864,6 @@ class _MainWindowMixin:
             workspace.dirty_reason = ""
         self.refresh_study_selector()
 
-    def _scale_for_window_size(self) -> float:
-        size = self.size()
-        base_area = 1320.0 * 860.0
-        area = max(1.0, float(size.width()) * float(size.height()))
-        return float(np.clip(np.sqrt(area / base_area), 0.92, 1.65))
-
     def _scaled_px(self, value: float) -> int:
         return max(1, int(round(float(value) * self._ui_scale)))
 
@@ -710,16 +879,15 @@ class _MainWindowMixin:
                 max(int(dialog.width()), int(requested_size.width())),
                 max(int(dialog.height()), int(requested_size.height())),
             )
-        parent_geo = self.frameGeometry()
         geo = dialog.frameGeometry()
         if geo.width() <= 0 or geo.height() <= 0:
             hint = dialog.sizeHint()
             dialog.resize(max(geo.width(), hint.width()), max(geo.height(), hint.height()))
             geo = dialog.frameGeometry()
-        geo.moveCenter(parent_geo.center())
-        screen = self.screen() or QtWidgets.QApplication.primaryScreen()
+        screen = self._screen_for_window()
         if screen is not None:
             available = screen.availableGeometry()
+            geo.moveCenter(available.center())
             max_x = max(available.left(), available.right() - geo.width() + 1)
             max_y = max(available.top(), available.bottom() - geo.height() + 1)
             geo.moveTo(
@@ -982,6 +1150,7 @@ class _MainWindowMixin:
         self.progress_bar.setFixedWidth(220)
         self.progress_bar.hide()
         self.statusBar().addPermanentWidget(self.progress_bar)
+        self.statusBar().setSizeGripEnabled(True)
         self.refresh_study_selector()
         self.statusBar().showMessage(f"MRax GUI ready. {GUI_INSTALL_HINT}")
 
@@ -1017,18 +1186,20 @@ class _MainWindowMixin:
         layout.addLayout(file_row)
 
         import_row = QtWidgets.QHBoxLayout()
-        bruker_btn = QtWidgets.QPushButton("Import...")
-        bruker_btn.clicked.connect(self.import_study_dialog)
+        import_btn = QtWidgets.QPushButton("Import...")
+        import_btn.clicked.connect(self.import_study_dialog)
         export_btn = QtWidgets.QPushButton("Export...")
         export_btn.clicked.connect(self.export_dialog)
-        import_row.addWidget(bruker_btn)
+        import_row.addWidget(import_btn)
         import_row.addWidget(export_btn)
         layout.addLayout(import_row)
 
         layout.addWidget(QtWidgets.QLabel("Experiments"))
         exp_action_row = QtWidgets.QHBoxLayout()
         add_exp_btn = QtWidgets.QPushButton("Add Experiment")
-        add_exp_btn.setStatusTip("Add blank, NIfTI, NumPy, or raw binary image data to the active study.")
+        add_exp_btn.setStatusTip(
+            "Add blank, NIfTI, DICOM, NumPy, or raw binary image data to the active study."
+        )
         add_exp_btn.clicked.connect(self.add_experiment_dialog)
         rename_exp_btn = QtWidgets.QPushButton("Rename")
         rename_exp_btn.setStatusTip("Rename the selected experiment in the active study.")
@@ -1060,6 +1231,34 @@ class _MainWindowMixin:
         self.kspace_centering.currentTextChanged.connect(self.on_kspace_centering_changed)
         layout.addWidget(self.kspace_centering)
 
+        self.reconstruction_component_label = QtWidgets.QLabel("Reconstruction component")
+        self.reconstruction_component = QtWidgets.QComboBox()
+        self.reconstruction_component.addItem("Magnitude", "magnitude")
+        self.reconstruction_component.addItem("Phase (radians)", "phase")
+        self.reconstruction_component.currentIndexChanged.connect(
+            self.on_reconstruction_component_changed
+        )
+        layout.addWidget(self.reconstruction_component_label)
+        layout.addWidget(self.reconstruction_component)
+
+        self.reconstruction_coil_label = QtWidgets.QLabel("Reconstruction channels")
+        self.reconstruction_coil = QtWidgets.QComboBox()
+        self.reconstruction_coil.currentIndexChanged.connect(
+            self.on_reconstruction_coil_changed
+        )
+        layout.addWidget(self.reconstruction_coil_label)
+        layout.addWidget(self.reconstruction_coil)
+
+        self.reconstruction_unwrap_phase = QtWidgets.QCheckBox("Unwrap phase spatially")
+        self.reconstruction_unwrap_phase.setChecked(True)
+        self.reconstruction_unwrap_phase.setStatusTip(
+            "Unwrap phase independently within each spatial image; frames and observables remain separate."
+        )
+        self.reconstruction_unwrap_phase.toggled.connect(
+            self.on_reconstruction_phase_unwrap_changed
+        )
+        layout.addWidget(self.reconstruction_unwrap_phase)
+
         layout.addWidget(QtWidgets.QLabel("Maps"))
         self.map_list = QtWidgets.QListWidget()
         self.map_list.currentTextChanged.connect(self.on_map_changed)
@@ -1087,19 +1286,23 @@ class _MainWindowMixin:
         action_row = QtWidgets.QHBoxLayout()
         reset_btn = QtWidgets.QPushButton("Reset View")
         reset_btn.clicked.connect(self.reset_image_view)
-        enlarge_img = QtWidgets.QPushButton("Enlarge Image")
-        enlarge_img.clicked.connect(self.open_enlarged_image)
-        enlarge_plot = QtWidgets.QPushButton("Enlarge Plot")
-        enlarge_plot.clicked.connect(self.open_enlarged_plot)
         summary_btn = QtWidgets.QPushButton("Study Summary")
         summary_btn.clicked.connect(self.open_summary_window)
         self.plot_x_combo = QtWidgets.QComboBox()
         self.plot_x_combo.setMinimumWidth(140)
         self.plot_x_combo.currentIndexChanged.connect(self.on_plot_x_axis_changed)
+        self.image_plane_label = QtWidgets.QLabel("Plane")
+        self.image_plane_combo = QtWidgets.QComboBox()
+        self.image_plane_combo.addItem("Axial", "axial")
+        self.image_plane_combo.addItem("Coronal", "coronal")
+        self.image_plane_combo.addItem("Sagittal", "sagittal")
+        self.image_plane_combo.currentIndexChanged.connect(self.on_image_plane_changed)
+        self.image_plane_label.setVisible(False)
+        self.image_plane_combo.setVisible(False)
         action_row.addWidget(reset_btn)
-        action_row.addWidget(enlarge_img)
-        action_row.addWidget(enlarge_plot)
         action_row.addWidget(summary_btn)
+        action_row.addWidget(self.image_plane_label)
+        action_row.addWidget(self.image_plane_combo)
         action_row.addWidget(QtWidgets.QLabel("Plot X"))
         action_row.addWidget(self.plot_x_combo)
         action_row.addStretch(1)
@@ -2137,11 +2340,22 @@ class _MainWindowMixin:
             return
         root = Path(directory)
         vendor = _detect_import_vendor(root)
+        if vendor == "DICOM":
+            self.run_guarded_task(
+                lambda progress: self._load_dicom(root, progress),
+                self.on_dicom_import_finished,
+                "Importing DICOM folder into MRax structures...",
+                error_title="Could not import DICOM folder",
+            )
+            return
+        if vendor != "Bruker":
+            self.show_error(
+                "Unsupported import folder",
+                "The selected folder does not contain a recognizable Bruker study or DICOM image series.",
+            )
+            return
         options = self._show_import_options_dialog(root, vendor)
         if options is None:
-            return
-        if options["vendor"] != "Bruker":
-            self.show_error("Unsupported import vendor", "Only Bruker import is currently supported.")
             return
         self.run_guarded_task(
             lambda progress: self._load_bruker(root, options, progress),
@@ -2301,6 +2515,31 @@ class _MainWindowMixin:
             )
         self.statusBar().showMessage(
             f"Imported Bruker study from {path}. Source files were not modified.{issue_text}"
+        )
+
+    def _load_dicom(
+        self,
+        path: Path,
+        progress: Callable[[int, int, str], None] | None = None,
+    ):
+        session = GuiSession()
+        session.load_dicom_study(path, progress_callback=progress)
+        self._replace_or_add_loaded_workspace(session, self._workspace_label_for_session(session, path.name))
+        return path
+
+    def on_dicom_import_finished(self, path: Path):
+        self._fit_results_by_experiment.clear()
+        self._preview_results_by_experiment.clear()
+        self.registration_results.clear()
+        self.drift_results.clear()
+        self._visual_undo_stacks.clear()
+        self.last_fit_result = None
+        self.last_preview_fit_result = None
+        self.populate_from_session()
+        self.mark_dirty("imported DICOM study")
+        count = len(self.session.experiment_names)
+        self.statusBar().showMessage(
+            f"Imported {count} DICOM experiment(s) from {path}. Source files were not modified."
         )
 
     def save_imported_study_dialog(self):
@@ -2503,6 +2742,7 @@ class _MainWindowMixin:
         source_combo = QtWidgets.QComboBox()
         source_combo.addItem("Blank image", "blank")
         source_combo.addItem("NIfTI image", "nifti")
+        source_combo.addItem("DICOM image", "dicom")
         source_combo.addItem("NumPy array (.npy/.npz)", "numpy")
         source_combo.addItem("Raw binary", "raw")
         form.addRow("Source", source_combo)
@@ -2618,6 +2858,7 @@ class _MainWindowMixin:
 
         def update_source_controls(*_args):
             source = str(source_combo.currentData() or "blank")
+            inferred = source == "dicom"
             file_edit.setEnabled(source != "blank")
             browse_btn.setEnabled(source != "blank")
             dtype_combo.setEnabled(source == "raw")
@@ -2625,12 +2866,14 @@ class _MainWindowMixin:
             offset_spin.setEnabled(source == "raw")
             memory_order_combo.setEnabled(source in {"nifti", "numpy", "raw"})
             npz_key_edit.setEnabled(source == "numpy")
-            shape_edit.setEnabled(True)
-            order_edit.setEnabled(True)
-            exp_type_combo.setEnabled(True)
-            model_combo.setEnabled(True)
-            observables_edit.setEnabled(True)
-            metadata_edit.setEnabled(True)
+            shape_edit.setEnabled(not inferred)
+            order_edit.setEnabled(not inferred)
+            exp_type_combo.setEnabled(not inferred)
+            model_combo.setEnabled(not inferred)
+            observables_edit.setEnabled(not inferred)
+            metadata_edit.setEnabled(not inferred)
+            observable_mismatch_combo.setEnabled(not inferred)
+            metadata_source_combo.setEnabled(not inferred)
             if source == "blank" and not shape_edit.text().strip():
                 shape_edit.setText("1,64,64")
             if source in {"nifti", "numpy"} and order_edit.text().strip() in {"frame,x,y", "x,y,z"}:
@@ -2641,20 +2884,46 @@ class _MainWindowMixin:
                 order_edit.setText("frame,x,y")
             if source == "raw" and not shape_edit.text().strip():
                 shape_edit.setText("1,64,64")
+            update_metadata_template_controls()
             schedule_preview()
 
         def browse_source():
             source = str(source_combo.currentData() or "blank")
             filters = {
                 "nifti": "NIfTI (*.nii *.nii.gz);;All files (*)",
+                "dicom": "DICOM (*.dcm *.dicom *.ima);;All files (*)",
                 "numpy": "NumPy (*.npy *.npz);;All files (*)",
                 "raw": "Raw binary (*);;All files (*)",
             }
             path, _ = self._get_open_file_name("Choose experiment data", str(Path.cwd()), filters.get(source, "All files (*)"))
             if path:
                 file_edit.setText(path)
+                suggested_name = Path(path).stem
+                if source == "dicom":
+                    try:
+                        imported = _load_dicom_experiment_from_dialog(Path(path))
+                        suggested_name = str(imported["name"])
+                        exp_type = str(imported["exp_type"])
+                        if exp_type_combo.findText(exp_type) < 0:
+                            exp_type_combo.addItem(exp_type)
+                        exp_type_combo.setCurrentText(exp_type)
+                        model_index = model_combo.findData(str(imported["model_name"]))
+                        if model_index >= 0:
+                            model_combo.setCurrentIndex(model_index)
+                        observables_edit.setPlainText(
+                            _observables_to_json_text(imported["observables"])
+                        )
+                        metadata_edit.setPlainText(
+                            json.dumps(
+                                _metadata_to_jsonable(imported["extra_metadata"]),
+                                indent=2,
+                                sort_keys=True,
+                            )
+                        )
+                    except Exception as exc:
+                        self.statusBar().showMessage(f"Could not inspect DICOM file: {exc}")
                 if not name_edit.text().strip() or name_edit.text().startswith("experiment"):
-                    name_edit.setText(self._next_experiment_name(Path(path).stem))
+                    name_edit.setText(self._next_experiment_name(suggested_name))
                 schedule_preview()
 
         def schedule_preview(*_args):
@@ -2715,11 +2984,14 @@ class _MainWindowMixin:
 
         def update_metadata_template_controls(*_args):
             source = metadata_source_combo.currentData()
-            is_file = source == "file"
+            inferred = str(source_combo.currentData() or "blank") == "dicom"
+            is_file = source == "file" and not inferred
             metadata_file_edit.setEnabled(is_file)
             metadata_file_browse_btn.setEnabled(is_file)
             metadata_file_experiment_edit.setEnabled(is_file)
-            apply_metadata_btn.setEnabled(source is not None and str(source) != "manual")
+            apply_metadata_btn.setEnabled(
+                not inferred and source is not None and str(source) != "manual"
+            )
             schedule_preview()
 
         def on_metadata_template_source_changed(*_args):
@@ -2741,6 +3013,10 @@ class _MainWindowMixin:
         def preview_payload() -> dict[str, Any]:
             source = str(source_combo.currentData() or "blank")
             path = Path(file_edit.text()).expanduser() if file_edit.text().strip() else None
+            if source == "dicom":
+                if path is None:
+                    raise FileNotFoundError("Choose a DICOM image file")
+                return _load_dicom_experiment_from_dialog(path)
             shape = _parse_shape_text(shape_edit.text())
             order = _parse_dim_order(order_edit.text())
             data, metadata = _load_experiment_array_from_dialog(
@@ -2900,8 +3176,16 @@ class _MainWindowMixin:
                 name_edit.text().strip(),
                 accepted_payload["data"],
                 dims=accepted_payload["dims"],
-                exp_type=exp_type_combo.currentText().strip() or "anatomical",
-                model_name=str(model_combo.currentData() or "identity"),
+                exp_type=str(
+                    accepted_payload.get("exp_type")
+                    or exp_type_combo.currentText().strip()
+                    or "anatomical"
+                ),
+                model_name=str(
+                    accepted_payload.get("model_name")
+                    or model_combo.currentData()
+                    or "identity"
+                ),
                 observables=accepted_payload["observables"],
                 extra_metadata=accepted_payload["extra_metadata"],
                 data_role="image",
@@ -3012,6 +3296,7 @@ class _MainWindowMixin:
         self.experiment_list.blockSignals(False)
 
         self.refresh_map_list()
+        self.refresh_reconstruction_controls()
         self.refresh_visual_state_controls()
         self.kspace_mode.blockSignals(True)
         self.kspace_mode.setCurrentText(self.session.active_kspace_mode)
@@ -3659,8 +3944,18 @@ class _MainWindowMixin:
         self._dimension_counter_labels = {}
         self._dimension_detail_label = None
         if not self.session.is_loaded:
+            self.image_plane_label.setVisible(False)
+            self.image_plane_combo.setVisible(False)
             return
         view = _view_key(self.view_combo.currentText())
+        supports_planes = self.session.supports_image_planes(view)
+        self.image_plane_label.setVisible(supports_planes)
+        self.image_plane_combo.setVisible(supports_planes)
+        if supports_planes:
+            self.image_plane_combo.blockSignals(True)
+            plane_index = self.image_plane_combo.findData(self.session.active_image_plane)
+            self.image_plane_combo.setCurrentIndex(max(0, plane_index))
+            self.image_plane_combo.blockSignals(False)
         controls = self.session.dimension_controls(view)
         if not controls:
             label = QtWidgets.QLabel("No extra dimensions")
@@ -3895,7 +4190,7 @@ class _MainWindowMixin:
         elif view == "vendor_mrax_diff":
             vendor, mrax = _matched_2d_pair(
                 self.session.frame_image(original=bool(self.session.visual_state.show_original)),
-                self.session.reconstruction_image(),
+                self.session.reconstruction_image(component="magnitude", combined=True),
             )
             image = vendor - mrax
             source = "vendor_mrax_diff"
@@ -3976,7 +4271,12 @@ class _MainWindowMixin:
         target_shape = tuple(int(v) for v in image_shape)
         mask = np.asarray(roi.mask, dtype=bool)
         if mask.ndim > len(target_shape):
-            mask = mask_slice_for_display(mask, dims=roi.dims, indices=self._current_slice_indices())
+            mask = mask_slice_for_display(
+                mask,
+                dims=roi.dims,
+                indices=self._current_slice_indices(),
+                plane_dims=self._current_plane_dims(),
+            )
         if tuple(int(v) for v in mask.shape) != target_shape:
             raise RuntimeError(
                 f"{role.capitalize()} mask ROI '{roi.name}' has shape {mask.shape}; "
@@ -4534,9 +4834,18 @@ class _MainWindowMixin:
         reference = np.asarray(result["moving"] if inverse else result["fixed"])
         mask = np.asarray(roi.mask)
         if mask.ndim > reference.ndim:
-            mask = mask_slice_for_display(mask, dims=roi.dims, indices=self._current_slice_indices())
+            mask = mask_slice_for_display(
+                mask,
+                dims=roi.dims,
+                indices=self._current_slice_indices(),
+                plane_dims=self._current_plane_dims(),
+            )
         transformed_mask = resample_mask_with_transform(mask, reference, result["transform"], inverse=inverse, output_dtype=bool)
         suffix = "to_moving" if inverse else "to_reference"
+        registration_metadata = dict(result.get("metadata") or {})
+        target_experiment = registration_metadata.get(
+            "moving_experiment" if inverse else "reference_experiment"
+        )
         transformed = ROI(
             _unique_roi_name(
                 _registration_roi_union(self.session.rois, self.session.shared_rois),
@@ -4548,6 +4857,7 @@ class _MainWindowMixin:
                 **dict(roi.metadata),
                 "shape": "mask",
                 "generated_by": "mrax.gui.registration",
+                "source_experiment": target_experiment or roi.metadata.get("source_experiment"),
                 "source_roi": roi.name,
                 "registration_transform": str(result["key"]),
                 "registration_direction": direction_key,
@@ -4746,6 +5056,82 @@ class _MainWindowMixin:
         self.session._slice_cache.clear()
         self.update_view()
 
+    def refresh_reconstruction_controls(self):
+        if not hasattr(self, "reconstruction_component"):
+            return
+        visible = _view_key(self.view_combo.currentText()) == "mrax_reconstruction"
+        for widget in (
+            self.reconstruction_component_label,
+            self.reconstruction_component,
+            self.reconstruction_coil_label,
+            self.reconstruction_coil,
+            self.reconstruction_unwrap_phase,
+        ):
+            widget.setVisible(visible)
+
+        self.reconstruction_component.blockSignals(True)
+        preferred_component = self.session.active_reconstruction_component
+        self.reconstruction_component.clear()
+        self.reconstruction_component.addItem("Magnitude", "magnitude")
+        try:
+            self.session.reconstruction_display_array(
+                component="phase",
+                combined=True,
+                unwrap_phase=False,
+            )
+        except (RuntimeError, ValueError):
+            phase_available = False
+        else:
+            phase_available = True
+            self.reconstruction_component.addItem("Phase (radians)", "phase")
+        component_index = self.reconstruction_component.findData(preferred_component)
+        if component_index < 0:
+            component_index = 0
+            self.session.active_reconstruction_component = "magnitude"
+        self.reconstruction_component.setCurrentIndex(component_index)
+        self.reconstruction_component.setEnabled(visible and phase_available)
+        self.reconstruction_component.blockSignals(False)
+
+        self.reconstruction_coil.blockSignals(True)
+        self.reconstruction_coil.clear()
+        self.reconstruction_coil.addItem("Combined", None)
+        coil_count = self.session.reconstruction_coil_count
+        for coil_index in range(coil_count):
+            self.reconstruction_coil.addItem(f"Coil {coil_index + 1}", coil_index)
+        active_coil = self.session.active_reconstruction_coil
+        coil_index = self.reconstruction_coil.findData(active_coil)
+        if coil_index < 0:
+            coil_index = 0
+            self.session.active_reconstruction_coil = None
+        self.reconstruction_coil.setCurrentIndex(coil_index)
+        self.reconstruction_coil.setEnabled(visible and coil_count > 0)
+        self.reconstruction_coil.blockSignals(False)
+        self.reconstruction_unwrap_phase.blockSignals(True)
+        self.reconstruction_unwrap_phase.setChecked(
+            self.session.active_reconstruction_unwrap_phase
+        )
+        self.reconstruction_unwrap_phase.setVisible(
+            visible and self.session.active_reconstruction_component == "phase"
+        )
+        self.reconstruction_unwrap_phase.blockSignals(False)
+
+    def on_reconstruction_component_changed(self, _index: int):
+        component = str(self.reconstruction_component.currentData() or "magnitude")
+        self.session.set_reconstruction_component(component)
+        self.refresh_reconstruction_controls()
+        self.refresh_frame_controls()
+        self.update_view()
+
+    def on_reconstruction_coil_changed(self, _index: int):
+        value = self.reconstruction_coil.currentData()
+        self.session.set_reconstruction_coil(None if value is None else int(value))
+        self.refresh_frame_controls()
+        self.update_view()
+
+    def on_reconstruction_phase_unwrap_changed(self, enabled: bool):
+        self.session.set_reconstruction_phase_unwrap(enabled)
+        self.update_view()
+
     def refresh_plot_x_axis_combo(self):
         self.plot_x_combo.blockSignals(True)
         self.plot_x_combo.clear()
@@ -4825,6 +5211,7 @@ class _MainWindowMixin:
 
     def on_view_changed(self, _text: str):
         self.refresh_map_list()
+        self.refresh_reconstruction_controls()
         self.refresh_frame_controls()
         self.refresh_registration_tab()
         self.update_view()
@@ -4832,6 +5219,13 @@ class _MainWindowMixin:
     def on_dimension_changed(self, key: str, value: int):
         self.session.set_active_index(key, value)
         self._update_dimension_counter(key, value)
+        self.refresh_registration_tab()
+        self.update_view()
+
+    def on_image_plane_changed(self, *_args):
+        plane = str(self.image_plane_combo.currentData() or "axial")
+        self.session.set_image_plane(plane)
+        self.refresh_frame_controls()
         self.refresh_registration_tab()
         self.update_view()
 
@@ -4895,6 +5289,9 @@ class _MainWindowMixin:
         indices["z"] = int(self.session.active_z)
         return indices
 
+    def _current_plane_dims(self) -> tuple[str, str]:
+        return tuple(self.session.image_plane_dims)
+
     def on_frame_mask_changed(self, item):
         if self._updating_frames or self.session.frame_mask is None:
             return
@@ -4940,12 +5337,26 @@ class _MainWindowMixin:
                 self._displayed_image_unit = None
             elif view == "mrax_reconstruction":
                 image = self.session.reconstruction_image()
-                self._displayed_image_label = "MRax reconstruction"
-                self._displayed_image_unit = None
+                channel_label = (
+                    "combined"
+                    if self.session.active_reconstruction_coil is None
+                    else f"coil {self.session.active_reconstruction_coil + 1}"
+                )
+                component_label = self.session.active_reconstruction_component
+                phase_label = (
+                    " unwrapped"
+                    if component_label == "phase"
+                    and self.session.active_reconstruction_unwrap_phase
+                    else ""
+                )
+                self._displayed_image_label = (
+                    f"MRax {channel_label} {component_label}{phase_label}"
+                )
+                self._displayed_image_unit = "rad" if component_label == "phase" else None
             elif view == "vendor_vs_mrax":
                 vendor, mrax = _matched_2d_pair(
                     self.session.frame_image(original=use_original_image),
-                    self.session.reconstruction_image(),
+                    self.session.reconstruction_image(component="magnitude", combined=True),
                 )
                 image = _side_by_side_images(vendor, mrax)
                 self._displayed_image_label = "vendor | MRax"
@@ -4953,7 +5364,7 @@ class _MainWindowMixin:
             elif view == "vendor_mrax_diff":
                 vendor, mrax = _matched_2d_pair(
                     self.session.frame_image(original=use_original_image),
-                    self.session.reconstruction_image(),
+                    self.session.reconstruction_image(component="magnitude", combined=True),
                 )
                 image = vendor - mrax
                 self._displayed_image_label = "vendor - MRax"
@@ -4989,6 +5400,18 @@ class _MainWindowMixin:
         self._displayed_image = displayed
         self._displayed_image_shape = displayed_shape
         self._displayed_view_key = view
+        try:
+            axis_spacings = (
+                self.session.image_plane_voxel_sizes
+                if view != "k_space"
+                else (1.0, 1.0)
+            )
+            self.image_view.getView().setAspectLocked(
+                True,
+                ratio=_row_major_view_aspect_ratio(axis_spacings),
+            )
+        except Exception:
+            _LOG.debug("Could not apply physical image aspect ratio", exc_info=True)
         try:
             viewer_levels = (
                 _image_view_state_levels(prior_view_state)
@@ -5079,6 +5502,7 @@ class _MainWindowMixin:
             dims=self.session.experiment_dims,
             indices=self._current_slice_indices(),
             kind="image",
+            plane_dims=self.session.image_plane_dims,
         )
 
     def _visual_registration_display(self, state: VisualViewState) -> np.ndarray:
@@ -5173,7 +5597,12 @@ class _MainWindowMixin:
         display = _registration_preview_plane(arr) if arr.ndim > 3 else arr
         mask = np.asarray(roi.mask, dtype=bool)
         if mask.ndim > 2 and display.ndim in (2, 3):
-            mask = mask_slice_for_display(mask, dims=roi.dims, indices=self._current_slice_indices())
+            mask = mask_slice_for_display(
+                mask,
+                dims=roi.dims,
+                indices=self._current_slice_indices(),
+                plane_dims=self._current_plane_dims(),
+            )
         if display.ndim == 3 and display.shape[-1] in (3, 4):
             target_shape = tuple(int(v) for v in display.shape[:2])
         else:
@@ -5401,6 +5830,7 @@ class _MainWindowMixin:
         return False
 
     def on_lazy_raw_data_loaded(self, _loaded: bool):
+        self.refresh_reconstruction_controls()
         self.refresh_frame_controls()
         self.update_view()
         self.update_diagnostics()
@@ -5420,6 +5850,7 @@ class _MainWindowMixin:
                     roi.mask,
                     dims=roi.dims,
                     indices=self._current_slice_indices(),
+                    plane_dims=self._current_plane_dims(),
                 )
                 mask = np.asarray(mask, dtype=bool)
                 if tuple(mask.shape) == tuple(arr.shape[-2:]):
@@ -5479,6 +5910,7 @@ class _MainWindowMixin:
                         roi,
                         display_shape=shape,
                         indices=indices,
+                        plane_dims=self._current_plane_dims(),
                         editable=editable,
                     )
                     if mask is None:
@@ -5591,6 +6023,7 @@ class _MainWindowMixin:
             mask,
             dims=tuple(self.session.spatial_dim_names),
             indices=self._current_slice_indices(),
+            plane_dims=self._current_plane_dims(),
         )
         updated_dims = tuple(self.session.spatial_dim_names[: updated_mask.ndim])
         updated = ROI(name, updated_mask, dims=updated_dims, metadata=meta)
@@ -5718,6 +6151,7 @@ class _MainWindowMixin:
             rois or list(self.session.rois),
             display_shape=shape,
             indices=self._current_slice_indices(),
+            plane_dims=self._current_plane_dims(),
         )
 
     def combine_rois(self):
@@ -5749,6 +6183,7 @@ class _MainWindowMixin:
                 spatial_shape=tuple(self.session.spatial_shape),
                 spatial_dims=spatial_dims,
                 indices=self._current_slice_indices(),
+                plane_dims=self._current_plane_dims(),
             )
             combine_dimension = "current_slice"
         elif mode.startswith("slice_dim:"):
@@ -5946,7 +6381,12 @@ class _MainWindowMixin:
         try:
             if mode == "slice":
                 target_plane = np.asarray(
-                    mask_slice_for_display(base, dims=spatial_dims, indices=self._current_slice_indices())
+                    mask_slice_for_display(
+                        base,
+                        dims=spatial_dims,
+                        indices=self._current_slice_indices(),
+                        plane_dims=self._current_plane_dims(),
+                    )
                 ).copy()
                 visible = self._visible_roi_slice_masks(cutters)
                 cut_mask, source_names = _combine_visible_roi_slice_masks(visible)
@@ -5959,6 +6399,7 @@ class _MainWindowMixin:
                     target_plane,
                     dims=spatial_dims,
                     indices=self._current_slice_indices(),
+                    plane_dims=self._current_plane_dims(),
                 )
                 subtract_dimension = "current_slice"
             else:
@@ -6178,6 +6619,7 @@ class _MainWindowMixin:
                 mask_2d,
                 dims=tuple(self.session.spatial_dim_names),
                 indices=self._current_slice_indices(),
+                plane_dims=self._current_plane_dims(),
             )
             meta["points"] = snapped_points.tolist()
             meta["angle"] = 0.0
@@ -6343,9 +6785,17 @@ class _MainWindowMixin:
         spatial_shape = tuple(self.session.spatial_shape)
         mask = np.asarray(roi.mask)
         indices = dict(geometry_indices or roi.metadata.get("slice_indices") or self._current_slice_indices())
+        plane_dims = self._current_plane_dims()
+        roi_plane_dims = tuple(str(dim) for dim in (roi.dims or ()))
+        if len(roi_plane_dims) != 2 or not set(roi_plane_dims).issubset(spatial_dims):
+            roi_plane_dims = plane_dims
 
         def geometry_spatial_mask() -> np.ndarray:
-            plane_shape = tuple(spatial_shape[spatial_dims.index(dim)] for dim in ("x", "y") if dim in spatial_dims)
+            plane_shape = tuple(
+                spatial_shape[spatial_dims.index(dim)]
+                for dim in plane_dims
+                if dim in spatial_dims
+            )
             geometry_mask = _geometry_mask_from_metadata(roi.metadata, plane_shape)
             if geometry_mask is None:
                 raise ValueError(f"ROI '{roi.name}' cannot be aligned to the current image shape")
@@ -6354,6 +6804,7 @@ class _MainWindowMixin:
                 spatial_shape=spatial_shape,
                 spatial_dims=spatial_dims,
                 indices=indices,
+                plane_dims=plane_dims,
             )
 
         if tuple(mask.shape) == spatial_shape and tuple(roi.dims or spatial_dims) == spatial_dims:
@@ -6365,6 +6816,7 @@ class _MainWindowMixin:
                     spatial_shape=spatial_shape,
                     spatial_dims=spatial_dims,
                     indices=indices,
+                    plane_dims=roi_plane_dims,
                 )
             except Exception:
                 return geometry_spatial_mask()
@@ -6676,62 +7128,6 @@ class _MainWindowMixin:
             self.plot_widget.autoRange()
         except Exception:
             _LOG.debug("Ignored optional GUI operation failure", exc_info=True)
-
-    def open_enlarged_image(self):
-        if not self.session.is_loaded:
-            return
-        view = _view_key(self.view_combo.currentText())
-        try:
-            if self._displayed_image is not None:
-                image = np.asarray(self._displayed_image)
-            elif view == "k_space":
-                image = self.session.kspace_image()
-            elif view == "mrax_reconstruction":
-                image = self.session.reconstruction_image()
-            elif view == "vendor_vs_mrax":
-                vendor, mrax = _matched_2d_pair(self.session.frame_image(), self.session.reconstruction_image())
-                image = _side_by_side_images(vendor, mrax)
-            elif view == "vendor_mrax_diff":
-                vendor, mrax = _matched_2d_pair(self.session.frame_image(), self.session.reconstruction_image())
-                image = vendor - mrax
-            elif view == "map":
-                image = self.session.map_image()
-            else:
-                image = self.session.frame_image()
-        except Exception as exc:
-            self.statusBar().showMessage(str(exc))
-            return
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle(f"MRax {self.view_combo.currentText()} Viewer")
-        dialog.resize(980, 820)
-        layout = QtWidgets.QVBoxLayout(dialog)
-        image_view = pg.ImageView()
-        image_view.ui.roiBtn.hide()
-        image_view.ui.menuBtn.hide()
-        image_view.setImage(np.asarray(image), autoLevels=True)
-        layout.addWidget(image_view)
-        reset = QtWidgets.QPushButton("Reset View")
-        reset.clicked.connect(lambda: image_view.getView().autoRange())
-        layout.addWidget(reset)
-        self._show_centered_dialog(dialog)
-        dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
-
-    def open_enlarged_plot(self):
-        if not self.session.is_loaded:
-            return
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("MRax Signal Preview")
-        dialog.resize(980, 620)
-        layout = QtWidgets.QVBoxLayout(dialog)
-        plot = pg.PlotWidget()
-        plot.showGrid(x=True, y=True, alpha=0.25)
-        layout.addWidget(plot)
-        self._draw_signal_plot(plot)
-        reset = QtWidgets.QPushButton("Reset View")
-        reset.clicked.connect(plot.autoRange)
-        layout.addWidget(reset)
-        self._show_centered_dialog(dialog)
-        dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
 
     def update_diagnostics(self):
         lines: list[str] = []
@@ -7065,7 +7461,7 @@ class _MainWindowMixin:
                         arr,
                         name=roi_name,
                         spatial_shape=tuple(self.session.frame_image().shape[-2:]),
-                        dims=tuple(dims)[:2] if dims else None,
+                        dims=self._current_plane_dims(),
                         metadata=meta,
                     )
                 ]
@@ -7258,7 +7654,7 @@ class _MainWindowMixin:
                     raw,
                     name=path.stem,
                     spatial_shape=tuple(self.session.frame_image().shape[-2:]),
-                    dims=dims[:2] if dims else None,
+                    dims=self._current_plane_dims(),
                     metadata={"slice_indices": self._current_slice_indices()},
                 )
             ]
@@ -7277,7 +7673,7 @@ class _MainWindowMixin:
                         raw,
                         name=path.stem,
                         spatial_shape=tuple(self.session.frame_image().shape[-2:]),
-                        dims=dims[:2] if dims else None,
+                        dims=self._current_plane_dims(),
                         metadata={"slice_indices": self._current_slice_indices()},
                     )
                     rois = [plane]
@@ -7322,6 +7718,13 @@ class _MainWindowMixin:
         dialog.setWindowTitle("Export MRax Data")
         dialog.resize(self._scaled_px(760), self._scaled_px(620))
         layout = QtWidgets.QVBoxLayout(dialog)
+        reference_info = QtWidgets.QLabel(_roi_nifti_reference_summary(self.session))
+        reference_info.setWordWrap(True)
+        reference_info.setStatusTip(
+            "ROI NIfTI files use the affine from the experiment on which each mask was created; "
+            "identity is used only when that reference geometry is unavailable."
+        )
+        layout.addWidget(reference_info)
         tabs = QtWidgets.QTabWidget()
         bulk_tab = QtWidgets.QWidget()
         bulk_layout = QtWidgets.QVBoxLayout(bulk_tab)
@@ -7344,6 +7747,16 @@ class _MainWindowMixin:
 
         include_images = QtWidgets.QCheckBox("Images")
         include_images.setChecked(True)
+        include_reconstructions = QtWidgets.QCheckBox(
+            "MRax reconstructions (combined and individual coils)"
+        )
+        include_reconstructions.setChecked(
+            any(
+                (exp_data.get("processed") or {}).get("raw_reconstruction") is not None
+                or (exp_data.get("processed") or {}).get("raw_reconstruction_coils") is not None
+                for exp_data in ((self.session.data or {}).get("experiments") or {}).values()
+            )
+        )
         include_kspace = QtWidgets.QCheckBox("K-space")
         include_kspace.setChecked(True)
         include_maps = QtWidgets.QCheckBox("Fitted maps")
@@ -7354,7 +7767,15 @@ class _MainWindowMixin:
         numpy_check.setChecked(True)
         nifti_check = QtWidgets.QCheckBox("NIfTI files (.nii)")
         nifti_check.setChecked(False)
-        for widget in (include_images, include_kspace, include_maps, include_rois, numpy_check, nifti_check):
+        for widget in (
+            include_images,
+            include_reconstructions,
+            include_kspace,
+            include_maps,
+            include_rois,
+            numpy_check,
+            nifti_check,
+        ):
             bulk_layout.addWidget(widget)
         transform_rois_check = QtWidgets.QCheckBox("Apply available registration transform to ROIs")
         transform_rois_check.setChecked(False)
@@ -7506,6 +7927,7 @@ class _MainWindowMixin:
                     include_rois=include_rois.isChecked(),
                     export_numpy=numpy_check.isChecked(),
                     export_nifti=nifti_check.isChecked(),
+                    include_reconstructions=include_reconstructions.isChecked(),
                     roi_transform_key=(
                         str(export_transform_combo.currentData())
                         if transform_rois_check.isChecked() and export_transform_combo.currentData()
@@ -7581,6 +8003,7 @@ class _MainWindowMixin:
         include_rois: bool,
         export_numpy: bool,
         export_nifti: bool,
+        include_reconstructions: bool = True,
         roi_transform_key: str | None = None,
         roi_transform_direction: str = "reference_to_moving",
     ) -> list[Path]:
@@ -7590,6 +8013,7 @@ class _MainWindowMixin:
         manifest: dict[str, Any] = {
             "format": "mrax.gui.export",
             "version": 1,
+            MRAX_VERSION_TAG: MRAX_VERSION,
             "source_manifest": None if self.session.manifest_path is None else str(self.session.manifest_path),
             "experiments": {},
             "warnings": [],
@@ -7599,9 +8023,15 @@ class _MainWindowMixin:
             exp_key = _safe_filename(str(exp_name))
             exp_dir = output_dir / exp_key
             exp_dir.mkdir(parents=True, exist_ok=True)
+            exp_dims = dict(
+                exp_data.get("dims")
+                or self.session.summary_by_name.get(str(exp_name), {}).get("dims")
+                or {}
+            )
             exp_manifest: dict[str, Any] = {
                 "name": str(exp_name),
-                "dims": dict(exp_data.get("dims") or {}),
+                "dims": exp_dims,
+                "spatial_geometry": exp_data.get("spatial_geometry"),
                 "files": [],
             }
             if include_images and exp_data.get("mr_image") is not None:
@@ -7617,6 +8047,60 @@ class _MainWindowMixin:
                     arr = None
                 if export_nifti:
                     saved.extend(self._export_image_nifti(exp_name, exp_data, exp_dir / "nifti" / "mr_image", manifest))
+            if include_reconstructions:
+                for variant_name, component, coil_index, arr in available_reconstruction_variants(
+                    exp_data.get("processed") or {},
+                    spatial_ndim=len(spatial_names(exp_dims)),
+                ):
+                    reconstruction_dir = exp_dir / "reconstruction"
+                    if export_numpy:
+                        try:
+                            reconstruction_dir.mkdir(parents=True, exist_ok=True)
+                            path = reconstruction_dir / f"{variant_name}.npy"
+                            np.save(path, arr)
+                        except Exception as exc:
+                            manifest["warnings"].append(
+                                f"warning: skipped {exp_name}/{variant_name} NumPy export: {exc}"
+                            )
+                        else:
+                            saved.append(path)
+                            exp_manifest["files"].append(
+                                {
+                                    "kind": "reconstruction",
+                                    "component": component,
+                                    "coil": None if coil_index is None else int(coil_index) + 1,
+                                    "phase_unwrapped": bool(
+                                        component == "phase" and not variant_name.endswith("_wrapped")
+                                    ),
+                                    "format": "npy",
+                                    "path": _package_relative(path, output_dir),
+                                }
+                            )
+                    if export_nifti:
+                        nifti_dir = exp_dir / "nifti" / "reconstruction" / variant_name
+                        nifti_paths = self._export_reconstruction_nifti(
+                            exp_name,
+                            exp_data,
+                            np.asarray(arr),
+                            nifti_dir,
+                            variant_name,
+                            manifest,
+                        )
+                        saved.extend(nifti_paths)
+                        exp_manifest["files"].extend(
+                            {
+                                "kind": "reconstruction",
+                                "component": component,
+                                "coil": None if coil_index is None else int(coil_index) + 1,
+                                "phase_unwrapped": bool(
+                                    component == "phase" and not variant_name.endswith("_wrapped")
+                                ),
+                                "format": "nifti",
+                                "unit": "rad" if component == "phase" else "",
+                                "path": _package_relative(path, output_dir),
+                            }
+                            for path in nifti_paths
+                        )
             if include_kspace and exp_data.get("raw_kspace") is not None and export_numpy:
                 try:
                     path = exp_dir / "raw_kspace.npy"
@@ -7658,7 +8142,13 @@ class _MainWindowMixin:
                             from mrax.io.nifti import save_nifti
 
                             nifti_path.parent.mkdir(parents=True, exist_ok=True)
-                            save_nifti(nifti_path, arr, np.eye(4))
+                            affine = _experiment_nifti_affine(self.session, str(exp_name))
+                            if affine is None:
+                                affine = np.eye(4, dtype=float)
+                                manifest["warnings"].append(
+                                    f"{exp_name}/{map_name}: orientation unavailable; identity affine used"
+                                )
+                            save_nifti(nifti_path, arr, affine)
                         except Exception as exc:
                             manifest["warnings"].append(f"{exp_name}/{map_name}: {exc}")
                         else:
@@ -7739,10 +8229,79 @@ class _MainWindowMixin:
                 observables=dict(exp_data.get("observables") or {}),
                 exp_type=exp_data.get("exp_type"),
             )
-            dataset = DataSet(data=np.asarray(exp_data["mr_image"]), name=str(exp_name))
-            return list(export_nifti_series(experiment, dataset, output_dir, stem="mr_image"))
+            geometry_meta = exp_data.get("spatial_geometry")
+            geometry = (
+                SpatialGeometry.from_metadata(geometry_meta)
+                if isinstance(geometry_meta, Mapping)
+                else None
+            )
+            dataset = DataSet(
+                data=np.asarray(exp_data["mr_image"]),
+                name=str(exp_name),
+                spatial_geometry=geometry,
+            )
+            affine = _experiment_nifti_affine(self.session, str(exp_name))
+            if affine is None:
+                export_manifest["warnings"].append(
+                    f"{exp_name}/mr_image: orientation unavailable; identity affine used"
+                )
+            return list(
+                export_nifti_series(
+                    experiment,
+                    dataset,
+                    output_dir,
+                    stem="mr_image",
+                    affine=affine,
+                )
+            )
         except Exception as exc:
             export_manifest["warnings"].append(f"{exp_name}/mr_image: {exc}")
+            return []
+
+    def _export_reconstruction_nifti(
+        self,
+        exp_name: str,
+        exp_data: dict[str, Any],
+        array: np.ndarray,
+        output_dir: Path,
+        stem: str,
+        export_manifest: dict[str, Any],
+    ) -> list[Path]:
+        try:
+            from mrax.io.nifti import export_nifti_series
+
+            experiment = Experiment(
+                dims={str(k): int(v) for k, v in dict(exp_data.get("dims") or {}).items()},
+                observables=dict(exp_data.get("observables") or {}),
+                exp_type=exp_data.get("exp_type"),
+            )
+            geometry_meta = exp_data.get("spatial_geometry")
+            geometry = (
+                SpatialGeometry.from_metadata(geometry_meta)
+                if isinstance(geometry_meta, Mapping)
+                else None
+            )
+            dataset = DataSet(
+                data=np.asarray(array),
+                name=f"{exp_name}_{stem}",
+                spatial_geometry=geometry,
+            )
+            affine = _experiment_nifti_affine(self.session, str(exp_name))
+            if affine is None:
+                export_manifest["warnings"].append(
+                    f"{exp_name}/{stem}: orientation unavailable; identity affine used"
+                )
+            return list(
+                export_nifti_series(
+                    experiment,
+                    dataset,
+                    output_dir,
+                    stem=stem,
+                    affine=affine,
+                )
+            )
+        except Exception as exc:
+            export_manifest["warnings"].append(f"{exp_name}/{stem}: {exc}")
             return []
 
     def _export_roi_label_masks(
@@ -7768,6 +8327,7 @@ class _MainWindowMixin:
             metadata = {
                 "format": "mrax.gui.roi_label_masks",
                 "version": 1,
+                MRAX_VERSION_TAG: MRAX_VERSION,
                 "shape": list(group["shape"]),
                 "labels": group["labels"],
                 "note": "label 0 is background; nonzero labels follow the listed ROI order",
@@ -7784,16 +8344,30 @@ class _MainWindowMixin:
                 try:
                     from mrax.io.nifti import save_nifti
 
+                    references = [
+                        _roi_nifti_reference(self.session, row.get("metadata"))
+                        for row in group["labels"]
+                    ]
+                    label_reference = references[0]
+                    distinct_references = {
+                        (str(row.get("experiment") or ""), bool(row.get("identity_fallback")))
+                        for row in references
+                    }
+                    if len(distinct_references) > 1:
+                        export_manifest["warnings"].append(
+                            "ROI label mask combines masks from multiple reference experiments; "
+                            f"the combined label image uses {label_reference.get('experiment') or 'identity fallback'}."
+                        )
                     nifti_dir = roi_dir / "nifti"
                     label_nifti = nifti_dir / f"roi_labels{suffix}.nii"
                     label_nifti.parent.mkdir(parents=True, exist_ok=True)
-                    save_nifti(label_nifti, label_mask.astype(np.float32), np.eye(4))
+                    save_nifti(label_nifti, label_mask.astype(np.float32), label_reference["affine"])
                     saved.append(label_nifti)
                     binary_dir = nifti_dir / f"binary{suffix}"
-                    for row, mask in zip(group["labels"], binary_stack):
+                    for row, mask, reference in zip(group["labels"], binary_stack, references):
                         binary_path = binary_dir / f"{int(row['label']):03d}_{_safe_filename(row['name'])}.nii"
                         binary_path.parent.mkdir(parents=True, exist_ok=True)
-                        save_nifti(binary_path, mask.astype(np.float32), np.eye(4))
+                        save_nifti(binary_path, mask.astype(np.float32), reference["affine"])
                         saved.append(binary_path)
                 except Exception as exc:
                     export_manifest["warnings"].append(f"ROI label-mask NIfTI export failed: {exc}")
@@ -8075,7 +8649,10 @@ class _MainWindowMixin:
                 shutil.rmtree(output_dir)
             shutil.copytree(self.session.manifest_path.parent, output_dir)
             copied = output_dir / self.session.manifest_path.name
-            return copied if copied.is_file() else None
+            if copied.is_file():
+                _stamp_copied_study_snapshot(copied, self.session)
+                return copied
+            return None
         if self.session.study is not None:
             return self.session.save_imported_study(output_dir)
         return None
@@ -8103,7 +8680,12 @@ class _MainWindowMixin:
     def _load_gui_state_data(self, path: Path) -> list[str]:
         path = Path(path)
         payload = json.loads(path.read_text(encoding="utf-8"))
+        producer_version = validate_mrax_file_version(payload, file_kind="MRax GUI state")
         warnings_list: list[str] = []
+        if producer_version.tag_missing:
+            message = missing_mrax_version_message("MRax GUI state")
+            warnings_list.append(message)
+            warnings.warn(message, RuntimeWarning, stacklevel=2)
         manifest = _resolve_state_manifest_path(payload, path)
         if manifest is not None and manifest.is_file():
             session = GuiSession()
@@ -8504,6 +9086,7 @@ class _MainWindowMixin:
             spatial_shape=spatial_shape,
             spatial_dims=spatial_dims,
             indices=self._current_slice_indices(),
+            plane_dims=self._current_plane_dims(),
         )
         name = _unique_roi_name(self.session.rois, shape_key)
         metadata.update(
@@ -8600,6 +9183,7 @@ class _MainWindowMixin:
                 spatial_dims,
                 self._current_slice_indices(),
                 display_shape,
+                plane_dims=self._current_plane_dims(),
             )
             can_edit = can_edit or _geometry_mask_from_metadata(roi.metadata, display_shape) is not None
         if roi is None or not can_edit:
@@ -8639,6 +9223,7 @@ class _MainWindowMixin:
                 base_mask,
                 dims=tuple(self.session.spatial_dim_names),
                 indices=self._current_slice_indices(),
+                plane_dims=self._current_plane_dims(),
             )
         ).copy()
         brush = _brush_mask(display_shape, (y, x), radius)
@@ -8682,6 +9267,7 @@ class _MainWindowMixin:
                 base_mask,
                 dims=tuple(self.session.spatial_dim_names),
                 indices=self._current_slice_indices(),
+                plane_dims=self._current_plane_dims(),
             )
         ).copy()
         label_value = self._roi_edit_label_value()
@@ -8708,6 +9294,7 @@ class _MainWindowMixin:
             mask_2d,
             dims=tuple(self.session.spatial_dim_names),
             indices=self._current_slice_indices(),
+            plane_dims=self._current_plane_dims(),
         )
         updated_dims = tuple(self.session.spatial_dim_names[: updated_mask.ndim])
         self._replace_roi(ROI(roi.name, updated_mask, dims=updated_dims, metadata=metadata))
@@ -8723,7 +9310,12 @@ class _MainWindowMixin:
             try:
                 base = self._roi_as_spatial_mask(other, geometry_indices=self._current_slice_indices())
                 plane = np.asarray(
-                    mask_slice_for_display(base, dims=spatial_dims, indices=self._current_slice_indices())
+                    mask_slice_for_display(
+                        base,
+                        dims=spatial_dims,
+                        indices=self._current_slice_indices(),
+                        plane_dims=self._current_plane_dims(),
+                    )
                 ).copy()
             except Exception:
                 continue
@@ -8734,14 +9326,27 @@ class _MainWindowMixin:
             plane[np.asarray(stamp_mask, dtype=bool)] = 0
             if np.array_equal(
                 plane,
-                np.asarray(mask_slice_for_display(base, dims=spatial_dims, indices=self._current_slice_indices())),
+                np.asarray(
+                    mask_slice_for_display(
+                        base,
+                        dims=spatial_dims,
+                        indices=self._current_slice_indices(),
+                        plane_dims=self._current_plane_dims(),
+                    )
+                ),
             ):
                 continue
             meta = _rasterized_roi_metadata(other.metadata, "auto_subtract")
             meta["auto_subtract_source_roi"] = target_name
             if plane.dtype != bool:
                 meta["mask_type"] = "label"
-            updated = replace_mask_slice(base, plane, dims=spatial_dims, indices=self._current_slice_indices())
+            updated = replace_mask_slice(
+                base,
+                plane,
+                dims=spatial_dims,
+                indices=self._current_slice_indices(),
+                plane_dims=self._current_plane_dims(),
+            )
             self._replace_roi(ROI(other.name, updated, dims=spatial_dims, metadata=meta))
             changed += 1
         if changed:
@@ -9143,6 +9748,7 @@ class _MainWindowMixin:
                 spatial_dims,
                 self._current_slice_indices(),
                 (h, w),
+                plane_dims=self._current_plane_dims(),
             ):
                 self.statusBar().showMessage("Selected ROI cannot be edited on the current image plane.")
                 self._refresh_drawing_controls()
@@ -9152,6 +9758,7 @@ class _MainWindowMixin:
                 mask_2d,
                 dims=spatial_dims,
                 indices=self._current_slice_indices(),
+                plane_dims=self._current_plane_dims(),
                 mode="add",
             )
             meta = _rasterized_roi_metadata(target_roi.metadata, prefix)
@@ -9167,6 +9774,7 @@ class _MainWindowMixin:
                 spatial_shape=tuple(self.session.spatial_shape),
                 spatial_dims=spatial_dims,
                 indices=self._current_slice_indices(),
+                plane_dims=self._current_plane_dims(),
             )
             name = _unique_roi_name(self.session.rois, prefix)
             roi = ROI(
@@ -9214,6 +9822,7 @@ class _MainWindowMixin:
                         roi.mask,
                         dims=roi.dims,
                         indices=self._current_slice_indices(),
+                        plane_dims=self._current_plane_dims(),
                     ),
                     dtype=bool,
                 )
@@ -9243,6 +9852,7 @@ class _MainWindowMixin:
             spatial_shape=tuple(self.session.spatial_shape),
             spatial_dims=spatial_dims,
             indices=self._current_slice_indices(),
+            plane_dims=self._current_plane_dims(),
         )
         name = _unique_roi_name(self.session.rois, "auto")
         metadata.update(
@@ -9753,6 +10363,21 @@ def _display_spatial_shape(array: Any) -> tuple[int, int]:
     return int(arr.shape[-2]), int(arr.shape[-1])
 
 
+def _row_major_view_aspect_ratio(axis_spacings: Sequence[float]) -> float:
+    """Return pyqtgraph's x/y scale ratio for row-major image-axis spacings."""
+
+    if len(axis_spacings) < 2:
+        return 1.0
+    row_spacing, column_spacing = (float(value) for value in axis_spacings[:2])
+    if (
+        not np.isfinite((row_spacing, column_spacing)).all()
+        or row_spacing <= 0
+        or column_spacing <= 0
+    ):
+        return 1.0
+    return column_spacing / row_spacing
+
+
 def _viewer_display_levels(
     image: Any,
     display_levels: tuple[float, float] | None,
@@ -10167,15 +10792,18 @@ def _visible_roi_slice_masks_for_display(
     *,
     display_shape: tuple[int, int],
     indices: Mapping[str, int] | None = None,
+    plane_dims: Sequence[str] = ("x", "y"),
 ) -> list[tuple[ROI, np.ndarray]]:
     shape = tuple(int(v) for v in display_shape)
     index_map = dict(indices or {})
     out: list[tuple[ROI, np.ndarray]] = []
     for roi in rois:
         metadata_indices = dict((roi.metadata or {}).get("slice_indices") or {})
-        if "z" in metadata_indices and "z" in index_map:
+        sliced_dims = {"x", "y", "z"} - {str(dim) for dim in plane_dims}
+        slice_dim = next(iter(sliced_dims), "z")
+        if slice_dim in metadata_indices and slice_dim in index_map:
             try:
-                if int(metadata_indices["z"]) != int(index_map["z"]):
+                if int(metadata_indices[slice_dim]) != int(index_map[slice_dim]):
                     continue
             except Exception:
                 _LOG.debug("Ignored optional GUI operation failure", exc_info=True)
@@ -10185,6 +10813,7 @@ def _visible_roi_slice_masks_for_display(
                     roi.mask,
                     dims=roi.dims,
                     indices=index_map,
+                    plane_dims=plane_dims,
                 ),
                 dtype=bool,
             )
@@ -10421,6 +11050,7 @@ def _roi_overlay_mask_for_display(
     *,
     display_shape: Sequence[int],
     indices: Mapping[str, int] | None = None,
+    plane_dims: Sequence[str] = ("x", "y"),
     editable: bool = False,
 ) -> np.ndarray | None:
     shape = tuple(int(v) for v in display_shape)
@@ -10432,6 +11062,7 @@ def _roi_overlay_mask_for_display(
                 roi.mask,
                 dims=roi.dims,
                 indices=dict(indices or {}),
+                plane_dims=plane_dims,
             ),
             dtype=bool,
         )
@@ -10807,7 +11438,9 @@ def _snap_polygon_points_to_gradient(points: Any, image: Any, *, radius: int = 4
 def _detect_import_vendor(root: Path) -> str:
     if _looks_like_bruker_study(root):
         return "Bruker"
-    return "Bruker"
+    if _looks_like_dicom_study(root):
+        return "DICOM"
+    return "Unknown"
 
 
 def _looks_like_bruker_study(root: Path) -> bool:
@@ -10817,6 +11450,17 @@ def _looks_like_bruker_study(root: Path) -> bool:
         if entry.is_dir() and entry.name.isdigit() and (entry / "method").is_file():
             return True
     return False
+
+
+def _looks_like_dicom_study(root: Path) -> bool:
+    if not root.is_dir():
+        return False
+    try:
+        from mrax.io.dicom import discover_dicom_series
+
+        return bool(discover_dicom_series(root, recursive=True))
+    except (OSError, ValueError):
+        return False
 
 
 def _detect_bruker_import_summary(root: Path) -> list[dict[str, Any]]:
@@ -11353,10 +11997,14 @@ def _load_experiment_array_from_dialog(
         raise FileNotFoundError("Choose a data file")
     metadata["source_path"] = str(path)
     if source == "nifti":
-        from mrax.io.nifti import load_nifti
+        from mrax.io.nifti import load_nifti, nifti_spatial_geometry
 
         arr, affine = load_nifti(path)
         metadata["affine"] = _metadata_to_jsonable(np.asarray(affine))
+        metadata["spatial_geometry"] = nifti_spatial_geometry(
+            affine,
+            spatial_shape=arr.shape,
+        ).to_metadata()
         if shape:
             metadata["memory_order"] = _normalize_memory_order(memory_order)
         return _reshape_import_array(arr, shape, memory_order=memory_order), metadata
@@ -11384,6 +12032,39 @@ def _load_experiment_array_from_dialog(
             memory_order=memory_order,
         ), metadata
     raise ValueError(f"Unsupported experiment data source '{source}'")
+
+
+def _load_dicom_experiment_from_dialog(path: Path) -> dict[str, Any]:
+    path = Path(path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError("Choose a readable DICOM image file")
+
+    from mrax.io.dicom import load_dicom_series
+    from mrax.library.default_experiments import default_model_for_type
+
+    experiment, dataset, dicom_metadata = load_dicom_series(path)
+    exp_type = str(experiment.exp_type or "anatomical")
+    model = default_model_for_type(exp_type)
+    extra_metadata = dict(dicom_metadata)
+    extra_metadata.update(
+        {
+            "import_format": "dicom",
+            "source_path": str(path),
+        }
+    )
+    return {
+        "kind": "experiment",
+        "source": "dicom",
+        "path": path,
+        "name": str(dataset.name or path.stem or "dicom"),
+        "data": np.asarray(dataset.data),
+        "dims": dict(experiment.dims),
+        "exp_type": exp_type,
+        "model_name": str(model.name or "identity"),
+        "observables": dict(experiment.observables),
+        "observable_compatibility": [],
+        "extra_metadata": extra_metadata,
+    }
 
 
 def _observables_from_json_text(text: str) -> dict[str, Quantity]:
@@ -11696,6 +12377,13 @@ def _load_experiment_metadata_template_from_file(
     with metadata_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     if _looks_like_study_manifest_payload(payload):
+        version_info = validate_mrax_file_version(payload, file_kind="MRax study manifest")
+        if version_info.tag_missing:
+            warnings.warn(
+                missing_mrax_version_message("MRax study manifest"),
+                RuntimeWarning,
+                stacklevel=2,
+            )
         experiments = dict(payload.get("experiments") or {})
         if experiment_name:
             name = str(experiment_name)
@@ -11714,10 +12402,27 @@ def _load_experiment_metadata_template_from_file(
         child_path = (metadata_path.parent / str(rel_metadata)).resolve()
         with child_path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
+        child_version = validate_mrax_file_version(
+            payload,
+            file_kind=f"MRax experiment metadata for '{name}'",
+        )
+        if child_version.tag_missing:
+            warnings.warn(
+                missing_mrax_version_message(f"MRax experiment metadata for '{name}'"),
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return _experiment_metadata_template_from_payload(
             payload,
             label=f"{metadata_path.name}:{name}",
             fallback_name=name,
+        )
+    version_info = validate_mrax_file_version(payload, file_kind="MRax experiment metadata")
+    if version_info.tag_missing:
+        warnings.warn(
+            missing_mrax_version_message("MRax experiment metadata"),
+            RuntimeWarning,
+            stacklevel=2,
         )
     return _experiment_metadata_template_from_payload(
         payload,
@@ -12102,7 +12807,7 @@ def _button_status_tip(button) -> str:
     tips = {
         "Load...": "Load a .mrax bundle, editable package, manifest, GUI state, ROI set, or mask.",
         "Save...": "Save the current study, GUI state, ROIs, and fit outputs as a .mrax bundle or folder.",
-        "Import...": "Import vendor data into MRax's internal study structure without changing source files.",
+        "Import...": "Import Bruker or recursive DICOM folder data without changing source files.",
         "Export...": "Export images, k-space, maps, and ROIs as analysis-friendly NumPy or NIfTI files.",
         "Shape...": "Create an editable rotated rectangle, square, circle, ellipse, or regular-polygon ROI.",
         "Lasso": "Draw a freehand ROI by dragging; support count, spline type, and gentle edge snap are configurable.",
@@ -12131,8 +12836,6 @@ def _button_status_tip(button) -> str:
         "Reset View": "Reset the current image or plot view to its full extent.",
         "Undo Visual": "Restore the previous visual-only view state for the current experiment.",
         "Reset Visual": "Show original data and clear visual-only mask, color, and transform modifiers.",
-        "Enlarge Image": "Open the current image, k-space, or map view in a larger window.",
-        "Enlarge Plot": "Open the signal or fit preview plot in a larger window.",
         "Study Summary": "Open a larger graphical summary of the loaded study.",
         "Reset Model Defaults": "Restore default model parameters, bounds, regularizers, and constants.",
         "Fit Sanity Check": "Run a lightweight validation of the current model, data, and optimizer setup.",
@@ -12196,6 +12899,7 @@ def _default_gui_config() -> dict[str, Any]:
     return {
         "format": "mrax.gui.config",
         "version": 1,
+        MRAX_VERSION_TAG: MRAX_VERSION,
         "custom_pools": {
             "ab_mt_n": {},
             "multipool_lorentzian": {},
@@ -12222,9 +12926,16 @@ def _load_gui_config(path: Path | None = None) -> dict[str, Any]:
         return default
     config = _default_gui_config()
     if isinstance(data, dict):
-        config.update({key: value for key, value in data.items() if key not in {"format", "version"}})
+        config.update(
+            {
+                key: value
+                for key, value in data.items()
+                if key not in {"format", "version", MRAX_VERSION_TAG}
+            }
+        )
         config["format"] = "mrax.gui.config"
         config["version"] = 1
+        config[MRAX_VERSION_TAG] = MRAX_VERSION
     if not isinstance(config.get("custom_pools"), dict):
         config["custom_pools"] = {"ab_mt_n": {}, "multipool_lorentzian": {}, "zaiss_full": {}}
     custom = dict(config.get("custom_pools") or {})
@@ -12243,6 +12954,7 @@ def _save_gui_config(config: dict[str, Any], path: Path | None = None) -> Path:
     payload.update(dict(config or {}))
     payload["format"] = "mrax.gui.config"
     payload["version"] = 1
+    payload[MRAX_VERSION_TAG] = MRAX_VERSION
     config_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return config_path
 
@@ -12404,12 +13116,45 @@ def _write_mrax_package_manifest(root: Path, entries: dict[str, str], *, warning
     payload = {
         "format": "mrax.gui.package",
         "version": 1,
+        MRAX_VERSION_TAG: MRAX_VERSION,
         "entries": entries,
     }
     if warnings:
         payload["warnings"] = list(warnings)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
+
+
+def _stamp_copied_study_snapshot(manifest_path: Path, session: GuiSession) -> None:
+    """Stamp a copied legacy snapshot without placing metadata in MRD payloads."""
+
+    manifest_path = Path(manifest_path)
+    root = manifest_path.parent.resolve()
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["format"] = "mrax.study"
+    payload["format_version"] = 1
+    payload[MRAX_VERSION_TAG] = MRAX_VERSION
+    geometry_by_name: dict[str, Any] = {}
+    session_experiments = ((session.data or {}).get("experiments") or {})
+    for name, pointer in dict(payload.get("experiments") or {}).items():
+        exp_data = session_experiments.get(name) or {}
+        geometry_by_name[str(name)] = _session_spatial_geometry_metadata(
+            session,
+            str(name),
+            exp_data,
+        )
+        if not isinstance(pointer, Mapping) or not pointer.get("metadata"):
+            continue
+        metadata_path = (root / str(pointer["metadata"])).resolve()
+        if not _is_relative_to(metadata_path, root) or not metadata_path.is_file():
+            continue
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata[MRAX_VERSION_TAG] = MRAX_VERSION
+        if str(name) in geometry_by_name:
+            metadata["spatial_geometry"] = geometry_by_name[str(name)]
+        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    payload["spatial_geometry"] = geometry_by_name
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _mrax_package_entries(root: Path) -> dict[str, Path]:
@@ -12419,6 +13164,16 @@ def _mrax_package_entries(root: Path) -> dict[str, Path]:
     if manifest.is_file():
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         if payload.get("format") == "mrax.gui.package":
+            package_version = validate_mrax_file_version(
+                payload,
+                file_kind="MRax package manifest",
+            )
+            if package_version.tag_missing:
+                warnings.warn(
+                    missing_mrax_version_message("MRax package manifest"),
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
             for key, value in dict(payload.get("entries") or {}).items():
                 candidate = (root / str(value)).resolve()
                 if not _is_relative_to(candidate, root):
@@ -12504,6 +13259,28 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
+def _session_spatial_geometry_metadata(
+    session: GuiSession,
+    experiment_name: str,
+    exp_data: Mapping[str, Any],
+) -> dict[str, Any]:
+    geometry = exp_data.get("spatial_geometry")
+    if isinstance(geometry, Mapping):
+        return _metadata_to_jsonable(dict(geometry))
+    if session.study is not None and experiment_name in (session.study.names or ()):
+        index = list(session.study.names).index(experiment_name)
+        dataset_geometry = session.study.datasets[index].spatial_geometry
+        if dataset_geometry is not None:
+            return dataset_geometry.to_metadata()
+    dims = dict(session.summary_by_name.get(experiment_name, {}).get("dims") or {})
+    shape = tuple(int(dims[name]) for name in spatial_names(dims)) or None
+    return SpatialGeometry(
+        spatial_shape=shape,
+        source="unknown",
+        status="unknown",
+    ).to_metadata()
+
+
 def _serialize_gui_state(
     session: GuiSession,
     *,
@@ -12517,6 +13294,7 @@ def _serialize_gui_state(
     arrays: dict[str, np.ndarray] = {}
     states: dict[str, Any] = {}
     fitted_map_rows: dict[str, list[dict[str, Any]]] = {}
+    spatial_geometry_rows: dict[str, Any] = {}
     original_image_rows: dict[str, dict[str, str]] = {}
     shared_roi_rows = _serialize_roi_rows(session.shared_rois, "shared_roi", arrays)
     for exp_name, state in session.view_states.items():
@@ -12525,15 +13303,24 @@ def _serialize_gui_state(
             "active_frame": state.active_frame,
             "active_z": state.active_z,
             "active_indices": dict(state.active_indices),
+            "active_image_plane": state.active_image_plane,
             "active_map": state.active_map,
             "active_kspace_mode": state.active_kspace_mode,
             "active_kspace_centering": state.active_kspace_centering,
+            "active_reconstruction_component": state.active_reconstruction_component,
+            "active_reconstruction_coil": state.active_reconstruction_coil,
+            "active_reconstruction_unwrap_phase": state.active_reconstruction_unwrap_phase,
             "visual_state": _visual_state_to_dict(state.visual_state),
             "fit_settings": _fit_settings_to_dict(state.fit_settings),
             "frame_mask": None if state.frame_mask is None else state.frame_mask.as_array().astype(bool).tolist(),
             "rois": roi_rows,
         }
     for exp_name, exp_data in ((session.data or {}).get("experiments") or {}).items():
+        spatial_geometry_rows[str(exp_name)] = _session_spatial_geometry_metadata(
+            session,
+            str(exp_name),
+            exp_data,
+        )
         original = exp_data.get("original_mr_image")
         if original is not None:
             key = f"original_{_safe_key(str(exp_name))}_mr_image"
@@ -12569,7 +13356,9 @@ def _serialize_gui_state(
     return (
         {
             "format": "mrax.gui.state",
-            "version": 2,
+            "version": 3,
+            MRAX_VERSION_TAG: MRAX_VERSION,
+            "spatial_plane_contract": "fixed_xyz_v1",
             "data_manifest": data_manifest_text,
             "fit_manifest": fit_manifest_text,
             "source_kind": session.source_kind,
@@ -12578,6 +13367,7 @@ def _serialize_gui_state(
             "view_states": states,
             "original_images": original_image_rows,
             "fitted_maps": fitted_map_rows,
+            "spatial_geometry": spatial_geometry_rows,
             "drift_results": drift_rows,
             "preview_results": {
                 key: _preview_result_to_json(value)
@@ -12609,7 +13399,7 @@ def _serialize_roi_rows(rois: list[ROI] | tuple[ROI, ...], prefix: str, arrays: 
 
 
 def _warn_restore(warnings: list[str] | None, message: str) -> None:
-    if warnings is not None:
+    if warnings is not None and str(message) not in warnings:
         warnings.append(str(message))
 
 
@@ -12732,10 +13522,12 @@ def _visual_state_from_dict(data: Mapping[str, Any]) -> VisualViewState:
     )
 
 
-_GUI_STATE_CURRENT_VERSION = 2
+_GUI_STATE_CURRENT_VERSION = 3
 _GUI_STATE_KNOWN_KEYS = {
     "format",
     "version",
+    MRAX_VERSION_TAG,
+    "spatial_plane_contract",
     "data_manifest",
     "fit_manifest",
     "source_kind",
@@ -12744,6 +13536,7 @@ _GUI_STATE_KNOWN_KEYS = {
     "view_states",
     "original_images",
     "fitted_maps",
+    "spatial_geometry",
     "drift_results",
     "preview_results",
     "fit_results",
@@ -12761,18 +13554,48 @@ def _restore_gui_state(
     fmt = str(payload.get("format") or "")
     if fmt != "mrax.gui.state":
         raise ValueError("GUI state format must be 'mrax.gui.state'.")
+    producer_version = validate_mrax_file_version(payload, file_kind="MRax GUI state")
+    if producer_version.tag_missing:
+        _warn_restore(warnings, missing_mrax_version_message("MRax GUI state"))
     if "version" not in payload:
         raise ValueError("GUI state version is required.")
     version = _safe_int_value(payload.get("version"), -1)
-    if version != _GUI_STATE_CURRENT_VERSION:
+    if version not in {2, _GUI_STATE_CURRENT_VERSION}:
         raise ValueError(
-            f"GUI state version {version} is not supported; expected {_GUI_STATE_CURRENT_VERSION}."
+            f"GUI state version {version} is not supported; expected 2 or {_GUI_STATE_CURRENT_VERSION}."
         )
+    legacy_dynamic_planes = version == 2
+    if not legacy_dynamic_planes and payload.get("spatial_plane_contract") != "fixed_xyz_v1":
+        raise ValueError("GUI state spatial_plane_contract must be 'fixed_xyz_v1'.")
     unknown_keys = sorted(str(key) for key in payload.keys() if str(key) not in _GUI_STATE_KNOWN_KEYS)
     if unknown_keys:
         raise ValueError(
             f"Unsupported GUI state top-level entr{'y' if len(unknown_keys) == 1 else 'ies'}: {', '.join(unknown_keys)}."
         )
+
+    if session.data is None:
+        raise RuntimeError("GUI state restoration requires a loaded MRax study.")
+    for exp_name, geometry_value in _safe_dict_value(payload.get("spatial_geometry")).items():
+        if exp_name not in session.experiment_names:
+            _warn_restore(
+                warnings,
+                f"Spatial geometry for missing experiment '{exp_name}' skipped.",
+            )
+            continue
+        if not isinstance(geometry_value, Mapping):
+            _warn_restore(
+                warnings,
+                f"Spatial geometry for '{exp_name}' skipped: expected mapping.",
+            )
+            continue
+        try:
+            geometry = SpatialGeometry.from_metadata(geometry_value)
+            session.data["experiments"][exp_name]["spatial_geometry"] = geometry.to_metadata()
+            if session.study is not None and exp_name in (session.study.names or ()):
+                index = list(session.study.names).index(exp_name)
+                session.study.datasets[index].spatial_geometry = geometry
+        except Exception as exc:
+            _warn_restore(warnings, f"Spatial geometry for '{exp_name}' skipped: {exc}")
 
     for exp_name, row in _safe_dict_value(payload.get("original_images")).items():
         if exp_name not in session.experiment_names:
@@ -12847,14 +13670,40 @@ def _restore_gui_state(
         except Exception as exc:
             _warn_restore(warnings, f"Active indices for '{exp_name}' reset to defaults: {exc}")
             active_indices = {}
+        native_image_plane = session.native_image_plane_for_experiment(str(exp_name))
+        active_image_plane = str(state_data.get("active_image_plane") or native_image_plane).lower()
+        if legacy_dynamic_planes:
+            active_image_plane = "axial"
+            _warn_restore(
+                warnings,
+                f"Image plane for '{exp_name}' reset to axial while migrating to fixed x/y/z planes.",
+            )
+        if active_image_plane not in {"axial", "coronal", "sagittal"}:
+            _warn_restore(
+                warnings,
+                f"Image plane for '{exp_name}' reset to its native orientation: unsupported value.",
+            )
+            active_image_plane = native_image_plane
         try:
             restored[str(exp_name)] = ExperimentViewState(
                 active_frame=_safe_int_value(state_data.get("active_frame"), 0),
                 active_z=_safe_int_value(state_data.get("active_z"), 0),
                 active_indices=active_indices,
+                active_image_plane=active_image_plane,
                 active_map=state_data.get("active_map"),
                 active_kspace_mode=str(state_data.get("active_kspace_mode") or "log_magnitude"),
                 active_kspace_centering=str(state_data.get("active_kspace_centering") or "auto"),
+                active_reconstruction_component=str(
+                    state_data.get("active_reconstruction_component") or "magnitude"
+                ),
+                active_reconstruction_coil=(
+                    None
+                    if state_data.get("active_reconstruction_coil") is None
+                    else _safe_int_value(state_data.get("active_reconstruction_coil"), 0)
+                ),
+                active_reconstruction_unwrap_phase=bool(
+                    state_data.get("active_reconstruction_unwrap_phase", True)
+                ),
                 rois=rois,
                 fit_settings=_fit_settings_from_dict(state_data.get("fit_settings") or {}),
                 frame_mask=None if frame_mask is None else FrameMask(np.asarray(frame_mask, dtype=bool)),
@@ -12966,7 +13815,11 @@ def _export_object_records_for_session(session: GuiSession) -> list[dict[str, An
     experiments = (session.data or {}).get("experiments") or {}
     for exp_name, exp_data in experiments.items():
         group = f"Experiment: {exp_name}"
-        dims = dict(exp_data.get("dims") or {})
+        dims = dict(
+            exp_data.get("dims")
+            or session.summary_by_name.get(str(exp_name), {}).get("dims")
+            or {}
+        )
         if exp_data.get("mr_image") is not None:
             current_image = np.asarray(exp_data["mr_image"])
             records.append(
@@ -12996,18 +13849,36 @@ def _export_object_records_for_session(session: GuiSession) -> list[dict[str, An
                         )
                     )
         processed = dict(exp_data.get("processed") or {})
-        if processed.get("raw_reconstruction") is not None:
-            records.append(
-                _export_record(
-                    "reconstruction",
-                    f"{exp_name} / MRax reconstruction",
-                    np.asarray(processed["raw_reconstruction"]),
-                    group=group,
-                    experiment=exp_name,
-                    name="raw_reconstruction",
-                    dims=dims,
-                )
+        for variant_name, component, coil_index, array in available_reconstruction_variants(
+            processed,
+            spatial_ndim=len(spatial_names(dims)),
+        ):
+            channel_label = "combined" if coil_index is None else f"coil {coil_index + 1}"
+            record = _export_record(
+                "reconstruction",
+                f"{exp_name} / MRax reconstruction / {channel_label} / {component}",
+                array,
+                group=group,
+                experiment=exp_name,
+                name=variant_name,
+                dims=dims,
+                unit="rad" if component == "phase" else "",
+                metadata={
+                    "component": component,
+                    "coil": None if coil_index is None else int(coil_index) + 1,
+                    "phase_unwrapped": bool(
+                        component == "phase" and not variant_name.endswith("_wrapped")
+                    ),
+                    "coil_combination": "vendor magnitude / coherent phase"
+                    if coil_index is None
+                    else "individual",
+                },
             )
+            record["nifti_reference"] = {
+                "experiment": str(exp_name),
+                "affine": _experiment_nifti_affine(session, str(exp_name)),
+            }
+            records.append(record)
         if exp_data.get("raw_kspace") is not None:
             records.append(
                 _export_record(
@@ -13039,18 +13910,18 @@ def _export_object_records_for_session(session: GuiSession) -> list[dict[str, An
     for roi in [*list(session.shared_rois), *list(session.rois)]:
         roi_by_name.setdefault(str(roi.name), roi)
     for roi in roi_by_name.values():
-        records.append(
-            _export_record(
-                "roi",
-                f"ROI / {roi.name}",
-                np.asarray(roi.mask),
-                group="ROIs",
-                name=roi.name,
-                dims=tuple(roi.dims or ()),
-                metadata=dict(roi.metadata),
-                roi=roi,
-            )
+        record = _export_record(
+            "roi",
+            f"ROI / {roi.name}",
+            np.asarray(roi.mask),
+            group="ROIs",
+            name=roi.name,
+            dims=tuple(roi.dims or ()),
+            metadata=dict(roi.metadata),
+            roi=roi,
         )
+        record["nifti_reference"] = _roi_nifti_reference(session, roi.metadata)
+        records.append(record)
     return records
 
 
@@ -13128,6 +13999,13 @@ def _single_export_record_metadata(record: Mapping[str, Any]) -> dict[str, Any]:
             "dims": list(roi.dims or ()),
             "metadata": _metadata_to_jsonable(dict(roi.metadata)),
         }
+    reference = record.get("nifti_reference")
+    if reference:
+        metadata["nifti_reference"] = {
+            key: value
+            for key, value in dict(reference).items()
+            if key != "affine"
+        }
     return _metadata_to_jsonable(metadata)
 
 
@@ -13195,10 +14073,133 @@ def _write_single_export_object(record: Mapping[str, Any], path: Path, file_type
             raise ValueError("NIfTI export supports real-valued 2D or 3D arrays only")
         from mrax.io.nifti import save_nifti
 
-        save_nifti(path, arr.astype(np.float32) if arr.dtype == bool else arr, np.eye(4))
+        reference = dict(record.get("nifti_reference") or {})
+        affine = _validated_nifti_affine(reference.get("affine"))
+        if affine is None:
+            affine = np.eye(4, dtype=float)
+        save_nifti(path, arr.astype(np.float32) if arr.dtype == bool else arr, affine)
     elif fmt == "json":
         path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
     return [path]
+
+
+def _validated_nifti_affine(value: Any) -> np.ndarray | None:
+    if value is None:
+        return None
+    try:
+        affine = np.asarray(value, dtype=float)
+    except (TypeError, ValueError):
+        return None
+    if affine.shape != (4, 4) or not np.all(np.isfinite(affine)):
+        return None
+    return affine
+
+
+def _experiment_nifti_affine(
+    session: GuiSession,
+    experiment_name: str | None,
+    *,
+    frame_index: int = 0,
+) -> np.ndarray | None:
+    if not experiment_name or not session.data:
+        return None
+    exp_data = (session.data.get("experiments") or {}).get(str(experiment_name))
+    if not isinstance(exp_data, Mapping):
+        return None
+
+    geometry_value = exp_data.get("spatial_geometry")
+    if not isinstance(geometry_value, Mapping):
+        extra_value = exp_data.get("extra_metadata")
+        if isinstance(extra_value, Mapping):
+            geometry_value = extra_value.get("spatial_geometry")
+    if isinstance(geometry_value, Mapping):
+        geometry_affine = SpatialGeometry.from_metadata(geometry_value).affine_for_frame(frame_index)
+        if geometry_affine is not None:
+            return geometry_affine
+        return None
+
+    metadata_sources = [
+        exp_data,
+        exp_data.get("extra_metadata") or {},
+        exp_data.get("processed") or {},
+        exp_data.get("kspace_metadata") or {},
+    ]
+    for metadata in metadata_sources:
+        if not isinstance(metadata, Mapping):
+            continue
+        affines = metadata.get("affines")
+        if affines is not None:
+            try:
+                candidates = list(affines)
+            except TypeError:
+                candidates = []
+            if candidates:
+                index = max(0, min(int(frame_index), len(candidates) - 1))
+                affine = _validated_nifti_affine(candidates[index])
+                if affine is not None:
+                    return affine
+        affine = _validated_nifti_affine(metadata.get("affine"))
+        if affine is not None:
+            return affine
+
+    extra = exp_data.get("extra_metadata") or {}
+    visu = extra.get("visu") if isinstance(extra, Mapping) else None
+    if isinstance(visu, Mapping):
+        try:
+            from mrax.io.bruker_import import bruker_affine_from_visu
+
+            affine_value = bruker_affine_from_visu(dict(visu))
+        except Exception:
+            return None
+        if isinstance(affine_value, list):
+            if not affine_value:
+                return None
+            index = max(0, min(int(frame_index), len(affine_value) - 1))
+            affine = affine_value[index]
+        else:
+            affine = affine_value
+        return _validated_nifti_affine(affine)
+    return None
+
+
+def _roi_nifti_reference(session: GuiSession, metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    roi_metadata = dict(metadata or {})
+    declared_experiment = str(roi_metadata.get("source_experiment") or "").strip()
+    reference_experiment = declared_experiment or str(session.selected_experiment or "").strip()
+    indices = roi_metadata.get("slice_indices") or {}
+    try:
+        frame_index = int(indices.get("frame", 0)) if isinstance(indices, Mapping) else 0
+    except (TypeError, ValueError):
+        frame_index = 0
+    affine = _experiment_nifti_affine(session, reference_experiment, frame_index=frame_index)
+    return {
+        "experiment": reference_experiment or None,
+        "selection": "mask metadata" if declared_experiment else "active experiment",
+        "frame_index": max(0, frame_index),
+        "affine": np.eye(4, dtype=float) if affine is None else affine,
+        "identity_fallback": affine is None,
+    }
+
+
+def _roi_nifti_reference_summary(session: GuiSession) -> str:
+    active = str(session.selected_experiment or "none")
+    roi_by_name: dict[str, ROI] = {}
+    for roi in [*list(session.shared_rois), *list(session.rois)]:
+        roi_by_name.setdefault(str(roi.name), roi)
+    if not roi_by_name:
+        return f"Active reference experiment: {active}. No ROI masks are active."
+
+    grouped: dict[tuple[str, bool], int] = {}
+    for roi in roi_by_name.values():
+        reference = _roi_nifti_reference(session, roi.metadata)
+        name = str(reference.get("experiment") or "unavailable")
+        fallback = bool(reference.get("identity_fallback"))
+        grouped[(name, fallback)] = grouped.get((name, fallback), 0) + 1
+    details = []
+    for (name, fallback), count in sorted(grouped.items()):
+        status = "identity fallback" if fallback else "reference affine"
+        details.append(f"{name}: {count} mask(s), {status}")
+    return f"Active reference experiment: {active}. ROI NIfTI references: " + "; ".join(details) + "."
 
 
 def _shape_text(value: Any) -> str:
@@ -13451,6 +14452,8 @@ def _roi_can_address_display_plane(
     spatial_dims: tuple[str, ...],
     indices: Mapping[str, int],
     display_shape: tuple[int, int],
+    *,
+    plane_dims: Sequence[str] = ("x", "y"),
 ) -> bool:
     try:
         broadcast_mask(
@@ -13459,7 +14462,12 @@ def _roi_can_address_display_plane(
             mask_dims=roi.dims,
             target_dims=spatial_dims,
         )
-        display_mask = mask_slice_for_display(roi.mask, dims=roi.dims, indices=indices)
+        display_mask = mask_slice_for_display(
+            roi.mask,
+            dims=roi.dims,
+            indices=indices,
+            plane_dims=plane_dims,
+        )
     except Exception:
         return False
     return tuple(np.asarray(display_mask).shape) == tuple(display_shape)

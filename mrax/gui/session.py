@@ -15,7 +15,14 @@ from mrax.analysis.dti import dti_design_rank, fit_dti_log_linear
 from mrax.analysis.timecourse import extract_timecourse as extract_timecourse_array
 from mrax.analysis.timecourse import extract_timecourse_from_experiment
 from mrax.core.loss_builder import run_fit
-from mrax.data_struct import DataSet, Experiment, Quantity, Study, save_study_results
+from mrax.data_struct import (
+    DataSet,
+    Experiment,
+    Quantity,
+    SpatialGeometry,
+    Study,
+    save_study_results,
+)
 from mrax.data_struct.dimensions import (
     frame_count_from_dims,
     non_spatial_names,
@@ -25,10 +32,17 @@ from mrax.data_struct.dimensions import (
 )
 from mrax.data_struct.quantity import require_quantity_dict
 from mrax.data_struct.storage import load_study_results
+from mrax.reco.components import reconstruction_coil_count, reconstruction_variant
 
 from .models import make_model, normalize_model_key
 
 _LOG = logging.getLogger(__name__)
+
+IMAGE_PLANE_DIMS: dict[str, tuple[str, str]] = {
+    "axial": ("x", "y"),
+    "coronal": ("x", "z"),
+    "sagittal": ("y", "z"),
+}
 
 
 @dataclass
@@ -115,9 +129,13 @@ class ExperimentViewState:
     active_frame: int = 0
     active_z: int = 0
     active_indices: dict[str, int] = field(default_factory=dict)
+    active_image_plane: str = "axial"
     active_map: str | None = None
     active_kspace_mode: str = "log_magnitude"
     active_kspace_centering: str = "auto"
+    active_reconstruction_component: str = "magnitude"
+    active_reconstruction_coil: int | None = None
+    active_reconstruction_unwrap_phase: bool = True
     rois: list[ROI] = field(default_factory=list)
     fit_settings: FitSettings = field(default_factory=FitSettings)
     frame_mask: FrameMask | None = None
@@ -164,9 +182,13 @@ class GuiSession:
     active_frame: int = 0
     active_z: int = 0
     active_indices: dict[str, int] = field(default_factory=dict)
+    active_image_plane: str = "axial"
     active_map: str | None = None
     active_kspace_mode: str = "log_magnitude"
     active_kspace_centering: str = "auto"
+    active_reconstruction_component: str = "magnitude"
+    active_reconstruction_coil: int | None = None
+    active_reconstruction_unwrap_phase: bool = True
     rois: list[ROI] = field(default_factory=list)
     shared_rois: list[ROI] = field(default_factory=list)
     fit_settings: FitSettings = field(default_factory=FitSettings)
@@ -299,6 +321,40 @@ class GuiSession:
         self.selected_experiment = names[0] if names else None
         self._reset_current_view_state()
 
+    def load_dicom_study(
+        self,
+        study_root: str | Path,
+        *,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+    ) -> None:
+        """Recursively import a DICOM folder as an in-memory MRax study."""
+
+        from mrax.io.dicom import load_dicom_study
+
+        root = Path(study_root)
+        if progress_callback is not None:
+            progress_callback(0, 1, "Reading DICOM series")
+        study, metadata = load_dicom_study(root, recursive=True)
+        if progress_callback is not None:
+            progress_callback(1, 1, "DICOM import complete")
+        self.study = study
+        self.import_metadata = metadata
+        self.data = _study_to_session_data(
+            study,
+            metadata,
+            source_root=root,
+            source_kind="dicom",
+        )
+        self._ensure_original_image_snapshots()
+        self.manifest_path = None
+        self.source_kind = "dicom"
+        self.view_states.clear()
+        self.shared_rois.clear()
+        self._slice_cache.clear()
+        names = self.experiment_names
+        self.selected_experiment = names[0] if names else None
+        self._reset_current_view_state()
+
     def add_experiment(
         self,
         name: str,
@@ -331,12 +387,17 @@ class GuiSession:
             )
         observables_map = require_quantity_dict(dict(observables or {}), "Observable")
         experiment = Experiment(dims=dims_map, observables=observables_map, exp_type=exp_type or "anatomical")
+        metadata = dict(extra_metadata or {})
+        spatial_shape = tuple(dims_map[name] for name in spatial_names(dims_map))
+        geometry = _spatial_geometry_from_metadata(metadata, spatial_shape=spatial_shape)
+        metadata["spatial_geometry"] = geometry.to_metadata()
         dataset = DataSet(
             data=arr,
             name=exp_name,
             processed=dict(processed or {}),
             kspace=None if kspace is None else jnp.asarray(kspace),
             kspace_metadata=dict(kspace_metadata or {}),
+            spatial_geometry=geometry,
         )
         model = make_model(model_name or "identity")
         experiment.validate(dataset)
@@ -364,14 +425,18 @@ class GuiSession:
         self.study = study
         self.manifest_path = None
         self.source_kind = "memory"
-        metadata = dict(extra_metadata or {})
         if data_role:
             metadata["data_role"] = str(data_role)
         if non_imaging:
             metadata["non_imaging"] = True
         self.import_metadata = self.import_metadata or {"subject": self.study_name, "experiments": {}}
         self.import_metadata.setdefault("experiments", {})[exp_name] = metadata
-        self.data = _study_to_session_data(study, self.import_metadata, source_root=Path.cwd())
+        self.data = _study_to_session_data(
+            study,
+            self.import_metadata,
+            source_root=Path.cwd(),
+            source_kind="memory",
+        )
         for old_name, old_data in previous_experiments.items():
             if old_name not in self.data.get("experiments", {}):
                 continue
@@ -573,9 +638,13 @@ class GuiSession:
             active_frame=int(self.active_frame),
             active_z=int(self.active_z),
             active_indices=dict(self.active_indices),
+            active_image_plane=self.active_image_plane,
             active_map=self.active_map,
             active_kspace_mode=self.active_kspace_mode,
             active_kspace_centering=self.active_kspace_centering,
+            active_reconstruction_component=self.active_reconstruction_component,
+            active_reconstruction_coil=self.active_reconstruction_coil,
+            active_reconstruction_unwrap_phase=self.active_reconstruction_unwrap_phase,
             rois=[_copy_roi(roi) for roi in self.rois],
             fit_settings=replace(self.fit_settings),
             frame_mask=None if self.frame_mask is None else FrameMask(self.frame_mask.as_array().copy()),
@@ -592,9 +661,23 @@ class GuiSession:
         self.active_frame = int(state.active_frame)
         self.active_z = int(state.active_z)
         self.active_indices = dict(state.active_indices)
+        self.active_image_plane = _normalize_image_plane(state.active_image_plane)
         self.active_map = state.active_map if state.active_map in self.map_names else (self.map_names[0] if self.map_names else None)
         self.active_kspace_mode = state.active_kspace_mode
         self.active_kspace_centering = state.active_kspace_centering
+        component = str(state.active_reconstruction_component or "magnitude").lower()
+        self.active_reconstruction_component = (
+            component if component in {"magnitude", "phase"} else "magnitude"
+        )
+        coil = state.active_reconstruction_coil
+        self.active_reconstruction_coil = (
+            int(coil)
+            if coil is not None and 0 <= int(coil) < self.reconstruction_coil_count
+            else None
+        )
+        self.active_reconstruction_unwrap_phase = bool(
+            state.active_reconstruction_unwrap_phase
+        )
         self.rois = [_copy_roi(roi) for roi in state.rois]
         self.fit_settings = replace(state.fit_settings)
         if self.fit_settings.model_name is None:
@@ -610,9 +693,13 @@ class GuiSession:
         self.active_frame = 0
         self.active_z = 0
         self.active_indices.clear()
+        self.active_image_plane = self.native_image_plane
         self.active_map = self.map_names[0] if self.map_names else None
         self.active_kspace_mode = "log_magnitude"
         self.active_kspace_centering = "auto"
+        self.active_reconstruction_component = "magnitude"
+        self.active_reconstruction_coil = None
+        self.active_reconstruction_unwrap_phase = True
         # Shared ROIs are available in the ROI list, but a newly visited experiment
         # starts with them disabled. "Apply All" creates explicit per-experiment
         # states when the user wants every experiment activated.
@@ -665,6 +752,7 @@ class GuiSession:
                 data=jnp.asarray(_as_numpy(exp_data.get("mr_image"))),
                 name=name,
                 kspace=None if exp_data.get("raw_kspace") is None else jnp.asarray(exp_data.get("raw_kspace")),
+                spatial_geometry=_spatial_geometry_from_experiment_data(exp_data, dims=dims),
             )
             experiments.append(experiment)
             datasets.append(dataset)
@@ -814,8 +902,41 @@ class GuiSession:
 
     @property
     def reconstruction_array(self) -> np.ndarray | None:
-        value = self.processed_arrays.get("raw_reconstruction")
-        return None if value is None else _as_numpy(value)
+        try:
+            return reconstruction_variant(self.processed_arrays, component="magnitude")
+        except (RuntimeError, ValueError):
+            return None
+
+    @property
+    def reconstruction_coil_count(self) -> int:
+        return reconstruction_coil_count(self.processed_arrays)
+
+    def reconstruction_display_array(
+        self,
+        *,
+        component: str | None = None,
+        coil: int | None = None,
+        frame: int | None = None,
+        combined: bool = False,
+        unwrap_phase: bool | None = None,
+    ) -> np.ndarray:
+        """Return the selected real reconstruction component before 2D slicing."""
+
+        component_name = component or self.active_reconstruction_component
+        coil_index = None if combined else (self.active_reconstruction_coil if coil is None else int(coil))
+        should_unwrap = (
+            self.active_reconstruction_unwrap_phase
+            if unwrap_phase is None
+            else bool(unwrap_phase)
+        )
+        return reconstruction_variant(
+            self.processed_arrays,
+            component=component_name,
+            coil=coil_index,
+            frame=frame,
+            unwrap_phase=bool(should_unwrap and component_name == "phase"),
+            spatial_ndim=len(self.spatial_dim_names),
+        )
 
     @property
     def kspace_array(self) -> np.ndarray | None:
@@ -829,7 +950,10 @@ class GuiSession:
         if exp_data.get("raw_kspace") is not None:
             return True
         processed = exp_data.get("processed") or {}
-        return processed.get("raw_reconstruction") is not None
+        return (
+            processed.get("raw_reconstruction") is not None
+            or processed.get("raw_reconstruction_coils") is not None
+        )
 
     def can_lazy_load_raw_data(self, name: str | None = None) -> bool:
         if self.source_kind != "bruker" or not self.data:
@@ -939,6 +1063,8 @@ class GuiSession:
         target.kspace = None if dataset.kspace is None else jnp.asarray(dataset.kspace)
         target.processed = dict(dataset.processed or {})
         target.kspace_metadata = dict(dataset.kspace_metadata or {})
+        if dataset.spatial_geometry is not None:
+            target.spatial_geometry = dataset.spatial_geometry
 
     @property
     def fitted_maps(self) -> Mapping[str, Any]:
@@ -1031,14 +1157,187 @@ class GuiSession:
             arr = self.kspace_array
             return [] if arr is None else _axis_controls_for_kspace(arr, self.experiment_dims)
         if kind in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"}:
-            arr = self.reconstruction_array
-            return [] if arr is None else _axis_controls_for_image(arr, self.experiment_dims)
+            try:
+                arr = (
+                    self.reconstruction_display_array(unwrap_phase=False)
+                    if kind == "mrax_reconstruction"
+                    else self.reconstruction_display_array(component="magnitude", combined=True)
+                )
+            except (RuntimeError, ValueError, IndexError):
+                arr = None
+            return (
+                []
+                if arr is None
+                else _axis_controls_for_image(
+                    arr,
+                    self.experiment_dims,
+                    plane_dims=self.image_plane_dims,
+                )
+            )
         if kind == "map":
             try:
-                return _axis_controls_for_map(self.map_array(), self.experiment_dims)
+                return _axis_controls_for_map(
+                    self.map_array(),
+                    self.experiment_dims,
+                    plane_dims=self.image_plane_dims,
+                )
             except Exception:
                 return []
-        return _axis_controls_for_image(self.image_array, self.experiment_dims)
+        return _axis_controls_for_image(
+            self.image_array,
+            self.experiment_dims,
+            plane_dims=self.image_plane_dims,
+        )
+
+    @property
+    def image_plane_dims(self) -> tuple[str, str]:
+        plane = _normalize_image_plane(self.active_image_plane)
+        return self._image_plane_dims_for_experiment()[plane]
+
+    def _image_plane_dims_for_experiment(
+        self,
+        name: str | None = None,
+    ) -> dict[str, tuple[str, str]]:
+        if not self.data:
+            return dict(IMAGE_PLANE_DIMS)
+        exp_name = name or self.selected_experiment
+        exp_data = self.data.get("experiments", {}).get(exp_name or "")
+        if not isinstance(exp_data, Mapping):
+            return dict(IMAGE_PLANE_DIMS)
+        summary = self.summary_by_name.get(exp_name or "", {})
+        dims = {
+            str(key): int(value)
+            for key, value in dict(summary.get("dims") or {}).items()
+        }
+        spatial_dims = tuple(spatial_names(dims))
+        if spatial_dims != ("x", "y", "z"):
+            return dict(IMAGE_PLANE_DIMS)
+        geometry = _spatial_geometry_from_experiment_data(exp_data, dims=dims)
+        labels = geometry.axis_anatomical_labels
+        if labels is None:
+            extra = exp_data.get("extra_metadata")
+            legacy_labels = (
+                extra.get("image_axis_anatomical_labels")
+                if isinstance(extra, Mapping)
+                else None
+            )
+            try:
+                labels = tuple(str(value).lower() for value in legacy_labels)  # type: ignore[arg-type]
+            except TypeError:
+                labels = None
+        if labels is None or len(labels) != 3 or set(labels) != {"x", "y", "z"}:
+            return dict(IMAGE_PLANE_DIMS)
+        dimension_for_axis = dict(zip(labels, spatial_dims))
+        return {
+            plane: (
+                dimension_for_axis[anatomical_axes[0]],
+                dimension_for_axis[anatomical_axes[1]],
+            )
+            for plane, anatomical_axes in IMAGE_PLANE_DIMS.items()
+        }
+
+    @property
+    def native_image_plane(self) -> str:
+        return self.native_image_plane_for_experiment()
+
+    def native_image_plane_for_experiment(self, name: str | None = None) -> str:
+        plane_dims = self._image_plane_dims_for_experiment(name)
+        for plane, dims in plane_dims.items():
+            if set(dims) == {"x", "y"}:
+                return plane
+        if self.data:
+            exp_name = name or self.selected_experiment
+            exp_data = self.data.get("experiments", {}).get(exp_name or "")
+            extra = exp_data.get("extra_metadata") if isinstance(exp_data, Mapping) else None
+            legacy_plane = extra.get("native_image_plane") if isinstance(extra, Mapping) else None
+            if legacy_plane:
+                try:
+                    return _normalize_image_plane(str(legacy_plane))
+                except ValueError:
+                    pass
+        return "axial"
+
+    @property
+    def image_slice_dim(self) -> str:
+        plane = set(self.image_plane_dims)
+        return next((name for name in ("x", "y", "z") if name not in plane), "z")
+
+    @property
+    def image_plane_voxel_sizes(self) -> tuple[float, float]:
+        """Physical pixel sizes for the active anatomical plane, or unit spacing."""
+
+        if not self.is_loaded:
+            return (1.0, 1.0)
+        geometry = _spatial_geometry_from_experiment_data(
+            self.current_experiment,
+            dims=self.experiment_dims,
+        )
+        spatial_dims = tuple(spatial_names(self.experiment_dims))
+        if geometry.voxel_sizes is None or len(geometry.voxel_sizes) < len(spatial_dims):
+            return (1.0, 1.0)
+        spacing_by_dim = dict(zip(spatial_dims, geometry.voxel_sizes))
+        try:
+            first, second = (float(spacing_by_dim[name]) for name in self.image_plane_dims)
+        except (KeyError, TypeError, ValueError):
+            return (1.0, 1.0)
+        if first <= 0 or second <= 0 or not np.isfinite((first, second)).all():
+            return (1.0, 1.0)
+        return first, second
+
+    def supports_image_planes(self, kind: str = "image") -> bool:
+        kind = kind.lower().replace("-", "_").replace(" ", "_")
+        if self.is_non_imaging or kind == "k_space":
+            return False
+        if not {"x", "y", "z"}.issubset(self.experiment_dims):
+            return False
+        if kind in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"}:
+            try:
+                array = (
+                    self.reconstruction_display_array(unwrap_phase=False)
+                    if kind == "mrax_reconstruction"
+                    else self.reconstruction_display_array(component="magnitude", combined=True)
+                )
+            except (RuntimeError, ValueError, IndexError):
+                array = None
+        elif kind == "map":
+            try:
+                array = self.map_array()
+            except Exception:
+                return False
+        else:
+            array = self.image_array
+        return array is not None and np.asarray(array).ndim >= 3
+
+    def set_image_plane(self, plane: str) -> None:
+        normalized = _normalize_image_plane(plane)
+        if normalized == self.active_image_plane:
+            return
+        self.active_image_plane = normalized
+        self._slice_cache.clear()
+
+    def set_reconstruction_component(self, component: str) -> None:
+        component_name = str(component or "magnitude").strip().lower()
+        if component_name not in {"magnitude", "phase"}:
+            raise ValueError("Reconstruction component must be 'magnitude' or 'phase'.")
+        self.active_reconstruction_component = component_name
+        self._slice_cache.clear()
+
+    def set_reconstruction_coil(self, coil: int | None) -> None:
+        if coil is None:
+            self.active_reconstruction_coil = None
+        else:
+            coil_index = int(coil)
+            count = self.reconstruction_coil_count
+            if coil_index < 0 or coil_index >= count:
+                raise IndexError(
+                    f"Reconstruction coil {coil_index + 1} is outside the available range 1..{count}."
+                )
+            self.active_reconstruction_coil = coil_index
+        self._slice_cache.clear()
+
+    def set_reconstruction_phase_unwrap(self, enabled: bool) -> None:
+        self.active_reconstruction_unwrap_phase = bool(enabled)
+        self._slice_cache.clear()
 
     def set_active_index(self, key: str, value: int) -> None:
         size = None
@@ -1075,13 +1374,20 @@ class GuiSession:
         indices["frame"] = frame_idx
         indices["z"] = z_idx
         source = "original" if original else "current"
-        key = ("image", source, self.selected_experiment, tuple(sorted(indices.items())))
+        key = (
+            "image",
+            source,
+            self.selected_experiment,
+            self.active_image_plane,
+            tuple(sorted(indices.items())),
+        )
         if key not in self._slice_cache:
             self._slice_cache[key] = _display_slice(
                 self.original_image_array if original else self.image_array,
                 dims=self.experiment_dims,
                 indices=indices,
                 kind="image",
+                plane_dims=self.image_plane_dims,
             )
         return self._slice_cache[key]
 
@@ -1104,22 +1410,46 @@ class GuiSession:
             selected = np.take(selected, 0, axis=0)
         return np.asarray(selected).reshape((-1,))
 
-    def reconstruction_image(self, frame: int | None = None, z: int | None = None) -> np.ndarray:
-        reconstruction = self.reconstruction_array
-        if reconstruction is None:
-            raise RuntimeError("Current experiment does not contain an MRax raw reconstruction")
+    def reconstruction_image(
+        self,
+        frame: int | None = None,
+        z: int | None = None,
+        *,
+        component: str | None = None,
+        coil: int | None = None,
+        combined: bool = False,
+        unwrap_phase: bool | None = None,
+    ) -> np.ndarray:
         frame_idx = self._bounded_frame(frame)
+        reconstruction = self.reconstruction_display_array(
+            component=component,
+            coil=coil,
+            frame=frame_idx,
+            combined=combined,
+            unwrap_phase=unwrap_phase,
+        )
         z_idx = self.active_z if z is None else max(0, int(z))
         indices = dict(self.active_indices)
         indices["frame"] = frame_idx
         indices["z"] = z_idx
-        key = ("reconstruction", self.selected_experiment, tuple(sorted(indices.items())))
+        display_indices = dict(indices)
+        display_indices["frame"] = 0
+        key = (
+            "reconstruction",
+            self.selected_experiment,
+            component or self.active_reconstruction_component,
+            None if combined else (self.active_reconstruction_coil if coil is None else int(coil)),
+            self.active_reconstruction_unwrap_phase if unwrap_phase is None else bool(unwrap_phase),
+            self.active_image_plane,
+            tuple(sorted(indices.items())),
+        )
         if key not in self._slice_cache:
             self._slice_cache[key] = _display_slice(
                 reconstruction,
                 dims=self.experiment_dims,
-                indices=indices,
+                indices=display_indices,
                 kind="image",
+                plane_dims=self.image_plane_dims,
             )
         return self._slice_cache[key]
 
@@ -1157,13 +1487,20 @@ class GuiSession:
         z_idx = self.active_z if z is None else max(0, int(z))
         indices = dict(self.active_indices)
         indices["z"] = z_idx
-        key = ("map", self.selected_experiment, map_name, tuple(sorted(indices.items())))
+        key = (
+            "map",
+            self.selected_experiment,
+            map_name,
+            self.active_image_plane,
+            tuple(sorted(indices.items())),
+        )
         if key not in self._slice_cache:
             self._slice_cache[key] = _display_slice(
                 self.map_array(map_name),
                 dims=self.experiment_dims,
                 indices=indices,
                 kind="map",
+                plane_dims=self.image_plane_dims,
             )
         return self._slice_cache[key]
 
@@ -1267,6 +1604,9 @@ class GuiSession:
                     active_map=None,
                     active_kspace_mode=self.active_kspace_mode,
                     active_kspace_centering=self.active_kspace_centering,
+                    active_reconstruction_component=self.active_reconstruction_component,
+                    active_reconstruction_coil=self.active_reconstruction_coil,
+                    active_reconstruction_unwrap_phase=self.active_reconstruction_unwrap_phase,
                     rois=[_copy_roi(roi) for roi in current_rois],
                     fit_settings=FitSettings(
                         model_name=normalize_model_key((self.data["experiments"][name] or {}).get("model")),
@@ -1380,6 +1720,10 @@ class GuiSession:
             name=self.selected_experiment or "gui_dataset",
             processed=dict(self.processed_arrays or {}),
             kspace=None if self.kspace_array is None else jnp.asarray(self.kspace_array),
+            spatial_geometry=_spatial_geometry_from_experiment_data(
+                self.current_experiment,
+                dims=self.experiment_dims,
+            ),
         )
 
     def build_fit_inputs(self, model_name: str | None = None) -> tuple[Experiment, Any, DataSet, Study]:
@@ -1576,6 +1920,11 @@ class GuiSession:
             "loss_history": losses,
             "cached": False,
             "fit_notes": fit_notes,
+            "spatial_geometry": (
+                dataset.spatial_geometry.to_metadata()
+                if dataset.spatial_geometry is not None
+                else None
+            ),
         }
 
     def _dti_initial_params(
@@ -2286,6 +2635,56 @@ def _session_experiment_data_role(exp_data: Mapping[str, Any], dims: Mapping[str
     return "non_imaging" if _session_experiment_is_non_imaging(exp_data, dims) else "image"
 
 
+def _spatial_geometry_from_metadata(
+    metadata: Mapping[str, Any] | None,
+    *,
+    spatial_shape: Sequence[int] | None = None,
+) -> SpatialGeometry:
+    values = dict(metadata or {})
+    geometry_value = values.get("spatial_geometry")
+    if isinstance(geometry_value, Mapping):
+        geometry = SpatialGeometry.from_metadata(geometry_value)
+        if geometry.spatial_shape is not None and spatial_shape is not None:
+            if tuple(geometry.spatial_shape) != tuple(int(value) for value in spatial_shape):
+                raise ValueError(
+                    f"Spatial geometry shape {geometry.spatial_shape} does not match "
+                    f"image spatial shape {tuple(spatial_shape)}."
+                )
+        if geometry.spatial_shape is not None or spatial_shape is None:
+            return geometry
+        payload = geometry.to_metadata()
+        payload["spatial_shape"] = list(spatial_shape)
+        return SpatialGeometry.from_metadata(payload)
+    affine_values = values.get("affines")
+    if affine_values is None:
+        affine_values = values.get("affine")
+    source = str(values.get("import_format") or values.get("format") or "legacy")
+    return SpatialGeometry.from_affines(
+        affine_values,
+        spatial_shape=spatial_shape,
+        source=source,
+    )
+
+
+def _spatial_geometry_from_experiment_data(
+    exp_data: Mapping[str, Any],
+    *,
+    dims: Mapping[str, int] | None = None,
+) -> SpatialGeometry:
+    dims_map = dict(dims or exp_data.get("dims") or {})
+    spatial_shape = tuple(int(dims_map[name]) for name in spatial_names(dims_map)) or None
+    direct = exp_data.get("spatial_geometry")
+    if isinstance(direct, Mapping):
+        return _spatial_geometry_from_metadata(
+            {"spatial_geometry": direct},
+            spatial_shape=spatial_shape,
+        )
+    return _spatial_geometry_from_metadata(
+        exp_data.get("extra_metadata") if isinstance(exp_data.get("extra_metadata"), Mapping) else exp_data,
+        spatial_shape=spatial_shape,
+    )
+
+
 def _expand_kspace_for_inserted_image_axes(
     kspace: Any,
     *,
@@ -2381,7 +2780,13 @@ def _default_ab_mt_map_unit(kind: str) -> str:
     return {"t1": "ms", "b1": "%", "b0": "ppm"}[kind]
 
 
-def _study_to_session_data(study: Study, metadata: dict[str, Any] | None, *, source_root: Path) -> dict[str, Any]:
+def _study_to_session_data(
+    study: Study,
+    metadata: dict[str, Any] | None,
+    *,
+    source_root: Path,
+    source_kind: str = "bruker",
+) -> dict[str, Any]:
     metadata = metadata or {}
     experiments: dict[str, Any] = {}
     summary_entries: list[dict[str, Any]] = []
@@ -2407,6 +2812,14 @@ def _study_to_session_data(study: Study, metadata: dict[str, Any] | None, *, sou
             "processed": dict(dataset.processed or {}),
             "kspace_metadata": dict(dataset.kspace_metadata or {}),
             "extra_metadata": extra,
+            "spatial_geometry": (
+                dataset.spatial_geometry.to_metadata()
+                if dataset.spatial_geometry is not None
+                else _spatial_geometry_from_metadata(
+                    extra,
+                    spatial_shape=experiment.spatial_shape,
+                ).to_metadata()
+            ),
             "plots": {},
         }
         summary_entries.append(
@@ -2443,11 +2856,26 @@ def _study_to_session_data(study: Study, metadata: dict[str, Any] | None, *, sou
             "study_name": metadata.get("subject") or source_root.name,
             "summary": {"experiments": summary_entries},
             "targets": [],
-            "source": {"kind": "bruker", "path": str(source_root)},
+            "source": {"kind": source_kind, "path": str(source_root)},
         },
         "experiments": experiments,
         "study_globals": dict(study.study_globals or {}),
     }
+
+
+def _normalize_image_plane(plane: str | None) -> str:
+    normalized = str(plane or "axial").strip().lower()
+    aliases = {
+        "transverse": "axial",
+        "xy": "axial",
+        "xz": "coronal",
+        "yz": "sagittal",
+        "saggital": "sagittal",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in IMAGE_PLANE_DIMS:
+        raise ValueError("Image plane must be axial, coronal, or sagittal")
+    return normalized
 
 
 def _display_slice(
@@ -2456,6 +2884,7 @@ def _display_slice(
     dims: Mapping[str, int] | None = None,
     indices: Mapping[str, int] | None = None,
     kind: str = "image",
+    plane_dims: Sequence[str] = ("x", "y"),
 ) -> np.ndarray:
     arr = np.asarray(array)
     if arr.ndim == 0:
@@ -2465,7 +2894,7 @@ def _display_slice(
     if arr.ndim == 2:
         return arr
 
-    controls = _axis_controls_for_kind(arr, dims or {}, kind)
+    controls = _axis_controls_for_kind(arr, dims or {}, kind, plane_dims=plane_dims)
     index_map = dict(indices or {})
     slicer: list[object] = [slice(None)] * arr.ndim
     for control in controls:
@@ -2475,6 +2904,16 @@ def _display_slice(
             value = int(index_map.get(key, 0))
             slicer[axis] = max(0, min(value, arr.shape[axis] - 1))
     selected = np.asarray(arr[tuple(slicer)])
+    if selected.ndim == 2:
+        dim_names = list((dims or {}).keys()) if len(dims or {}) == arr.ndim else []
+        if dim_names:
+            sliced_axes = {int(control["axis"]) for control in controls}
+            selected_dims = [name for axis, name in enumerate(dim_names) if axis not in sliced_axes]
+            requested = [str(name) for name in plane_dims]
+            if len(selected_dims) == 2 and set(selected_dims) == set(requested):
+                order = [selected_dims.index(name) for name in requested]
+                selected = np.transpose(selected, order)
+        return selected
     selected = np.squeeze(selected)
     if selected.ndim == 0:
         return selected.reshape((1, 1))
@@ -2493,23 +2932,31 @@ def _axis_controls_for_kind(
     arr: np.ndarray,
     dims: Mapping[str, int],
     kind: str,
+    *,
+    plane_dims: Sequence[str] = ("x", "y"),
 ) -> list[dict[str, int | str]]:
     if kind == "kspace":
         return _axis_controls_for_kspace(arr, dims)
     if kind == "map":
-        return _axis_controls_for_map(arr, dims)
-    return _axis_controls_for_image(arr, dims)
+        return _axis_controls_for_map(arr, dims, plane_dims=plane_dims)
+    return _axis_controls_for_image(arr, dims, plane_dims=plane_dims)
 
 
-def _axis_controls_for_image(arr: np.ndarray, dims: Mapping[str, int]) -> list[dict[str, int | str]]:
+def _axis_controls_for_image(
+    arr: np.ndarray,
+    dims: Mapping[str, int],
+    *,
+    plane_dims: Sequence[str] = ("x", "y"),
+) -> list[dict[str, int | str]]:
     arr = np.asarray(arr)
     if arr.ndim <= 2:
         return []
     dim_names = list(dims.keys()) if len(dims) == arr.ndim else []
     controls: list[dict[str, int | str]] = []
     if dim_names:
+        displayed = {str(name) for name in plane_dims}
         for axis, (name, size) in enumerate(zip(dim_names, arr.shape)):
-            if name in ("x", "y"):
+            if name in displayed:
                 continue
             key = "frame" if name in ("frame", "t") and len(controls) == 0 else name
             if name == "z":
@@ -2536,17 +2983,23 @@ def _axis_controls_for_non_image(arr: np.ndarray, dims: Mapping[str, int]) -> li
     return controls
 
 
-def _axis_controls_for_map(arr: np.ndarray, dims: Mapping[str, int]) -> list[dict[str, int | str]]:
+def _axis_controls_for_map(
+    arr: np.ndarray,
+    dims: Mapping[str, int],
+    *,
+    plane_dims: Sequence[str] = ("x", "y"),
+) -> list[dict[str, int | str]]:
     arr = np.asarray(arr)
     if arr.ndim <= 2:
         return []
     controls: list[dict[str, int | str]] = []
+    displayed = {str(name) for name in plane_dims}
     if dims:
         spatial = spatial_names(dims)
         spatial_shape = tuple(int(dims[name]) for name in spatial)
         if spatial and tuple(int(v) for v in arr.shape) == spatial_shape:
             for axis, name in enumerate(spatial):
-                if name in ("x", "y"):
+                if name in displayed:
                     continue
                 controls.append({"key": name, "label": name, "axis": axis, "size": int(arr.shape[axis])})
             return controls
@@ -2554,7 +3007,7 @@ def _axis_controls_for_map(arr: np.ndarray, dims: Mapping[str, int]) -> list[dic
         dim_names = list(dims.keys()) if len(dims) == arr.ndim else []
         if dim_names:
             for axis, (name, size) in enumerate(zip(dim_names, arr.shape)):
-                if name in ("x", "y"):
+                if name in displayed:
                     continue
                 key = "frame" if name in ("frame", "t") and axis == 0 else name
                 controls.append({"key": key, "label": name, "axis": axis, "size": int(size)})

@@ -1,9 +1,12 @@
 import json
+import tomllib
+from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from mrax import MRAX_VERSION, MRAX_VERSION_TAG, __version__
 from mrax.core.loss_builder import run_fit
 from mrax.data_struct import DataSet, Quantity
 from mrax.data_struct.storage import _resolve_manifest_path
@@ -14,6 +17,19 @@ from mrax.library import (
     make_dti_tensor_model,
     make_t2_se_model,
 )
+from mrax.versioning import versioned_payload
+
+
+def test_global_mrax_version_is_the_packaging_and_file_tag_source():
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
+
+    assert MRAX_VERSION == __version__ == "0.2.0"
+    assert MRAX_VERSION_TAG == "mrax_version"
+    assert project["project"]["dynamic"] == ["version"]
+    assert project["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "mrax._version.MRAX_VERSION"
+    }
+    assert versioned_payload({}) == {MRAX_VERSION_TAG: MRAX_VERSION}
 
 
 def test_constant_data_fit_uses_bounded_rms_scaling():
@@ -64,6 +80,7 @@ def test_package_entries_must_remain_below_package_directory(tmp_path):
             {
                 "format": "mrax.gui.package",
                 "version": 1,
+                "mrax_version": __version__,
                 "entries": {"gui_state": "../outside.json"},
             }
         ),

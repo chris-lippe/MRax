@@ -25,6 +25,24 @@ Image-domain operations such as output cropping, magnitude conversion, coil
 combination, and transposition are separate. They support display or vendor comparison;
 they are not corrected raw k-space.
 
+Phase images
+------------
+
+``unwrap_phase_image(phase, spatial_ndim=...)`` unwraps one to three trailing spatial
+axes independently for every leading frame, echo, coil, or observable index. Supplying
+``spatial_ndim`` is important whenever the array contains non-spatial leading axes.
+MRax reconstruction views use this helper automatically, while wrapped phase remains
+available for diagnostics and export. Two- and three-dimensional data use a JAX-native
+least-squares cosine-transform solution. Reconstruction views additionally supply image
+magnitude as reliability weights to a bounded preconditioned conjugate-gradient
+refinement, concentrating accuracy in supported anatomy without letting noisy
+background phase create line artifacts [GhigliaRomero1994]_. One-dimensional data use
+direct Itoh integration [Itoh1982]_. The returned phase always remains exactly
+equivalent to its input modulo ``2*pi``.
+
+Callers with a complex image can use ``weights=abs(image)``. Without weights, the fast
+unweighted cosine-transform solution is returned.
+
 Processing Blocks
 -----------------
 

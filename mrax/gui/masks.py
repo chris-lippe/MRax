@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from mrax import MRAX_VERSION, MRAX_VERSION_TAG
 from mrax.analysis import ROI, match_spatial_mask
+from mrax.versioning import missing_mrax_version_message, validate_mrax_file_version
 
 MASK_SET_VERSION = 1
 
@@ -78,6 +81,7 @@ def save_roi_set(
     np.savez_compressed(npz_path, **arrays)
     payload = {
         "version": MASK_SET_VERSION,
+        MRAX_VERSION_TAG: MRAX_VERSION,
         "metadata": dict(metadata or {}),
         "rois": entries,
         "npz": npz_path.name,
@@ -97,6 +101,13 @@ def load_roi_set(path: str | Path) -> list[ROI]:
     if json_path.exists():
         with open(json_path, "r", encoding="utf-8") as f:
             payload = json.load(f)
+        version_info = validate_mrax_file_version(payload, file_kind="MRax ROI set")
+        if version_info.tag_missing:
+            warnings.warn(
+                missing_mrax_version_message("MRax ROI set"),
+                RuntimeWarning,
+                stacklevel=2,
+            )
         if "npz" in payload:
             npz_path = json_path.parent / payload["npz"]
         entries = list(payload.get("rois", []))

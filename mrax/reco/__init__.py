@@ -1,5 +1,15 @@
+from .components import (
+    RAW_RECONSTRUCTION_COILS_KEY,
+    RAW_RECONSTRUCTION_COMPLEX_KEY,
+    RAW_RECONSTRUCTION_KEY,
+    available_reconstruction_variants,
+    reconstruction_coil_count,
+    reconstruction_coil_images,
+    reconstruction_variant,
+)
 from .jax_fft import cartesian_fft_jax, cartesian_ifft_jax
 from .observables import infer_ab_mt_observables_from_kspace, prepare_ab_mt_experiment
+from .phase import unwrap_phase_image
 from .pipeline import (
     FFTStage,
     HomodyneStage,
@@ -43,6 +53,9 @@ from .variational import (
 )
 
 __all__ = [
+    "RAW_RECONSTRUCTION_COILS_KEY",
+    "RAW_RECONSTRUCTION_COMPLEX_KEY",
+    "RAW_RECONSTRUCTION_KEY",
     "FFTStage",
     "HomodyneStage",
     "POCSStage",
@@ -62,6 +75,7 @@ __all__ = [
     "apply_readout_phase_shift",
     "apply_regrid_apodization_correction",
     "apply_samplewise_correction",
+    "available_reconstruction_variants",
     "build_operator",
     "center_crop_spatial",
     "checkerboard_phase",
@@ -74,6 +88,9 @@ __all__ = [
     "ifftnc",
     "prox_tv_chambolle",
     "readout_crop_bounds",
+    "reconstruction_coil_count",
+    "reconstruction_coil_images",
+    "reconstruction_variant",
     "regrid_nearest",
     "reconstruct_ifft",
     "reconstruct_regrid",
@@ -84,4 +101,5 @@ __all__ = [
     "estimate_sensitivities_cartesian",
     "pick_sensitivity_frame",
     "pocs_complete_kspace",
+    "unwrap_phase_image",
 ]
