@@ -9,7 +9,7 @@ k-space to the resulting :class:`mrax.data_struct.study.Study`.
 Validation scope
 ----------------
 
-The importer has been tested on ParaVision 360 3.6 data. Other ParaVision versions, local reconstruction settings, and custom
+The importer has been tested on ParaVision 360 3.5–3.7 data. Other ParaVision versions, local reconstruction settings, and custom
 sequences can use different metadata fields or ordering rules and have not been
 validated in MRax. The importer records metadata it cannot emulate under ``metadata_only`` entries when
 possible.

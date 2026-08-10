@@ -37,8 +37,6 @@ Key Modules
 - ``mrax.core.loss_builder``: utilities to build and run fitting loops over experiments and studies.
 - ``mrax.opt``: optimization primitives, regularizers, and parameterizations.
 - Built-in model equations and bounds: :doc:`models`.
-- Method citations for non-trivial model families, regularizers, reconstruction
-  methods, and denoisers: :doc:`references`.
 
 Fitting Options
 ---------------
