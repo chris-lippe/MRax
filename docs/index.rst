@@ -17,7 +17,7 @@ MRax
          </p>
          <p class="mrax-hero-copy">
            <strong>Disclaimer:</strong> MRax is intended for research use only. This is an early release, and bugs may occur.
-           Coding agents were used to assist in development. Code was manually reviewed and validated on Bruker ParaVision 360 3.6 data.
+           Coding agents were used to assist in development. Code was manually reviewed and validated on Bruker ParaVision 360 3.5–3.7 data.
          </p>
          <div class="mrax-hero-actions">
            <a class="mrax-button mrax-button-primary" href="overview.html">Start with the overview</a>

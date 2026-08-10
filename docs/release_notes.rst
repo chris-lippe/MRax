@@ -1,6 +1,19 @@
 Release Notes
 =============
 
+Version 0.2.1
+-------------
+
+Released 2026-08-10.
+
+Bug fixes
+~~~~~~~~~
+
+- Fixed Qt popup and transient-window handling when MRax runs through VS Code's
+  forwarded Wayland socket. MRax now uses the accompanying X11/XWayland display
+  in that environment, allowing combo-box menus to close normally, dialogs to be
+  dismissed, and parameter-table values to be edited without crashing the GUI.
+
 Version 0.2.0
 -------------
 

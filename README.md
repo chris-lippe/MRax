@@ -10,7 +10,7 @@ optimization utilities, reconstruction helpers, analysis tools, and ISMRMRD-back
 storage for images, k-space, and fitted maps.
 
 Disclaimer: MRax is intended for research use only. This is an early release, and bugs may occur.
-Coding agents were used to assist in development. Code was manually reviewed and validated on Bruker ParaVision 360 3.6 data.
+Coding agents were used to assist in development. Code was manually reviewed and validated on Bruker ParaVision 360 3.5–3.7 data.
 
 ## Installation
 
@@ -115,4 +115,3 @@ dataset = DataSet(data=jnp.ones((te.size, 2, 2)), name="demo")
 fields, losses = run_fit(experiment, model, dataset, num_steps=20, step_size=0.03)
 print(fields["t2"].si_unit, losses[-1])
 ```
-

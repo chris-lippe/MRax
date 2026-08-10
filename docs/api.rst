@@ -394,7 +394,7 @@ Bruker Importers and Models
 
 Parse ParaVision folders, infer experiment types, extract observables, and map them
 to models. The Bruker importer has been tested on ParaVision
-360 3.6 data. Other ParaVision versions and sequence families have not been
+360 3.5–3.7 data. Other ParaVision versions and sequence families have not been
 validated in MRax.
 
 - ``load_bruker_experiment(exp_dir, override_type=None, model_map_by_type=None, study_globals=None, pdata_index="1", recipe=None)`` returns

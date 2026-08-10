@@ -81,7 +81,12 @@ def test_gui_window_geometry_prefers_majority_screen_and_centers_within_it():
 
 @pytest.mark.parametrize(
     ("wayland_display", "display", "expected_platform"),
-    [("wayland-test", ":1", "wayland"), (None, ":1", "xcb")],
+    [
+        ("wayland-test", ":1", "wayland"),
+        ("vscode-wayland-test.sock", ":1", "xcb"),
+        ("vscode-wayland-test.sock", None, "wayland"),
+        (None, ":1", "xcb"),
+    ],
 )
 def test_gui_runtime_selects_native_display_backend(
     monkeypatch,
@@ -96,7 +101,10 @@ def test_gui_runtime_selects_native_display_backend(
         monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     else:
         monkeypatch.setenv("WAYLAND_DISPLAY", wayland_display)
-    monkeypatch.setenv("DISPLAY", display)
+    if display is None:
+        monkeypatch.delenv("DISPLAY", raising=False)
+    else:
+        monkeypatch.setenv("DISPLAY", display)
 
     _apply_local_runtime_env()
 

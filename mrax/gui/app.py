@@ -385,12 +385,18 @@ def _local_bundle_root() -> Path:
 def _apply_local_runtime_env() -> None:
     root = _local_bundle_root()
     if not os.environ.get("QT_QPA_PLATFORM"):
-        # Prefer native Wayland when a dev container exposes it. XWayland can
-        # report incorrect window bounds across monitors with different scale
-        # factors, causing maximized windows to be clipped off-screen.
-        if os.environ.get("WAYLAND_DISPLAY"):
+        wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
+        x11_display = os.environ.get("DISPLAY", "")
+        # VS Code's forwarded Wayland socket does not reliably handle Qt popup
+        # and transient windows.  Combo menus can remain open, dialogs can stop
+        # receiving close events, and creating table editors can crash Qt.  Its
+        # forwarded X11 display is stable, so prefer xcb for that specific proxy.
+        # Keep native Wayland elsewhere because XWayland can report incorrect
+        # bounds across monitors with different scale factors.
+        vscode_wayland_proxy = wayland_display.startswith("vscode-wayland-")
+        if wayland_display and not (vscode_wayland_proxy and x11_display):
             os.environ["QT_QPA_PLATFORM"] = "wayland"
-        elif os.environ.get("DISPLAY"):
+        elif x11_display:
             os.environ["QT_QPA_PLATFORM"] = "xcb"
     fonts = root / "etc" / "fonts"
     if fonts.is_dir() and not os.environ.get("FONTCONFIG_PATH"):

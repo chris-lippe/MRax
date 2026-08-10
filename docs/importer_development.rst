@@ -18,7 +18,7 @@ Validation status
 -----------------
 
 Importer documentation includes validation scope. The Bruker path has been tested on
-ParaVision 360 3.6 data. The Pulseq path supports synthetic demos and has not been
+ParaVision 360 3.5–3.7 data. The Pulseq path supports synthetic demos and has not been
 validated on measured scanner data. Tests for new import paths compare array ordering,
 observables, and reconstruction previews against a known sequence or vendor output.
 

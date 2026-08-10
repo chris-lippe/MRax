@@ -1,6 +1,6 @@
 """Single source of truth for the MRax package and persisted-data version."""
 
-MRAX_VERSION = "0.2.0"
+MRAX_VERSION = "0.2.1"
 MRAX_VERSION_TAG = "mrax_version"
 
 __all__ = ["MRAX_VERSION", "MRAX_VERSION_TAG"]
