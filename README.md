@@ -84,6 +84,8 @@ python -m pip install -e ".[docs]"
 sphinx-build -E -b html docs docs/_build/html
 ```
 
+Visit the GitHub-hosted documentation at [https://chris-lippe.github.io/MRax/](https://chris-lippe.github.io/MRax/).
+
 ## PyPI Release
 
 Build and inspect a local distribution with:
