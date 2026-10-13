@@ -58,13 +58,37 @@ pytest
 
 ## Dev Container
 
-The repository includes one VS Code compatible dev container. Open the public clone in
-VS Code and choose **Dev Containers: Reopen in Container**. The container installs
-all runtime features plus development, documentation, and notebook tooling, then
-installs MRax in editable mode:
+The repository includes two VS Code compatible dev container configurations that
+share `docker/Dockerfile.dev`:
+
+| Configuration | File | GPU support |
+| --- | --- | --- |
+| MRax development (CPU), default | `.devcontainer/devcontainer.json` | No GPU required; standard JAX installation |
+| MRax development (NVIDIA GPU), opt-in | `.devcontainer/gpu/devcontainer.json` | NVIDIA GPU passthrough and CUDA 12-enabled JAX |
+
+Open the public clone in VS Code and choose **Dev Containers: Reopen in Container**.
+Select **MRax development (CPU)** for the default setup, which works on machines
+without a GPU. Both configurations install all runtime features plus development,
+documentation, and notebook tooling, then install MRax in editable mode. The CPU
+configuration uses:
 
 ```bash
 python -m pip install -e ".[all,dev,docs,notebooks]"
+```
+
+For NVIDIA GPU development, select **MRax development (NVIDIA GPU)** instead. From
+an open dev container, use **Dev Containers: Switch Container** to change the
+configuration. The GPU option also installs `jax[cuda12]>=0.4.35,<0.11` and requires
+an NVIDIA GPU and compatible driver on the Docker host. On Linux, install and
+configure the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+for Docker. On Windows, follow [Docker Desktop's WSL 2 GPU setup](https://docs.docker.com/desktop/features/gpu/).
+
+After changing a configuration, run **Dev Containers: Rebuild Container** to apply
+the startup options and dependency installation. Inside the GPU container, verify
+that JAX lists a CUDA device:
+
+```bash
+python -c "import jax; print(jax.devices())"
 ```
 
 Inside the container, common checks are:
