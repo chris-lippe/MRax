@@ -7,9 +7,6 @@
   "remoteUser": "dev",
   "workspaceFolder": "/workspace",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-  "mounts": [
-    "source=${localEnv:HOME}/.ssh,target=/home/dev/.ssh,type=bind"
-  ],
   "runArgs": ["--gpus=all"],
   "postCreateCommand": "python -m pip install -e '.[all,dev,docs,notebooks]' 'jax[cuda12]>=0.4.35,<0.11'",
   "customizations": {
