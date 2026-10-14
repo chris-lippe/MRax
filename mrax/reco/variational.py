@@ -38,6 +38,7 @@ from mrax.data_struct.dimensions import expand_observables_to_frames
 from mrax.data_struct.experiment import Experiment
 from mrax.data_struct.model import Model
 from mrax.data_struct.quantity import Quantity, attach_units, require_quantity_dict
+from mrax.devices import DeviceLike, bind_device, device_function, jit_on_device
 from mrax.opt.optimizers import make_optimizer
 
 try:  # Runtime dependency; keep this lazy so import-time errors stay localized.
@@ -922,6 +923,7 @@ def reconstruct_ifft(
     return op.adjoint(jnp.asarray(kspace))
 
 
+@device_function
 def reconstruct_variational(
     kspace: Array | np.ndarray,
     *,
@@ -945,10 +947,11 @@ def reconstruct_variational(
     initial_image: Array | np.ndarray | None = None,
     return_history: bool = False,
     grad_clip_norm: float | None = None,
+    device: DeviceLike = "cpu",
 ) -> tuple[Array, list[float]] | Array:
     """Solve a variational reconstruction with Optax/proximal variants.
 
-    Minimizes: :math:`\\tfrac12 \\|\\|A x - y\\|\\|_2^2 + R(x)`
+    Minimizes: :math:`\\tfrac12 \\operatorname{mean}|A x - y|^2 + R(x)`
 
     - Cartesian operators use centered FFT and optional sampling masks.
     - Non-Cartesian operators use FINUFFT (jax_finufft) when trajectory is provided.
@@ -962,8 +965,9 @@ def reconstruct_variational(
     - If ``frame_shifts`` is provided, the data term is built from per-frame shifted
       images: ``y_i = A(shift(x, shift_i))``. Shifts are specified in index units
       (row, col). In this mode, ``kspace`` must include a frame axis.
-    - For proximal solvers, the effective shrinkage threshold is
-      ``regularizer_weight * step_size``.
+    - Proximal weights are divided by the image element count to match the
+      declared mean regularizer. FISTA multiplies that weight by ``step_size``;
+      split Bregman divides it by its augmented-Lagrangian penalty.
     - Optional gradient clipping helps stabilize long iterative runs.
     """
 
@@ -1068,9 +1072,10 @@ def reconstruct_variational(
         opt = make_optimizer(
             opt_name,
             step_size,
-            regularizer_weight=reg_weight,
+            regularizer_weight=reg_weight / x0.size,
             regularizer_prox=prox,
-            base_optimizer_factory=lambda lr: optax.sgd(lr),
+            base_optimizer_factory=optax.sgd,
+            device=device,
         )
     elif use_prox and reg == "l1":
         from mrax.opt.ops import soft_threshold
@@ -1079,14 +1084,15 @@ def reconstruct_variational(
         opt = make_optimizer(
             opt_name,
             step_size,
-            regularizer_weight=reg_weight,
+            regularizer_weight=reg_weight / x0.size,
             regularizer_prox=soft_threshold,
-            base_optimizer_factory=lambda lr: optax.sgd(lr),
+            base_optimizer_factory=optax.sgd,
+            device=device,
         )
     else:
         def loss_fn(x):
             return data_loss(x) + smooth_reg(x)
-        opt = make_optimizer(optimizer_name, step_size)
+        opt = make_optimizer(optimizer_name, step_size, device=device)
 
     opt_state = opt.init(x0)
     use_grad_clip = grad_clip_norm is not None and grad_clip_norm > 0
@@ -1095,6 +1101,7 @@ def reconstruct_variational(
     @jax.jit
     def step(x, state):
         loss, grads = jax.value_and_grad(loss_fn)(x)
+        grads = jax.tree.map(jnp.conj, grads)
         if use_grad_clip:
             grad_norm = optax.global_norm(grads)
             scale = jnp.minimum(1.0, clip_norm / (grad_norm + 1e-8))
@@ -1253,6 +1260,7 @@ def _align_kspace_global_phase_by_frame(
     return (aligned, rot) if return_rotation else aligned
 
 
+@device_function
 def reconstruct_model_based(
     kspace: Array | np.ndarray,
     *,
@@ -1290,6 +1298,7 @@ def reconstruct_model_based(
     frame_phase_correction: str | None = "none",
     return_history: bool = False,
     return_model_callable: bool = False,
+    device: DeviceLike = "cpu",
 ) -> (
     tuple[dict[str, Quantity], list[float], Callable[[dict, Array | None, dict[str, Any] | None], Array]]
     | tuple[dict[str, Quantity], list[float]]
@@ -1354,6 +1363,8 @@ def reconstruct_model_based(
     )
 
     params, unpack = model.parametrization_factory(field_shape)
+    params = jax.device_put(params, device)
+    unpack = jit_on_device(unpack, device)
     params = _collapse_params_for_constant_dims(params, constant_dims)
 
     reg_terms = model.make_regularizer_terms(
@@ -1688,6 +1699,7 @@ def reconstruct_model_based(
         regularizer_weight=regularizer_weight,
         regularizer_prox=regularizer_prox,
         base_optimizer_factory=optimizer_base_factory,
+        device=device,
         box_constraints=box_constraints,
     )
     opt_state = opt.init(params_all)
@@ -1695,6 +1707,7 @@ def reconstruct_model_based(
     @jax.jit
     def train_step(params, opt_state):
         loss, grads = jax.value_and_grad(loss_fn)(params)
+        grads = jax.tree.map(jnp.conj, grads)
         updates, opt_state = opt.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
         return params, opt_state, loss
@@ -1722,7 +1735,7 @@ def reconstruct_model_based(
         return fitted_fields
 
     if return_model_callable:
-        model_callable = make_model_callable(experiment, model, study_globals=inferred_globals)
+        model_callable = bind_device(make_model_callable(experiment, model, study_globals=inferred_globals), device)
         return fitted_fields, losses, model_callable
 
     return fitted_fields, losses

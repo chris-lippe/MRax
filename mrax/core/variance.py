@@ -70,7 +70,10 @@ def _prepare_mask(
         )
 
     axis_by_name = {name: axis for axis, name in enumerate(dims)}
-    aligned_shape = tuple(array.shape[axis_by_name[name]] if name in axis_by_name else 1 for name in experiment.dims)
+    if len(axis_by_name) != len(dims):
+        raise ValueError("Variance-mask dimensions must be unique")
+    array = np.transpose(array, [axis_by_name[name] for name in experiment.dims if name in axis_by_name])
+    aligned_shape = tuple(int(experiment.dims[name]) if name in axis_by_name else 1 for name in experiment.dims)
     full_mask = np.broadcast_to(array.reshape(aligned_shape), tuple(experiment.shape))
     return _flatten_to_frames(np.isfinite(full_mask) & (full_mask > 0), experiment)
 

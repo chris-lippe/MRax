@@ -9,6 +9,8 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
+from mrax.devices import DeviceLike, device_function, place_optimizer
+
 from .ops import soft_threshold
 
 LearningRate = float | Callable[[jax.Array], jax.Array]
@@ -16,24 +18,23 @@ LearningRate = float | Callable[[jax.Array], jax.Array]
 
 def _align_tree(example, value):
     """Broadcast ``value`` to the structure of ``example`` if needed."""
-    try:
-        return jax.tree_util.tree_map(lambda _, v: v, example, value)
-    except Exception:
-        return jax.tree_util.tree_map(lambda _: value, example)
+    if jax.tree.structure(example) == jax.tree.structure(value):
+        return value
+    if isinstance(value, (dict, list, tuple)):
+        raise ValueError("Optimizer option tree must match the parameter tree")
+    return jax.tree.map(lambda _: value, example)
 
 
-def _all_nonpositive(weights) -> bool:
-    leaves, _ = jax.tree_util.tree_flatten(weights)
-    return all(np.all(np.asarray(leaf) <= 0.0) for leaf in leaves)
+def _validate_proximal_weights(weights):
+    for leaf in jax.tree_util.tree_leaves(weights):
+        value = np.asarray(leaf)
+        if not np.all(np.isfinite(value) & (value >= 0)):
+            raise ValueError("Proximal regularizer weights must be finite and nonnegative")
 
 
 def _any_positive(weights) -> bool:
     leaves, _ = jax.tree_util.tree_flatten(weights)
     return any(np.any(np.asarray(leaf) > 0.0) for leaf in leaves)
-
-
-def _all_zero(weights) -> bool:
-    return all(np.all(np.asarray(leaf) == 0.0) for leaf in jax.tree_util.tree_leaves(weights))
 
 
 def _with_box_constraints(opt, bounds):
@@ -45,7 +46,18 @@ def _with_box_constraints(opt, bounds):
         projected = _project_bounds(optax.apply_updates(params, updates), bounds)
         return jax.tree_util.tree_map(lambda new, old: new - old, projected, params), new_state
 
-    return optax.GradientTransformation(opt.init, update_fn)
+    def init_fn(params):
+        lower, upper = bounds
+        lowers, uppers = _align_tree(params, lower), _align_tree(params, upper)
+        for x, lo, hi in zip(jax.tree.leaves(params), jax.tree.leaves(lowers), jax.tree.leaves(uppers), strict=True):
+            lo, hi = np.asarray(lo), np.asarray(hi)
+            if np.any(np.isnan(lo)) or np.any(np.isnan(hi)) or np.any(lo > hi):
+                raise ValueError("Box bounds must be ordered and cannot contain NaN")
+            if np.broadcast_shapes(np.shape(x), np.shape(lo), np.shape(hi)) != np.shape(x):
+                raise ValueError("Box bounds must broadcast to each parameter shape")
+        return opt.init(params)
+
+    return optax.GradientTransformation(init_fn, update_fn)
 
 
 def _project_bounds(params, bounds: Tuple[object, object] | None):
@@ -56,116 +68,58 @@ def _project_bounds(params, bounds: Tuple[object, object] | None):
     upper_tree = _align_tree(params, upper)
 
     def clip_fn(x, lo, hi):
-        lo_finite = jnp.where(jnp.isfinite(lo), lo, -jnp.inf)
-        hi_finite = jnp.where(jnp.isfinite(hi), hi, jnp.inf)
-        return jnp.clip(x, lo_finite, hi_finite)
+        return jnp.clip(x, lo, hi)
 
     return jax.tree_util.tree_map(clip_fn, params, lower_tree, upper_tree)
 
 
-def _make_split_bregman_optimizer(
-    step_size: LearningRate,
-    regularizer_weight,
-    prox_fn,
-    base_optimizer_factory: Callable[[LearningRate], optax.GradientTransformation],
-    box_bounds: Tuple[object, object] | None,
-) -> optax.GradientTransformation:
-    """Split Bregman updater wrapping a base optimizer."""
-    base_opt = base_optimizer_factory(step_size)
-
+def _make_split_bregman_optimizer(step_size, regularizer_weight, prox_fn, box_bounds, penalty):
+    """Linearized split Bregman with its augmented-Lagrangian coupling."""
     def init_fn(params):
-        state = {
-            "base": base_opt.init(params),
-            "breg": jax.tree_util.tree_map(jnp.zeros_like, params),
-        }
-        if callable(step_size):
-            state["count"] = jnp.zeros((), dtype=jnp.int32)
-        return state
-
-    def shrink(param, breg, weight, prox, rate):
-        weight = jnp.asarray(weight)
-        shrunk = prox(param + breg, weight * rate)
-        breg_new = breg + param - shrunk
-        return shrunk, breg_new
+        return {"split": params, "breg": jax.tree.map(jnp.zeros_like, params),
+                "count": jnp.zeros((), dtype=jnp.int32)}
 
     def update_fn(grads, state, params):
-        base_updates, new_base_state = base_opt.update(grads, state["base"], params)
-        tmp_params = optax.apply_updates(params, base_updates)
-        weights_tree = _align_tree(tmp_params, regularizer_weight)
-        prox_tree = _align_tree(tmp_params, prox_fn)
         rate = step_size(state["count"]) if callable(step_size) else step_size
-        pairs = jax.tree_util.tree_map(
-            lambda p, b, w, prox: shrink(p, b, w, prox, rate),
-            tmp_params, state["breg"], weights_tree, prox_tree,
-        )
-        def is_pair(value):
-            return isinstance(value, tuple)
-        new_params = jax.tree_util.tree_map(
-            lambda pair: pair[0], pairs, is_leaf=is_pair  # type: ignore[arg-type]
-        )
-        new_breg = jax.tree_util.tree_map(
-            lambda pair: pair[1], pairs, is_leaf=is_pair  # type: ignore[arg-type]
-        )
-        new_params = _project_bounds(new_params, box_bounds)
-        updates = jax.tree_util.tree_map(lambda new, old: new - old, new_params, params)
-        new_state = {"base": new_base_state, "breg": new_breg}
-        if callable(step_size):
-            new_state["count"] = optax.safe_int32_increment(state["count"])
-        return updates, new_state
+        coupled = jax.tree.map(lambda g, x, d, b: g + penalty * (x - d + b),
+                               grads, params, state["split"], state["breg"])
+        primal = _project_bounds(jax.tree.map(lambda x, g: x - rate * g, params, coupled), box_bounds)
+        weights = _align_tree(primal, regularizer_weight)
+        proxs = _align_tree(primal, prox_fn)
+        split = jax.tree.map(lambda x, b, w, prox: prox(x + b, w / penalty),
+                             primal, state["breg"], weights, proxs)
+        breg = jax.tree.map(lambda b, x, d: b + x - d, state["breg"], primal, split)
+        updates = jax.tree.map(lambda new, old: new - old, primal, params)
+        return updates, {"split": split, "breg": breg, "count": optax.safe_int32_increment(state["count"])}
 
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def _make_fista_optimizer(
-    step_size: LearningRate,
-    regularizer_weight,
-    prox_fn,
-    base_optimizer_factory: Callable[[LearningRate], optax.GradientTransformation],
-    box_bounds: Tuple[object, object] | None,
-) -> optax.GradientTransformation:
-    """FISTA wrapper around a base optimizer with optional proximal step."""
-    if _all_nonpositive(regularizer_weight):
-        return _with_box_constraints(base_optimizer_factory(step_size), box_bounds)
-    base_opt = base_optimizer_factory(step_size)
-
+def _make_fista_optimizer(step_size, regularizer_weight, prox_fn, box_bounds):
+    """Euclidean FISTA. Caller gradients are evaluated at the extrapolated point."""
     def init_fn(params):
-        leaves = jax.tree_util.tree_leaves(params)
-        dtype = jnp.result_type(*[jnp.real(jnp.asarray(value)).dtype for value in leaves])
-        state = {
-            "base": base_opt.init(params),
-            "x": params,
-            "t": jnp.array(1.0, dtype=dtype),
-        }
-        if callable(step_size):
-            state["count"] = jnp.zeros((), dtype=jnp.int32)
-        return state
+        leaves = jax.tree.leaves(params)
+        dtype = jnp.result_type(*[jnp.real(jnp.asarray(x)).dtype for x in leaves]) if leaves else jnp.float32
+        return {"x": params, "t": jnp.asarray(1.0, dtype=dtype), "count": jnp.zeros((), jnp.int32)}
 
     def update_fn(grads, state, params):
-        base_updates, new_base_state = base_opt.update(grads, state["base"], params)
-        y_step = optax.apply_updates(params, base_updates)
-        weights_tree = _align_tree(y_step, regularizer_weight)
-        prox_tree = _align_tree(y_step, prox_fn)
         rate = step_size(state["count"]) if callable(step_size) else step_size
-        x_new = jax.tree_util.tree_map(
-            lambda y, w, p: p(y, w * rate), y_step, weights_tree, prox_tree
-        )
-        t_new = 0.5 * (1.0 + jnp.sqrt(1.0 + 4.0 * state["t"] ** 2))
-        momentum = (state["t"] - 1.0) / t_new
-        y_new = jax.tree_util.tree_map(
-            lambda x_cur, x_prev: x_cur + momentum * (x_cur - x_prev),
-            x_new,
-            state["x"],
-        )
-        y_new = _project_bounds(y_new, box_bounds)
-        updates = jax.tree_util.tree_map(lambda new, old: new - old, y_new, params)
-        new_state = {"base": new_base_state, "x": x_new, "t": t_new}
-        if callable(step_size):
-            new_state["count"] = optax.safe_int32_increment(state["count"])
-        return updates, new_state
+        forward = jax.tree.map(lambda x, g: x - rate * g, params, grads)
+        weights = _align_tree(forward, regularizer_weight)
+        proxs = _align_tree(forward, prox_fn)
+        accepted = jax.tree.map(lambda x, w, prox: prox(x, w * rate), forward, weights, proxs)
+        accepted = _project_bounds(accepted, box_bounds)
+        t = .5 * (1 + jnp.sqrt(1 + 4 * state["t"]**2))
+        momentum = (state["t"] - 1) / t
+        extrapolated = jax.tree.map(lambda x, old: x + momentum * (x - old), accepted, state["x"])
+        extrapolated = _project_bounds(extrapolated, box_bounds)
+        updates = jax.tree.map(lambda new, old: new - old, extrapolated, params)
+        return updates, {"x": accepted, "t": t, "count": optax.safe_int32_increment(state["count"])}
 
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+@device_function
 def make_optimizer(
     optimizer_name: str,
     step_size: LearningRate,
@@ -173,44 +127,75 @@ def make_optimizer(
     regularizer_prox: Callable[[jnp.ndarray, float], jnp.ndarray] | None = None,
     base_optimizer_factory: Callable[[LearningRate], optax.GradientTransformation] | None = None,
     box_constraints: Tuple[object, object] | None = None,
+    bregman_penalty: float = 1.0,
+    device: DeviceLike = "cpu",
 ) -> optax.GradientTransformation:
     """Single entry point to build optimizers, with optional proximal variants.
 
-    - ``split_bregman`` / ``fista`` support arbitrary proximal regularizers via ``regularizer_prox`` with
-      per-parameter weights (scalars, arrays, or pytrees) and optional box constraints.
+    - ``fista`` uses Euclidean gradient and proximal steps with acceleration.
+      ``split_bregman`` uses linearized augmented-Lagrangian primal steps,
+      splitting, and dual updates. Both retain their solver at zero weight.
+    - Proximal callbacks receive the appropriate scalar, array, or tree threshold.
+      Base factories are restricted to plain ``optax.sgd``; Adam is unsupported.
+      The fitting API supplies objective-aware backtracking for physical-map TV.
     - All other optimizers are resolved from Optax and only support L2 weight decay plus optional
       box constraints.
     """
     name = optimizer_name.lower()
+    if not callable(step_size) and (not np.isfinite(step_size) or step_size < 0):
+        raise ValueError("Learning rate must be finite and nonnegative")
+    if callable(step_size):
+        schedule = step_size
+        def step_size(count):
+            rate = jnp.asarray(schedule(count))
+            return jnp.where(jnp.isfinite(rate) & (rate >= 0), rate, jnp.nan)
+    _validate_proximal_weights(regularizer_weight)
     prox_fn = regularizer_prox or soft_threshold
-    base_factory = base_optimizer_factory or (lambda lr: optax.adam(lr))
-
     if name in ("split_bregman", "bregman"):
-        if regularizer_prox is None and _all_zero(regularizer_weight):
-            return _with_box_constraints(base_factory(step_size), box_constraints)
-        return _make_split_bregman_optimizer(
-            step_size, regularizer_weight, prox_fn, base_factory, box_constraints
-        )
+        if base_optimizer_factory not in (None, optax.sgd):
+            raise ValueError("Split Bregman requires Euclidean gradient steps; an Adam base is unsupported")
+        if bregman_penalty <= 0 or not np.isfinite(bregman_penalty):
+            raise ValueError("bregman_penalty must be finite and positive")
+        _validate_proximal_weights(regularizer_weight)
+        return place_optimizer(_with_box_constraints(_make_split_bregman_optimizer(
+            step_size, regularizer_weight, prox_fn, box_constraints, bregman_penalty
+        ), box_constraints), device)
 
     if name == "fista":
-        return _make_fista_optimizer(
-            step_size, regularizer_weight, prox_fn, base_factory, box_constraints
-        )
+        if base_optimizer_factory not in (None, optax.sgd):
+            raise ValueError("FISTA requires Euclidean gradient steps; an Adam base is unsupported")
+        _validate_proximal_weights(regularizer_weight)
+        return place_optimizer(_with_box_constraints(_make_fista_optimizer(
+            step_size, regularizer_weight, prox_fn, box_constraints
+        ), box_constraints), device)
 
     if regularizer_prox is not None:
         raise ValueError("regularizer_prox is only supported for 'split_bregman' or 'fista'.")
     if base_optimizer_factory is not None:
         raise ValueError("base_optimizer_factory is only used with 'split_bregman' or 'fista'.")
 
-    opt_builder = getattr(optax, name, None)
+    supported = {"adam", "adamw", "sgd", "rmsprop", "adagrad", "adadelta", "adamax", "adamaxw",
+                 "amsgrad", "lamb", "lars", "lion", "novograd", "noisy_sgd", "radam", "sm3", "yogi"}
+    opt_builder = getattr(optax, name, None) if name in supported else None
     if opt_builder is None or not callable(opt_builder):
         raise ValueError(f"Unknown optimizer '{optimizer_name}'")
 
     opt = opt_builder(step_size)
     if _any_positive(regularizer_weight):
-        opt = optax.chain(optax.additive_weight_decay(regularizer_weight), opt)
+        def decay_init(params):
+            weights = _align_tree(params, regularizer_weight)
+            for x, weight in zip(jax.tree.leaves(params), jax.tree.leaves(weights), strict=True):
+                if np.broadcast_shapes(np.shape(x), np.shape(weight)) != np.shape(x):
+                    raise ValueError("Decay weights must broadcast to parameter shapes")
+            return optax.EmptyState()
 
-    return _with_box_constraints(opt, box_constraints)
+        def decay_update(grads, state, params):
+            return jax.tree.map(lambda g, p, w: g + w * p, grads, params,
+                                _align_tree(params, regularizer_weight)), state
+
+        opt = optax.chain(optax.GradientTransformation(decay_init, decay_update), opt)
+
+    return place_optimizer(_with_box_constraints(opt, box_constraints), device)
 
 
 __all__ = ["make_optimizer"]

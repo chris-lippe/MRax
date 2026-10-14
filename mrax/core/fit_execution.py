@@ -11,18 +11,24 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
+from mrax.devices import DeviceLike, bind_device, device_function, place_optimizer
+
 
 @dataclass(frozen=True)
 class FitState:
-    """Raw parameters, optimizer moments and completed updates for resuming a fit.
+    """Optimizer coordinates, solver state and completed updates for resuming a fit.
 
     Resume with the same model, data, regularization and optimizer state structure.
-    Changing a constant learning rate is supported when the state structure matches.
+    Physical TV fits also store their fixed coordinate scales. Changing a constant
+    learning rate is supported when the state structure matches.
     """
 
     params: dict[str, Any]
     optimizer_state: Any
     step: int = 0
+    parameter_space: str = "raw"
+    optimizer_name: str | None = None
+    parameter_scales: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,9 @@ class FitInfo:
     termination_reason: str
     final_loss: float | None
     devices: tuple[str, ...]
+    optimizer_name: str = ""
+    regularization_mode: str = "none"
+    parameter_space: str = "raw"
 
 
 class FitError(FloatingPointError):
@@ -74,6 +83,7 @@ def _validate_optimizer_state(expected, candidate):
             raise ValueError("initial_state contains optimizer arrays with incompatible shape or dtype")
 
 
+@device_function
 def execute_optimizer(
     loss_fn: Callable,
     params: dict,
@@ -87,6 +97,9 @@ def execute_optimizer(
     convergence_patience: int = 5,
     min_steps: int = 0,
     progress_callback: Callable[[int, int, str], None] | None = None,
+    step_function: Callable | None = None,
+    convergence_check: Callable | None = None,
+    device: DeviceLike = "cpu",
 ) -> tuple[dict, list[float], FitInfo]:
     """Run fixed-size device chunks; histories contain losses before each update.
 
@@ -94,7 +107,11 @@ def execute_optimizer(
     updates to meet their tolerances for consecutive updates. Stopping counters
     start afresh when resuming. Nonfinite proposals are never accepted; errors
     retain the last verified chunk-boundary checkpoint rather than partial results.
+    ``device`` defaults to CPU and also places resumed parameters and moments.
     """
+    optimizer = place_optimizer(optimizer, device)
+    if step_function is not None:
+        step_function = bind_device(step_function, device)
     num_steps, chunk_size = index(num_steps), index(chunk_size)
     convergence_patience, min_steps = index(convergence_patience), index(min_steps)
     if num_steps < 0 or chunk_size < 1 or convergence_patience < 1 or min_steps < 0:
@@ -146,10 +163,16 @@ def execute_optimizer(
             current, state, previous, stable_count, done, status = carry
 
             def update(_):
-                value, grads = jax.value_and_grad(loss_fn)(current)
-                updates, proposal_state = optimizer.update(grads, state, current)
-                proposal = optax.apply_updates(current, updates)
-                finite = jnp.isfinite(value) & _tree_finite((grads, proposal, proposal_state))
+                if step_function is None:
+                    value, grads = jax.value_and_grad(loss_fn)(current)
+                    grads = jax.tree.map(jnp.conj, grads)
+                    updates, proposal_state = optimizer.update(grads, state, current)
+                    proposal = optax.apply_updates(current, updates)
+                    solver_status = jnp.asarray(0, dtype=jnp.int32)
+                    finite = jnp.isfinite(value) & _tree_finite((grads, proposal, proposal_state))
+                else:
+                    value, proposal, proposal_state, solver_status = step_function(current, state)
+                    finite = (solver_status == 0) & jnp.isfinite(value) & _tree_finite((proposal, proposal_state))
                 next_count = stable_count
                 converged = jnp.asarray(False)
                 if convergence_tolerance is not None:
@@ -157,12 +180,15 @@ def execute_optimizer(
                     small = (change <= convergence_tolerance) & (
                         _relative_update(current, proposal) <= parameter_tolerance
                     )
+                    if convergence_check is not None:
+                        small = small & convergence_check(proposal, proposal_state, parameter_tolerance)
                     next_count = jnp.where(small, stable_count + 1, 0)
                     converged = (done + 1 >= min_steps) & (next_count >= convergence_patience)
                 chosen, chosen_state = jax.lax.cond(
                     finite, lambda _: (proposal, proposal_state), lambda _: (current, state), None
                 )
-                next_status = jnp.where(finite, jnp.where(converged, 1, 0), 2).astype(jnp.int32)
+                next_status = jnp.where(finite, jnp.where(converged, 1, 0),
+                                        jnp.where(solver_status == 3, 3, 2)).astype(jnp.int32)
                 next_carry = (
                     chosen, chosen_state, value, next_count, done + finite.astype(jnp.int32),
                     next_status,
@@ -186,16 +212,17 @@ def execute_optimizer(
             )
             limit = min(limit, max(1, next_progress - completed))
         checkpoint = FitState(params, opt_state, start_step + completed)
-        checkpoint_losses = list(losses)
+        checkpoint_losses = losses
         carry, values = run_chunk(
             params, opt_state, previous_loss, stable,
             jnp.asarray(completed, dtype=jnp.int32), jnp.asarray(limit, dtype=jnp.int32),
         )
         params, opt_state, previous_loss, stable, count, status = carry
         history, executed, count_host, status_host = jax.device_get((*values, count, status))
-        if int(status_host) == 2:
+        if int(status_host) in (2, 3):
             raise FitError(
-                f"Nonfinite optimizer loss, gradient or update at step {start_step + int(count_host) + 1}",
+                ("TV proximal solve or backtracking failed" if int(status_host) == 3 else
+                 "Nonfinite optimizer loss, gradient or update") + f" at step {start_step + int(count_host) + 1}",
                 checkpoint, checkpoint_losses,
             )
         final_loss = float(evaluate_loss(params))

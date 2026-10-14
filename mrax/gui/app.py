@@ -1707,7 +1707,7 @@ class _MainWindowMixin:
         core_box = QtWidgets.QGroupBox("Fit")
         form = QtWidgets.QFormLayout(core_box)
         self.optimizer_combo = QtWidgets.QComboBox()
-        self.optimizer_combo.addItems(["adam", "adamw", "sgd", "rmsprop", "fista", "split_bregman"])
+        self.optimizer_combo.addItems(["auto", "adam", "adamw", "sgd", "rmsprop", "fista", "split_bregman"])
         self.steps_spin = QtWidgets.QSpinBox()
         self.steps_spin.setRange(0, 1_000_000)
         self.steps_spin.setValue(200)
@@ -12607,8 +12607,8 @@ def _constant_dim_choice_labels(dims: dict[str, int]) -> list[str]:
 
 def _optimizer_choices_for_regularizers(reg_types: set[str]) -> list[str]:
     if any(reg_type.startswith("tv") for reg_type in reg_types):
-        return ["fista", "split_bregman"]
-    return ["adam", "adamw", "sgd", "rmsprop", "fista", "split_bregman"]
+        return ["auto", "fista", "split_bregman", "adam", "adamw", "sgd", "rmsprop"]
+    return ["auto", "adam", "adamw", "sgd", "rmsprop", "fista", "split_bregman"]
 
 
 def _regularizer_config_enabled(reg_type: str | None, weight: float | None) -> bool:
@@ -13786,7 +13786,7 @@ def _fit_settings_from_dict(data: dict[str, Any] | Mapping[str, Any]) -> FitSett
             continue
     return FitSettings(
         model_name=data.get("model_name"),
-        optimizer_name=data.get("optimizer_name") or "adam",
+        optimizer_name=data.get("optimizer_name") or "auto",
         num_steps=_safe_int_value(data.get("num_steps"), 200),
         step_size=_safe_float_value(data.get("step_size"), 0.02),
         selected_roi=data.get("selected_roi"),

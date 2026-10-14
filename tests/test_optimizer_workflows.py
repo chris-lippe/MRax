@@ -204,20 +204,20 @@ def test_proximal_schedule_tracks_gradient_step_count(name):
         params = optax.apply_updates(params, updates)
     assert int(state["count"]) == 2
     if name == "split_bregman":
-        assert float(params["p"]) == pytest.approx(0.99)
+        assert float(params["p"]) == pytest.approx(0.98)
     else:
         assert float(state["x"]["p"]) == pytest.approx(0.97)
 
 
-def test_zero_weight_bregman_fast_path_retains_custom_prox_and_bounds():
+def test_zero_weight_bregman_keeps_its_state_custom_prox_and_bounds():
     plain = make_optimizer("split_bregman", 0.1)
     params = {"p": jnp.asarray(1.0)}
-    assert jax.tree_util.tree_structure(plain.init(params)) == jax.tree_util.tree_structure(
-        optax.adam(0.1).init(params))
-    custom = make_optimizer("split_bregman", 0.1, regularizer_prox=lambda value, weight: value + 1,
+    assert "split" in plain.init(params) and "breg" in plain.init(params)
+    custom = make_optimizer("split_bregman", 0.1, regularizer_prox=lambda value, weight: jnp.maximum(value, 0),
                             base_optimizer_factory=optax.sgd)
-    updates, _ = custom.update({"p": jnp.zeros(())}, custom.init(params), params)
-    assert float(optax.apply_updates(params, updates)["p"]) == pytest.approx(2.0)
+    negative = {"p": jnp.asarray(-1.)}
+    _, state = custom.update({"p": jnp.zeros(())}, custom.init(negative), negative)
+    assert float(state["split"]["p"]) == 0
     bounded = make_optimizer("split_bregman", 0.1, box_constraints=(0.0, 0.5))
     updates, _ = bounded.update({"p": jnp.zeros(())}, bounded.init(params), params)
     assert float(optax.apply_updates(params, updates)["p"]) == pytest.approx(0.5)
@@ -232,7 +232,7 @@ def test_cpu_cuda_objective_and_gradient_agree_at_identical_parameters():
     for device in (cpu, gpu):
         with jax.default_device(device):
             exp, model, data = _constant_problem(initial=0.12)
-            loss, params, _ = build_loss(exp, model, data)
+            loss, params, _ = build_loss(exp, model, data, device=device)
             params = jax.device_put(params, device)
             value, grad = jax.jit(jax.value_and_grad(loss))(params)
             assert device in value.devices()
@@ -240,6 +240,7 @@ def test_cpu_cuda_objective_and_gradient_agree_at_identical_parameters():
             fields, _, info = run_fit(
                 exp, model, data, optimizer=optax.sgd(0.3), num_steps=64,
                 convergence_tolerance=1e-7, min_steps=5, return_fit_info=True,
+                device=device,
             )
             assert device in fields["level"].values.devices()
             assert info.converged

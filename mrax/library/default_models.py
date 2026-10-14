@@ -90,7 +90,7 @@ def _inverse_transform(value, cfg):
         offset = cfg.get("offset", 0.0)
         scaled = (arr - offset) / scale
         scaled = jnp.maximum(scaled, eps)
-        return jnp.log(jnp.expm1(scaled))
+        return scaled + jnp.log(-jnp.expm1(-scaled))
     if transform == "bounded":
         lo, hi = cfg["bounds"]
         if isinstance(lo, Real) and isinstance(hi, Real) and lo < 0 and hi == -lo:
@@ -331,8 +331,10 @@ def _make_parametrization_factory(param_specs: dict[str, dict[str, object]]):
                     raise ValueError(f"Unknown transform '{transform}' for parameter '{name}'")
             return fields
 
+        unpack.parameter_specs = param_specs
         return params, unpack
 
+    factory.parameter_specs = param_specs
     return factory
 
 

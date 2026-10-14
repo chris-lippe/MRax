@@ -5,6 +5,7 @@ from typing import Any, Callable, Sequence
 
 from mrax.data_struct.storage import save_study_results
 from mrax.data_struct.study import Study
+from mrax.devices import DeviceLike, resolve_device
 
 from .study_runner import execute_study_plan, plan_study_fits
 
@@ -38,6 +39,7 @@ def run_batch_studies(
     analysis_fn: Callable[..., list[dict[str, Any]]] | None = None,
     analysis_kwargs: dict[str, Any] | None = None,
     save_kwargs: dict[str, Any] | None = None,
+    device: DeviceLike = "cpu",
 ) -> list[dict[str, Any]]:
     """Load studies from a folder, run analysis/fitting, and persist results.
 
@@ -51,6 +53,7 @@ def run_batch_studies(
     ``manifest_path``, ``results``, ``metadata``, and ``study_dir`` keys.
     """
 
+    device = resolve_device(device)
     study_dirs = discover_study_dirs(studies_root, selected)
     out_root = Path(output_root)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -78,7 +81,7 @@ def run_batch_studies(
                 target_names=target_names,
                 precomputed_fields=precomputed_fields,
             )
-            results, _ = execute_study_plan(plan, run_fit_kwargs=fit_kwargs)
+            results, _ = execute_study_plan(plan, run_fit_kwargs=fit_kwargs, device=device)
             used_targets = target_names
         else:
             results = analysis_fn(study, study_dir=study_dir, metadata=metadata, **analysis_kwargs)

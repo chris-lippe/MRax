@@ -32,6 +32,7 @@ from mrax.data_struct.dimensions import (
 )
 from mrax.data_struct.quantity import require_quantity_dict
 from mrax.data_struct.storage import load_study_results
+from mrax.devices import DeviceLike
 from mrax.reco.components import reconstruction_coil_count, reconstruction_variant
 
 from .models import make_model, normalize_model_key
@@ -102,7 +103,7 @@ class FitSettings:
     """Fitting settings controlled by the GUI."""
 
     model_name: str | None = None
-    optimizer_name: str = "adam"
+    optimizer_name: str = "auto"
     num_steps: int = 200
     step_size: float = 0.02
     selected_roi: str | None = None
@@ -1859,6 +1860,7 @@ class GuiSession:
         optimizer_name: str | None = None,
         compute_derived_maps: bool | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
+        device: DeviceLike = "cpu",
     ) -> dict[str, Any]:
         steps = self.fit_settings.num_steps if num_steps is None else int(num_steps)
         if progress_callback is not None:
@@ -1879,7 +1881,7 @@ class GuiSession:
             dataset,
             frame_mask=frame_mask,
         )
-        fields, losses = run_fit(
+        fields, losses, fit_info = run_fit(
             experiment,
             model,
             dataset,
@@ -1900,6 +1902,8 @@ class GuiSession:
                 else compute_derived_maps
             ),
             progress_callback=progress_callback,
+            return_fit_info=True,
+            device=device,
         )
         if progress_callback is not None:
             progress_callback(max(1, steps), max(1, steps), "Finalizing fitted maps")
@@ -1913,6 +1917,8 @@ class GuiSession:
             frame_mask=frame_mask,
         )
         fit_notes.extend(replacement_notes)
+        if fit_info.regularization_mode == "smoothed_tv":
+            fit_notes.append(f"Warning: {fit_info.optimizer_name} uses smoothed TV gradients; choose auto, FISTA, or split_bregman for true TV proximal fitting.")
         return {
             "name": self.selected_experiment or "gui_fit",
             "model": model.name,
@@ -1920,6 +1926,8 @@ class GuiSession:
             "loss_history": losses,
             "cached": False,
             "fit_notes": fit_notes,
+            "optimizer_name": fit_info.optimizer_name,
+            "regularization_mode": fit_info.regularization_mode,
             "spatial_geometry": (
                 dataset.spatial_geometry.to_metadata()
                 if dataset.spatial_geometry is not None
@@ -2092,6 +2100,7 @@ class GuiSession:
         num_steps: int | None = None,
         step_size: float | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
+        device: DeviceLike = "cpu",
     ) -> dict[str, Any]:
         steps = self.fit_settings.num_steps if num_steps is None else int(num_steps)
         if progress_callback is not None:
@@ -2130,6 +2139,7 @@ class GuiSession:
             regularizer_configs=self.fit_settings.regularizer_configs or None,
             return_model_callable=True,
             progress_callback=progress_callback,
+            device=device,
         )
         if progress_callback is not None:
             progress_callback(max(1, steps), max(1, steps), "Rendering preview fit")

@@ -18,7 +18,9 @@ from mrax.gui.app import (
     _centered_top_left,
     _experiment_metadata_template_from_session,
     _export_object_records_for_session,
+    _fit_settings_from_dict,
     _load_experiment_metadata_template_from_file,
+    _optimizer_choices_for_regularizers,
     _rectangle_overlap_area,
     _resize_edge_names,
     _restore_gui_state,
@@ -33,6 +35,15 @@ from mrax.gui.app import (
 )
 from mrax.io.nifti import load_nifti
 from mrax.library import build_default_experiment, make_t2_se_model
+
+
+def test_gui_optimizer_defaults_preserve_auto_and_explicit_adam():
+    assert GuiSession().fit_settings.optimizer_name == "auto"
+    assert _fit_settings_from_dict({}).optimizer_name == "auto"
+    assert _fit_settings_from_dict({"optimizer_name": "adam"}).optimizer_name == "adam"
+    assert _optimizer_choices_for_regularizers({"tv"})[:3] == ["auto", "fista", "split_bregman"]
+    assert "adam" in _optimizer_choices_for_regularizers({"tv"})
+    assert _optimizer_choices_for_regularizers(set())[0] == "auto"
 
 
 def _write_small_manifest(tmp_path):

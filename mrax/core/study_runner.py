@@ -8,6 +8,7 @@ from mrax.core.fit_sanity import check_fit_sanity
 from mrax.core.loss_builder import run_fit
 from mrax.data_struct import DataSet, Experiment, Model, Study
 from mrax.data_struct.quantity import require_quantity_dict
+from mrax.devices import DeviceLike, resolve_device
 
 _PASSTHROUGH_DICT_KWARGS = {
     "box_constraints",
@@ -59,6 +60,7 @@ def execute_study_plan(
     *,
     skip_missing_observables: bool = True,
     warn_on_skip: bool = True,
+    device: DeviceLike = "cpu",
 ):
     """Execute a planned Study fit in order, returning result entries and field cache.
 
@@ -72,6 +74,7 @@ def execute_study_plan(
     overrides.
     """
 
+    device = resolve_device(device)
     run_fit_kwargs = run_fit_kwargs or {}
     plan_names = {item.name for item in plan}
     results: list[dict] = []
@@ -95,6 +98,7 @@ def execute_study_plan(
             kwargs = {key: _select_for_name(key, val, item.name) for key, val in run_fit_kwargs.items()}
             if run_fit_overrides and item.name in run_fit_overrides:
                 kwargs.update(run_fit_overrides[item.name])
+            kwargs.setdefault("device", device)
             if skip_missing_observables:
                 report = check_fit_sanity(
                     item.experiment,
