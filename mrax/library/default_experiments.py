@@ -80,6 +80,8 @@ DEFAULT_EXPERIMENTS: Dict[str, DefaultExperiment] = {
                 "freq_offsets",
                 "sat_b1",
                 "sat_time",
+                "spin_lock",
+                "SpinLock",
                 "TR",
                 "r1_map",
                 "t1_map",

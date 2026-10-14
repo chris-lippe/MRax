@@ -6333,6 +6333,26 @@ def _sat_trans_enabled(method: dict) -> bool:
     return str(sat_token or "").lower() not in ("", "off", "no", "0", "false", "none")
 
 
+def _bruker_spin_lock(method: dict) -> bool | None:
+    """Read an optional static spin-lock flag without string truthiness."""
+    value = method.get("SpinLock")
+    if value is None:
+        return None
+    arr = np.asarray(value)
+    if arr.size == 0 or not np.all(arr == arr.reshape(-1)[0]):
+        raise ValueError("SpinLock must have one Boolean value")
+    flag = arr.reshape(-1)[0]
+    if isinstance(flag, (str, np.str_)):
+        token = str(flag).strip().strip("<>").lower()
+        if token in ("on", "yes", "true", "1", "1.0"):
+            return True
+        if token in ("off", "no", "false", "0", "0.0"):
+            return False
+    elif flag == 0 or flag == 1:
+        return bool(flag)
+    raise ValueError("SpinLock must have one Boolean value")
+
+
 def _bruker_sat_time_ms(method: dict) -> object | None:
     pulse_obj = method.get("PVM_SatTransPulse")
     if pulse_obj is None:
@@ -6604,6 +6624,7 @@ def _normalize_bruker_metadata(
         flip_angles=visu.get("VisuAcqFlipAngle") or method.get("PVM_ExcPulseAngle"),
         sat_b1_uT=method.get("PVM_SatTransPulseAmpl_uT"),
         sat_time_ms=_bruker_sat_time_ms(method),
+        spin_lock=_bruker_spin_lock(method),
         diffusion_bvals=diffusion_bvals,
         diffusion_bvecs=diffusion_bvecs,
     )

@@ -1,12 +1,15 @@
 import warnings
 
+import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
 from pydicom.sequence import Sequence
 from pydicom.tag import Tag
 from pydicom.uid import EnhancedMRImageStorage, ExplicitVRLittleEndian, MRImageStorage, generate_uid
 
+from mrax.core import make_model_callable
 from mrax.data_struct import Quantity
 from mrax.gui import GuiSession
 from mrax.gui.app import _detect_import_vendor, _load_dicom_experiment_from_dialog
@@ -18,7 +21,8 @@ from mrax.io import (
     load_dicom_study,
     load_pulseq_experiment,
 )
-from mrax.io.bruker_import import bruker_spatial_geometry
+from mrax.io.bruker_import import bruker_spatial_geometry, extract_observables
+from mrax.library.default_models import make_AB_MT_n_model, make_zaiss_full_model
 
 
 def _base_dicom_dataset(path, *, series_uid, sop_class_uid, instance_number=1):
@@ -402,6 +406,74 @@ def test_synthetic_bruker_study_import_workflow(tmp_path):
     assert exp_meta["method"]["Method"] == "MSME"
     assert exp_meta["acqp"]["ACQ_dim"] == 2
     assert exp_meta["image_scaling"]["applied_to"] == "DataSet.data"
+
+
+@pytest.mark.parametrize("flag, expected", [
+    ("On", True), ("Off", False), ("<On>", True), ("<Off>", False),
+    ("true", True), ("false", False), ("YES", True), ("NO", False),
+    (True, True), (False, False), (1, True), (0, False),
+    (["Off"], False), (["On", "On"], True),
+])
+def test_bruker_spin_lock_metadata_is_preserved(flag, expected):
+    observables = extract_observables("sat_trans", {}, 1, {"SpinLock": flag})
+    spin_lock = observables["spin_lock"]
+    assert spin_lock.si_unit == "1"
+    assert spin_lock.shape == ()
+    assert spin_lock.values.dtype == jnp.bool_
+    assert bool(spin_lock.values) is expected
+
+
+@pytest.mark.parametrize("flag", ["unknown", 2, [], ["On", "Off"]])
+def test_bruker_invalid_spin_lock_metadata_is_rejected(flag):
+    with pytest.raises(ValueError, match="SpinLock.*Boolean"):
+        extract_observables("sat_trans", {}, 1, {"SpinLock": flag})
+
+
+def test_bruker_missing_spin_lock_metadata_keeps_model_default():
+    assert "spin_lock" not in extract_observables("sat_trans", {}, 1, {})
+    assert "spin_lock" not in extract_observables("mse", {}, 1, {"SpinLock": "On"})
+
+
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
+@pytest.mark.parametrize("factory", [make_AB_MT_n_model, make_zaiss_full_model])
+@pytest.mark.parametrize("flag, enabled", [("On", True), ("Off", False)])
+def test_imported_bruker_spin_lock_selects_model_projection(tmp_path, backend, factory, flag, enabled):
+    try:
+        device = jax.devices(backend)[0]
+    except RuntimeError:
+        pytest.skip(f"{backend} backend is unavailable")
+    root = tmp_path / "bruker"
+    _write_minimal_bruker_scan(root)
+    (root / "1" / "method").write_text(
+        f"##TITLE=method\n##$Method=<CEST>\n##$SpinLock=<{flag}>\n##END=\n",
+        encoding="utf-8",
+    )
+    model = factory(pools=[])
+    experiment, _, _, _ = load_bruker_experiment(root / "1", model_map_by_type={"sat_trans": model})
+    assert experiment.exp_type == "sat_trans"
+    assert bool(experiment.observables["spin_lock"].values) is enabled
+    experiment = experiment.insert_observables({
+        "field_strength_mhz": Quantity(400.0, "MHz"),
+        "sat_b1": Quantity(2.0, "uT"),
+        "sat_time": Quantity(0.0, "ms"),
+        "TR": Quantity(1000.0, "ms"),
+        "r1_map": Quantity(jnp.ones(experiment.spatial_shape), "1/s"),
+    })
+    params, unpack = model.parametrization_factory(experiment.spatial_shape)
+    fields = unpack(params)
+    if model.name == "ab_mt_n":
+        fields["t_delay"] = jnp.zeros(experiment.spatial_shape)
+        fields["sin_a_eff"] = jnp.full(experiment.spatial_shape, np.sqrt(0.5))
+    model_fn = jax.jit(make_model_callable(experiment, model))
+    fields = jax.device_put(fields, device)
+    for offset in (0.0, 1.0):
+        offsets = jax.device_put(jnp.asarray([offset]), device)
+        result = model_fn(fields, offsets)
+        assert result.device == device
+        omega1 = 2.0 * np.pi * 42.58 * 2.0 / 400.0
+        expected = 1.0 if enabled else (2.0 * np.pi * offset)**2 / (
+            (2.0 * np.pi * offset)**2 + omega1**2 + 1e-8)
+        np.testing.assert_allclose(result, expected, rtol=2e-6, atol=2e-7)
 
 
 def test_bruker_multicycle_slice_stack_sorts_vendor_images_and_raw_kspace(tmp_path):

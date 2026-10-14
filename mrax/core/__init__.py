@@ -1,4 +1,5 @@
 from .batch import discover_study_dirs, run_batch_studies
+from .fit_execution import FitError, FitInfo, FitState
 from .fit_sanity import FitDebugReport, FitSanityReport, check_fit_sanity, debug_fit_prototype
 from .loss_builder import build_loss, make_model_callable, run_fit
 from .study_runner import collect_skipped_experiments, execute_study_plan, plan_study_fits
@@ -12,6 +13,9 @@ __all__ = [
     "debug_fit_prototype",
     "make_model_callable",
     "run_fit",
+    "FitError",
+    "FitInfo",
+    "FitState",
     "FitDebugReport",
     "FitSanityReport",
     "make_example_suite",

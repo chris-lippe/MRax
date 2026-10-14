@@ -46,6 +46,63 @@ The parameter library is plain TOML. You can point to another file with
 ``MRAX_PRIVATE_PARAMETER_LIBRARY`` to an overlay TOML file; its contents are merged on
 top of the public library.
 
+Fitting controls and optimizer state
+------------------------------------
+
+``run_fit`` uses device-side optimizer chunks on CPU and CUDA. ``chunk_size``
+limits work between host-side progress and finiteness checks; the complete loss
+history still contains one entry before each accepted update. Progress callbacks
+retain their existing cadence and can cancel a fit by raising an exception.
+Existing return tuples are preserved unless ``return_fit_info=True`` is requested.
+
+``step_size`` accepts a constant rate or an Optax-compatible schedule. Proximal
+optimizers use the scheduled rate for both the base optimizer and proximal step.
+For example, an application can choose a schedule without changing model defaults:
+
+.. code-block:: python
+
+   import optax
+   from mrax.core import run_fit
+
+   rate = optax.exponential_decay(0.03, transition_steps=64, decay_rate=0.8)
+   fields, history, info = run_fit(
+       experiment, model, dataset,
+       step_size=rate,
+       num_steps=512,
+       convergence_tolerance=1e-7,
+       parameter_tolerance=1e-5,
+       convergence_patience=5,
+       min_steps=16,
+       return_fit_info=True,
+   )
+
+Convergence is opt-in and requires consecutive small scaled objective changes and
+relative raw-parameter updates. ``num_steps`` is then a maximum, not a guarantee
+that the optimizer found a unique optimum. ``info`` records the termination reason,
+completed updates, actual parameter devices, final objective, and a ``FitState``.
+``info.final_loss`` evaluates the returned parameters, whereas history entries
+precede their updates. A zero-step fit returns initialization without evaluating
+the model and has ``info.final_loss=None``.
+
+Pass ``initial_state=info.state`` to continue with raw parameters and optimizer
+moments preserved. Use the same problem and compatible optimizer state structure;
+``initial_state`` and ``initial_params`` are mutually exclusive. State step counts
+and schedule counts continue, while stopping counters start afresh. Supplying
+``initial_params`` alone initializes a new optimizer. With
+``return_model_callable=True``, fit information is appended after the callable.
+
+Nonfinite initial objectives, gradients, optimizer states, proposals, or final
+chunk objectives raise ``FitError``. Its ``last_valid_state`` and ``loss_history``
+refer to the last verified chunk boundary, or are empty when initialization is
+invalid. Applications can use that checkpoint for recovery with compatible
+optimizer settings. Library calls do not change global JAX precision, device
+selection, or memory-allocation configuration.
+
+Symmetric bounded parameter transforms use the centered, algebraically equivalent
+form ``h * tanh(raw / 2)`` for bounds ``[-h, h]``. The inverse preserves small
+nonzero initial values and retains boundary clipping. Bounds, default metadata,
+units, and the forward-model equations are unchanged.
+
 Define your own model
 ---------------------
 

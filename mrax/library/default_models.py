@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from numbers import Real
 from typing import Iterable, Sequence
 
+import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 import numpy as np
@@ -73,6 +75,8 @@ def _unit_map(keys: Iterable[str], unit: str) -> dict[str, str]:
 
 def _bounded(raw, lo, hi):
     """Map raw values to [lo, hi] via sigmoid."""
+    if isinstance(lo, Real) and isinstance(hi, Real) and lo < 0 and hi == -lo:
+        return hi * jnn.tanh(0.5 * raw)
     return lo + (hi - lo) * jnn.sigmoid(raw)
 
 
@@ -89,6 +93,9 @@ def _inverse_transform(value, cfg):
         return jnp.log(jnp.expm1(scaled))
     if transform == "bounded":
         lo, hi = cfg["bounds"]
+        if isinstance(lo, Real) and isinstance(hi, Real) and lo < 0 and hi == -lo:
+            scaled = jnp.clip(arr / hi, -1.0 + 2.0 * eps, 1.0 - 2.0 * eps)
+            return 2.0 * jnp.arctanh(scaled)
         lo_arr = jnp.asarray(lo)
         hi_arr = jnp.asarray(hi)
         denom = jnp.where(jnp.abs(hi_arr - lo_arr) < eps, 1.0, hi_arr - lo_arr)
@@ -166,10 +173,26 @@ def _resolve_bool_observable(
     if observables:
         for key in keys:
             if key in observables:
-                arr = np.asarray(_arr(observables[key]))
+                value = observables[key]
+                value = value.values if isinstance(value, Quantity) else value
+                try:
+                    arr = np.asarray(value)
+                except jax.errors.TracerArrayConversionError as exc:
+                    raise ValueError(f"Observable '{key}' must be static before JIT") from exc
                 if arr.size == 0:
                     return bool(default)
-                return bool(arr.reshape((-1,))[0])
+                first = arr.reshape((-1,))[0]
+                if not np.all(arr == first):
+                    raise ValueError(f"Observable '{key}' must have one static Boolean value")
+                if isinstance(first, (str, np.str_)):
+                    token = str(first).strip().strip("<>").lower()
+                    if token in ("on", "true", "1", "1.0"):
+                        return True
+                    if token in ("off", "false", "0", "0.0"):
+                        return False
+                elif first == 0 or first == 1:
+                    return bool(first)
+                raise ValueError(f"Observable '{key}' must be a Boolean value")
     return bool(default)
 
 

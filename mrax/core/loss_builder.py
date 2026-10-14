@@ -14,6 +14,7 @@ from mrax.data_struct.model import Model
 from mrax.data_struct.quantity import Quantity, attach_units, require_quantity_dict
 from mrax.data_struct.study import Study
 
+from .fit_execution import FitState, execute_optimizer
 from .variance import VarianceEstimate, estimate_data_variance
 
 
@@ -801,7 +802,7 @@ def run_fit(
     model: Model,
     dataset: DataSet,
     optimizer_name: str = "adam",
-    step_size: float = 0.02,
+    step_size: float | Callable[[jax.Array], jax.Array] = 0.02,
     num_steps: int = 200,
     regularizer_weight=0.0,
     regularizer_prox=None,
@@ -825,6 +826,13 @@ def run_fit(
     return_model_callable: bool = False,
     compute_derived_maps: bool | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
+    chunk_size: int = 32,
+    initial_state: FitState | None = None,
+    convergence_tolerance: float | None = None,
+    parameter_tolerance: float = 1e-5,
+    convergence_patience: int = 5,
+    min_steps: int = 0,
+    return_fit_info: bool = False,
 ):
     """Fit the model to data for a given experiment.
 
@@ -844,9 +852,16 @@ def run_fit(
     NaN/inf entries in data or masks are treated as masked during fitting.
     ``compute_derived_maps`` controls derived map evaluation. When ``None``, derived maps
     are automatically computed for diffusion models that provide ``derived_maps``.
+    ``step_size`` also accepts an Optax-compatible learning-rate schedule.
+    ``chunk_size`` bounds device-side execution between progress/finiteness checks.
+    Convergence is opt-in: ``convergence_tolerance`` and ``parameter_tolerance``
+    must hold for ``convergence_patience`` consecutive updates after ``min_steps``.
+    ``initial_state`` resumes raw parameters and optimizer moments from a previous
+    :class:`mrax.core.fit_execution.FitInfo`; it is mutually exclusive with ``initial_params``.
+    ``return_fit_info`` appends :class:`mrax.core.fit_execution.FitInfo` to the normal return tuple. Its
+    ``final_loss`` evaluates the returned parameters; history entries precede updates.
+    Nonfinite fits raise :class:`mrax.core.fit_execution.FitError` with the last valid chunk checkpoint.
     """
-    import optax
-
     from mrax.opt.optimizers import make_optimizer
 
     warn_if_fit_requires_model_override(experiment, model)
@@ -907,6 +922,12 @@ def run_fit(
             raise ValueError("Invalid initial_params provided") from exc
         return candidate
 
+    if initial_state is not None:
+        if not isinstance(initial_state, FitState):
+            raise TypeError("initial_state must be a FitState")
+        if initial_params is not None:
+            raise ValueError("Provide initial_params or initial_state, not both")
+        initial_params = initial_state.params
     params = _validate_init(default_params, initial_params)
 
     if optimizer is not None:
@@ -922,31 +943,12 @@ def run_fit(
             base_optimizer_factory=optimizer_base_factory,
             box_constraints=box_constraints,
         )
-    opt_state = opt.init(params)
-
-    @jax.jit
-    def train_step(params, opt_state):
-        loss, grads = jax.value_and_grad(loss_fn)(params)
-        updates, opt_state = opt.update(grads, opt_state, params)
-        params = optax.apply_updates(params, updates)
-        return params, opt_state, loss
-
-    total_steps = max(1, int(num_steps))
-    if progress_callback is not None:
-        progress_callback(0, total_steps, "Preparing optimizer")
-    losses = []
-    progress_interval = max(1, total_steps // 100)
-    for step_idx in range(num_steps):
-        params, opt_state, loss = train_step(params, opt_state)
-        losses.append(float(loss))
-        step = step_idx + 1
-        if (
-            progress_callback is not None
-            and (step == 1 or step == num_steps or step % progress_interval == 0)
-        ):
-            progress_callback(step, total_steps, f"Fitting step {step} of {num_steps}")
-    if progress_callback is not None and num_steps == 0:
-        progress_callback(1, total_steps, "No optimizer steps requested")
+    params, losses, fit_info = execute_optimizer(
+        loss_fn, params, opt, num_steps=num_steps, chunk_size=chunk_size,
+        initial_state=initial_state, convergence_tolerance=convergence_tolerance,
+        parameter_tolerance=parameter_tolerance, convergence_patience=convergence_patience,
+        min_steps=min_steps, progress_callback=progress_callback,
+    )
 
     fitted_fields_raw = unpack(params)
     fitted_fields_raw = _broadcast_fields_to_field_shape(
@@ -996,7 +998,11 @@ def run_fit(
 
     if return_model_callable:
         model_fn = make_model_callable(experiment, model, study_globals=study_globals)
+        if return_fit_info:
+            return fitted_fields, losses, model_fn, fit_info
         return fitted_fields, losses, model_fn
+    if return_fit_info:
+        return fitted_fields, losses, fit_info
     return fitted_fields, losses
 
 

@@ -45,6 +45,7 @@ class NormalizedMetadata:
     sat_time_ms: Sequence[float] | float | None = None
     diffusion_bvals: Sequence[float] | float | None = None
     diffusion_bvecs: Sequence[Sequence[float]] | np.ndarray | None = None
+    spin_lock: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -430,6 +431,9 @@ def extract_observables_from_metadata(
         if _has_value(meta.sat_time_ms):
             sat_time = _trim_to_frames(meta.sat_time_ms, frame_count)
             obs["sat_time"] = Quantity(jnp.asarray(sat_time, dtype=jnp.float32), "ms")
+
+        if meta.spin_lock is not None:
+            obs["spin_lock"] = Quantity(meta.spin_lock, "1")
 
     if exp_type in ("dti", "diffusion"):
         bvals = _trim_to_frames(meta.diffusion_bvals, frame_count)
