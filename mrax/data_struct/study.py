@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Iterator, Sequence
 
 from .dataset import DataSet
@@ -138,6 +139,15 @@ class Study:
                 self.names, self.experiments, self.models, self.datasets
             )
         }
+
+    def save(self, path, *, results=None, **options):
+        """Save inputs and optional fitting results to a portable .mrax bundle."""
+        from .storage import save_study_results
+
+        supplied = {item["name"]: item for item in (results or [])}
+        payload = [supplied.get(name, {"name": name, "fields": {}, "loss_history": []}) for name in self.names]
+        options.setdefault("study_name", Path(path).stem)
+        return save_study_results(self, payload, path, **options)
 
     def execution_order(self, targets: Sequence[str] | None = None) -> list[str]:
         """Return the study order (as provided), optionally filtered by targets."""

@@ -11,8 +11,7 @@ Dimension handling
 
 Experiments use named dimensions to describe how non-spatial axes map to observables.
 Spatial axes are always ``x/y/z``. Non-spatial axes are inferred from observable
-lengths when importing data. Temporal repeats use ``t`` only when another observable
-axis explains part of the frame grid. If the observable layout cannot be inferred,
+lengths when importing data. If the observable layout cannot be inferred,
 importers fall back to a single ``frame`` axis.
 
 You can inspect the current layout via ``experiment.describe_dims()`` and reshape arrays

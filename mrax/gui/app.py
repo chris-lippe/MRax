@@ -14,7 +14,6 @@ import sys
 import tempfile
 import traceback
 import warnings
-import zipfile
 from collections import deque
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -34,6 +33,9 @@ from mrax.data_struct.dimensions import (
     reshape_frames_to_dims,
     spatial_names,
 )
+from mrax.io.bundle import extract_bundle as _extract_mrax_bundle
+from mrax.io.bundle import write_bundle as _write_mrax_bundle
+from mrax.io.image_export import export_image_files, image_frames
 from mrax.reco.components import available_reconstruction_variants
 from mrax.versioning import missing_mrax_version_message, validate_mrax_file_version
 
@@ -56,6 +58,7 @@ from .models import (
     model_parameter_specs,
     normalize_model_key,
 )
+from .plotting import axis_coordinates, image_profile, profile_selection
 from .registration import (
     DriftCorrectionOptions,
     RegistrationOptions,
@@ -81,7 +84,6 @@ from .session import (
     GuiSession,
     VisualViewState,
     _display_slice,
-    frame_axis_values,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -2540,21 +2542,16 @@ class _MainWindowMixin:
         )
 
     def save_imported_study_dialog(self):
-        if self.session.study is None:
-            self.statusBar().showMessage("No imported in-memory study is available to save.")
+        if not self.session.is_loaded:
+            self.statusBar().showMessage("No study is available to save.")
             return
-        directory = self._get_existing_directory(
-            "Choose MRax output folder",
-            str(Path.cwd()),
-        )
-        if not directory:
-            return
-        try:
-            manifest = self.session.save_imported_study(directory)
-        except Exception:
-            self.show_error("Could not save imported study", traceback.format_exc())
-            return
-        self.statusBar().showMessage(f"Saved imported study as MRax manifest: {manifest}")
+        path, _ = self._get_save_file_name("Save MRax study", str(Path.cwd() / "study.mrax"), "MRax bundle (*.mrax)")
+        if path:
+            self.run_guarded_task(
+                lambda progress: self.session.save_imported_study(Path(path).with_suffix(".mrax"), progress_callback=progress),
+                lambda saved: self.statusBar().showMessage(f"Saved study: {saved}"),
+                "Saving study...", error_title="Could not save study",
+            )
 
     def _text_input_dialog(self, title: str, label: str, default: str = "") -> str | None:
         dialog = QtWidgets.QDialog(self)
@@ -3938,6 +3935,7 @@ class _MainWindowMixin:
 
     def refresh_frame_controls(self):
         _clear_layout(self.dimension_controls_layout)
+        self.refresh_plot_x_axis_combo()
         self._dimension_counter_labels = {}
         self._dimension_detail_label = None
         if not self.session.is_loaded:
@@ -4922,6 +4920,7 @@ class _MainWindowMixin:
     def on_map_changed(self, name: str):
         if name and self.view_combo.currentText() == "Map":
             self.session.active_map = name
+            self.refresh_frame_controls()
             self.refresh_registration_tab()
             self.update_view()
 
@@ -5143,68 +5142,32 @@ class _MainWindowMixin:
         self.plot_x_combo.blockSignals(False)
 
     def _plot_x_axis_choices(self) -> list[tuple[str, str]]:
-        choices = [("Auto", "auto"), ("Frame", "frame")]
-        if not self.session.is_loaded:
-            return choices
-        try:
-            experiment = self.session.build_experiment()
-            frame_count = self.session.frame_count
-            for name, qty in dict(experiment.observables).items():
-                arr = _quantity_values(qty)
-                if arr.ndim == 1 and int(arr.shape[0]) == frame_count:
+        choices = [("Auto", "auto")]
+        if self.session.is_loaded:
+            dims = self.session.experiment_dims
+            for control in self.session.dimension_controls(_view_key(self.view_combo.currentText())):
+                name = str(control["label"])
+                if name in dims:
                     choices.append((name, name))
-                elif arr.ndim == 2 and int(arr.shape[0]) == frame_count:
-                    if int(arr.shape[1]) == 3 and name.lower() in {"bvec", "bvecs"}:
-                        choices.extend(
-                            [
-                                (f"{name} x", f"{name}:0"),
-                                (f"{name} y", f"{name}:1"),
-                                (f"{name} z", f"{name}:2"),
-                            ]
-                        )
-                    else:
-                        for col in range(min(int(arr.shape[1]), 6)):
-                            choices.append((f"{name}[{col}]", f"{name}:{col}"))
-        except Exception:
-            _LOG.debug("Ignored optional GUI operation failure", exc_info=True)
         return choices
 
     def on_plot_x_axis_changed(self, _idx: int):
         self._plot_x_axis_key = str(self.plot_x_combo.currentData() or "auto")
         self.update_plot()
 
+    def _plot_dimension(self) -> str | None:
+        choices = [key for _label, key in self._plot_x_axis_choices() if key != "auto"]
+        selected = self._plot_x_axis_key
+        if selected in choices:
+            return selected
+        non_spatial = self.session.build_experiment().non_spatial_dim_names
+        return next((key for key in choices if key in non_spatial), choices[0] if choices else None)
+
     def _plot_axis_values(self, length: int) -> tuple[str, np.ndarray]:
-        try:
-            experiment = self.session.build_experiment()
-            key = str(getattr(self, "_plot_x_axis_key", "auto") or "auto")
-            if key == "frame":
-                return "frame", np.arange(int(length))
-            if key == "auto":
-                if str(experiment.exp_type or "").lower() in {"dti", "dki", "diffusion"}:
-                    obs = dict(experiment.observables)
-                    bvals = obs.get("bvals") or obs.get("bval")
-                    if bvals is not None:
-                        arr = _quantity_values(bvals).reshape((-1,))
-                        if arr.size == int(length):
-                            return "bvals", arr
-                x_name, x = frame_axis_values(experiment)
-                x = np.asarray(x).reshape((-1,))
-                if x.size == int(length):
-                    return x_name, x
-                return "frame", np.arange(int(length))
-            obs_name, sep, col_text = key.partition(":")
-            qty = dict(experiment.observables).get(obs_name)
-            if qty is not None:
-                arr = _quantity_values(qty)
-                if sep:
-                    col = int(col_text)
-                    if arr.ndim == 2 and int(arr.shape[0]) == int(length) and col < int(arr.shape[1]):
-                        return f"{obs_name}[{col}]", np.asarray(arr[:, col]).reshape((-1,))
-                elif arr.ndim == 1 and int(arr.shape[0]) == int(length):
-                    return obs_name, np.asarray(arr).reshape((-1,))
-        except Exception:
-            _LOG.debug("Ignored optional GUI operation failure", exc_info=True)
-        return "frame", np.arange(int(length))
+        dimension = self._plot_dimension()
+        if dimension is None:
+            return "frame", np.arange(length)
+        return axis_coordinates(self.session.build_experiment(), dimension, self._current_slice_indices(), geometry=self.session.current_experiment.get("spatial_geometry"))
 
     def on_view_changed(self, _text: str):
         self.refresh_map_list()
@@ -6843,72 +6806,39 @@ class _MainWindowMixin:
         plot.clear()
         if not self.session.is_loaded:
             return
-        preview = self._preview_results_by_experiment.get(self.session.selected_experiment or "")
-        if preview is not None:
-            try:
-                observed = np.asarray(preview["observed"]).reshape((-1,))
-                predicted = np.asarray(preview["predicted"]).reshape((-1,))
-                included = np.asarray(preview["included"], dtype=bool)[: observed.size]
-                x_name, x = self._plot_axis_values(observed.size)
-                x = np.asarray(x).reshape((-1,))
-                if x.size != observed.size:
-                    x = np.arange(observed.size)
-                    x_name = "frame"
-                plot.plot(x[included], observed[included], pen=None, symbol="o", symbolBrush="#2563eb")
-                if (~included).any():
-                    plot.plot(x[~included], observed[~included], pen=None, symbol="x", symbolBrush="#dc2626")
-                plot.plot(x[: predicted.size], predicted, pen="#16a34a")
-                plot.setTitle(f"Preview fit: {preview['model']}")
-                plot.setLabel("bottom", x_name)
-                roi = self.session.roi()
-                plot.setLabel("left", f"{roi.name if roi is not None else 'ROI'} mean")
-                return
-            except Exception:
-                plot.clear()
         if self.session.is_non_imaging:
-            try:
-                self._draw_non_imaging_plot(plot)
-                return
-            except Exception:
-                plot.setTitle("Non-imaging plot unavailable")
-                return
-        roi = self.session.roi()
+            self._draw_non_imaging_plot(plot)
+            return
         try:
-            if roi is not None:
-                if not self._roi_has_pixels(roi):
-                    plot.setTitle(f"ROI '{roi.name}' is empty")
-                    plot.setLabel("bottom", "frame")
-                    plot.setLabel("left", f"{roi.name} mean")
-                    return
-                extracted = self.session.extract_timecourse(roi.name, source="image")
-                y = np.asarray(extracted["timecourse"].values if hasattr(extracted["timecourse"], "values") else extracted["timecourse"])
-                y = y.reshape((-1,))
-                x_name, x = self._plot_axis_values(y.size)
-                x = np.asarray(x).reshape((-1,))
-                if x.size != y.size:
-                    x = np.arange(y.size)
-                    x_name = "frame"
-                included = self.session.frame_mask.as_array()[: y.size] if self.session.frame_mask else np.ones(y.size, dtype=bool)
-                plot.plot(x[included], y[included], pen=None, symbol="o", symbolBrush="#2563eb", name="included")
-                if (~included).any():
-                    plot.plot(x[~included], y[~included], pen=None, symbol="x", symbolBrush="#dc2626", name="excluded")
-                plot.setLabel("bottom", x_name)
-                plot.setLabel("left", f"{roi.name} mean")
+            experiment = self.session.build_experiment()
+            dimension = self._plot_dimension()
+            if dimension is None:
+                plot.setTitle("No dimension to plot")
+                return
+            indices = self._current_slice_indices()
+            selection, frame_ids = profile_selection(experiment, dimension, indices)
+            preview = self.last_preview_fit_result
+            predicted = None
+            if preview is not None and dimension in experiment.non_spatial_dim_names:
+                observed = np.asarray(preview["observed"]).reshape(experiment.non_spatial_shape)[selection].reshape(-1)
+                predicted = np.asarray(preview["predicted"]).reshape(experiment.non_spatial_shape)[selection].reshape(-1)
+                included = np.asarray(preview["included"], dtype=bool)[frame_ids]
+                plot.setTitle(f"Preview fit: {preview['model']}")
             else:
-                image = self.session.image_array
-                experiment = self.session.build_experiment()
-                flat = reshape_dims_to_frames(image, experiment.dims).reshape((self.session.frame_count, -1))
-                y = np.nanmean(flat, axis=1)
-                x_name, x = self._plot_axis_values(y.size)
-                x = np.asarray(x).reshape((-1,))
-                if x.size != y.size:
-                    x = np.arange(y.size)
-                    x_name = "frame"
-                plot.plot(x, y, pen="#2563eb")
-                plot.setLabel("bottom", x_name)
-                plot.setLabel("left", "mean intensity")
-        except Exception:
-            plot.setTitle("Plot unavailable")
+                observed = image_profile(self.session.image_array, experiment, dimension, indices,
+                                         roi=self.session.roi(), plane_dims=self.session.image_plane_dims)
+                included = self.session.frame_mask.as_array()[frame_ids] if self.session.frame_mask else np.ones(observed.size, dtype=bool)
+            label, coordinates = axis_coordinates(experiment, dimension, indices, geometry=self.session.current_experiment.get("spatial_geometry"))
+            plot.plot(coordinates[included], observed[included], pen=None, symbol="o", symbolBrush="#2563eb")
+            if np.any(~included):
+                plot.plot(coordinates[~included], observed[~included], pen=None, symbol="x", symbolBrush="#dc2626")
+            if predicted is not None:
+                plot.plot(coordinates, predicted, pen="#16a34a")
+            plot.setLabel("bottom", label)
+            roi = self.session.roi()
+            plot.setLabel("left", f"{roi.name} mean (a.u.)" if roi is not None else "Mean intensity (a.u.)")
+        except Exception as error:
+            plot.setTitle(f"Plot unavailable: {error}")
 
     def _draw_non_imaging_plot(self, plot):
         vector = np.asarray(self.session.non_imaging_vector()).reshape((-1,))
@@ -7771,6 +7701,8 @@ class _MainWindowMixin:
         numpy_check.setChecked(True)
         nifti_check = QtWidgets.QCheckBox("NIfTI files (.nii)")
         nifti_check.setChecked(False)
+        dicom_check = QtWidgets.QCheckBox("DICOM image series (.dcm)")
+        dicom_check.setChecked(False)
         for widget in (
             include_images,
             include_reconstructions,
@@ -7779,6 +7711,7 @@ class _MainWindowMixin:
             include_rois,
             numpy_check,
             nifti_check,
+            dicom_check,
         ):
             bulk_layout.addWidget(widget)
         transform_rois_check = QtWidgets.QCheckBox("Apply available registration transform to ROIs")
@@ -7931,6 +7864,7 @@ class _MainWindowMixin:
                     include_rois=include_rois.isChecked(),
                     export_numpy=numpy_check.isChecked(),
                     export_nifti=nifti_check.isChecked(),
+                    export_dicom=dicom_check.isChecked(),
                     include_reconstructions=include_reconstructions.isChecked(),
                     roi_transform_key=(
                         str(export_transform_combo.currentData())
@@ -8008,6 +7942,7 @@ class _MainWindowMixin:
         export_numpy: bool,
         export_nifti: bool,
         include_reconstructions: bool = True,
+        export_dicom: bool = False,
         roi_transform_key: str | None = None,
         roi_transform_direction: str = "reference_to_moving",
     ) -> list[Path]:
@@ -8139,34 +8074,19 @@ class _MainWindowMixin:
                         except Exception as exc:
                             manifest["warnings"].append(f"warning: skipped {exp_name}/{map_name} NumPy export: {exc}")
                     if export_nifti:
-                        nifti_path = exp_dir / "nifti" / "maps" / f"{_safe_filename(str(map_name))}.nii"
                         try:
-                            if arr.ndim not in (2, 3):
-                                raise ValueError("NIfTI map export supports 2D/3D spatial maps only")
-                            from mrax.io.nifti import save_nifti
-
-                            nifti_path.parent.mkdir(parents=True, exist_ok=True)
-                            affine = _experiment_nifti_affine(self.session, str(exp_name))
-                            if affine is None:
-                                affine = np.eye(4, dtype=float)
-                                manifest["warnings"].append(
-                                    f"{exp_name}/{map_name}: orientation unavailable; identity affine used"
-                                )
-                            save_nifti(nifti_path, arr, affine)
-                        except Exception as exc:
-                            manifest["warnings"].append(f"{exp_name}/{map_name}: {exc}")
-                        else:
-                            saved.append(nifti_path)
-                            exp_manifest["files"].append(
-                                {
-                                    "kind": "map",
-                                    "name": str(map_name),
-                                    "format": "nifti",
-                                    "unit": unit or "",
-                                    "path": _package_relative(nifti_path, output_dir),
-                                }
-                            )
+                            record = _export_record("map", str(map_name), arr, group=str(exp_name),
+                                                    name=str(map_name), experiment=str(exp_name), dims=exp_dims, unit=unit)
+                            record["nifti_reference"] = {"affine": _experiment_nifti_affine(self.session, str(exp_name)),
+                                                         "geometry": exp_data.get("spatial_geometry")}
+                            outputs = _write_single_export_object(record, exp_dir / "nifti" / "maps" / f"{_safe_filename(str(map_name))}.nii", "nifti")
+                            saved.extend(outputs)
+                            exp_manifest["files"].extend({"kind": "map", "format": "nifti", "name": str(map_name),
+                                                           "path": _package_relative(path, output_dir)} for path in outputs)
+                        except Exception as error:
+                            manifest["warnings"].append(f"NIfTI map export skipped: {error}")
             manifest["experiments"][str(exp_name)] = exp_manifest
+        export_rois: list[ROI] = []
         if include_rois and self.session.rois:
             export_rois = self._rois_for_export_transform(
                 roi_transform_key,
@@ -8205,6 +8125,25 @@ class _MainWindowMixin:
                     manifest["rois"]["label_masks"] = [
                         _package_relative(path, output_dir) for path in roi_label_files
                     ]
+        if export_dicom:
+            selected = {"image": include_images, "original_image": include_images,
+                        "map": include_maps, "roi": include_rois, "reconstruction": include_reconstructions}
+            records = [record for record in self._exportable_object_records() if record.get("kind") != "roi"]
+            for roi in export_rois:
+                record = _export_record("roi", roi.name, roi.mask, group="ROIs", name=roi.name,
+                                        dims=roi.dims, roi=roi, metadata=roi.metadata)
+                record["nifti_reference"] = _roi_nifti_reference(self.session, roi.metadata)
+                records.append(record)
+            for record in records:
+                if not selected.get(str(record.get("kind")), False):
+                    continue
+                try:
+                    destination = output_dir / "dicom" / _safe_filename(str(record.get("experiment") or "rois")) / _safe_filename(str(record["name"])) / "image.dcm"
+                    files = _write_single_export_object(record, destination, "dicom")
+                    saved.extend(files)
+                    manifest.setdefault("dicom_files", []).extend(_package_relative(path, output_dir) for path in files)
+                except Exception as error:
+                    manifest["warnings"].append(f"DICOM export skipped: {error}")
         manifest_path = output_dir / "export_manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         saved.append(manifest_path)
@@ -8229,7 +8168,7 @@ class _MainWindowMixin:
             from mrax.io.nifti import export_nifti_series
 
             experiment = Experiment(
-                dims={str(k): int(v) for k, v in dict(exp_data.get("dims") or {}).items()},
+                dims={str(k): int(v) for k, v in dict(exp_data.get("dims") or self.session.summary_by_name.get(str(exp_name), {}).get("dims") or {}).items()},
                 observables=dict(exp_data.get("observables") or {}),
                 exp_type=exp_data.get("exp_type"),
             )
@@ -8240,7 +8179,7 @@ class _MainWindowMixin:
                 else None
             )
             dataset = DataSet(
-                data=np.asarray(exp_data["mr_image"]),
+                data=np.asarray(reshape_frames_to_dims(exp_data["mr_image"], experiment.dims)),
                 name=str(exp_name),
                 spatial_geometry=geometry,
             )
@@ -8275,7 +8214,7 @@ class _MainWindowMixin:
             from mrax.io.nifti import export_nifti_series
 
             experiment = Experiment(
-                dims={str(k): int(v) for k, v in dict(exp_data.get("dims") or {}).items()},
+                dims={str(k): int(v) for k, v in dict(exp_data.get("dims") or self.session.summary_by_name.get(str(exp_name), {}).get("dims") or {}).items()},
                 observables=dict(exp_data.get("observables") or {}),
                 exp_type=exp_data.get("exp_type"),
             )
@@ -8286,7 +8225,7 @@ class _MainWindowMixin:
                 else None
             )
             dataset = DataSet(
-                data=np.asarray(array),
+                data=np.asarray(reshape_frames_to_dims(array, experiment.dims)),
                 name=f"{exp_name}_{stem}",
                 spatial_geometry=geometry,
             )
@@ -8467,6 +8406,9 @@ class _MainWindowMixin:
         layout.addWidget(buttons)
         if self._exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
             return False
+        if self.is_busy:
+            return False
+        self._begin_busy("Saving study...")
         try:
             if bundle_check.isChecked():
                 bundle_path = Path(output_edit.text()).expanduser()
@@ -8493,6 +8435,8 @@ class _MainWindowMixin:
         except Exception:
             self.show_error("Could not save selected outputs", traceback.format_exc())
             return False
+        finally:
+            self._end_busy()
         self.clear_dirty()
         return True
 
@@ -8518,15 +8462,15 @@ class _MainWindowMixin:
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="mrax_bundle_") as tmp:
             package_root = Path(tmp) / path.stem
-            saved = self.save_mrax_package_folder(
+            self.save_mrax_package_folder(
                 package_root,
                 include_state=include_state,
                 include_rois=include_rois,
                 include_study=include_study,
                 include_unloaded_raw=include_unloaded_raw,
             )
-            _write_mrax_bundle(path, package_root)
-        return [path, *saved]
+            _write_mrax_bundle(path, package_root, progress_callback=self.on_task_progress)
+        return [path]
 
     def save_mrax_package_folder(
         self,
@@ -8564,7 +8508,7 @@ class _MainWindowMixin:
                 saved.append(study_manifest)
             if include_study and self.last_fit_result is not None:
                 try:
-                    fit_manifest = self.session.save_fit_result(self.last_fit_result, output_dir / "fit_results")
+                    fit_manifest = self.session.save_fit_result(self.last_fit_result, output_dir / "fit_results", bundle=False, progress_callback=self.on_task_progress)
                 except Exception as exc:
                     warnings_list.append(f"warning: skipped fit-result snapshot: {exc}")
                 else:
@@ -8648,17 +8592,8 @@ class _MainWindowMixin:
         output_dir = Path(output_dir)
         if include_unloaded_raw:
             self.session.load_all_lazy_raw_data(progress_callback=self.on_task_progress)
-        if self.session.manifest_path is not None and self.session.manifest_path.is_file():
-            if output_dir.exists():
-                shutil.rmtree(output_dir)
-            shutil.copytree(self.session.manifest_path.parent, output_dir)
-            copied = output_dir / self.session.manifest_path.name
-            if copied.is_file():
-                _stamp_copied_study_snapshot(copied, self.session)
-                return copied
-            return None
-        if self.session.study is not None:
-            return self.session.save_imported_study(output_dir)
+        if self.session.is_loaded:
+            return self.session.save_imported_study(output_dir, bundle=False, progress_callback=self.on_task_progress)
         return None
 
     def load_gui_state_dialog(self):
@@ -10115,20 +10050,15 @@ class _MainWindowMixin:
 
     def save_fit_dialog(self):
         if self.last_fit_result is None:
-            self.statusBar().showMessage("No fit result is available to save.")
+            self.statusBar().showMessage("No fitted result is available to save.")
             return
-        directory = self._get_existing_directory(
-            "Choose output folder",
-            str(Path.cwd()),
-        )
-        if not directory:
-            return
-        try:
-            manifest = self.session.save_fit_result(self.last_fit_result, directory)
-        except Exception:
-            self.show_error("Could not save fit result", traceback.format_exc())
-            return
-        self.statusBar().showMessage(f"Saved fit result to {manifest}")
+        path, _ = self._get_save_file_name("Save fitted study", str(Path.cwd() / "fit.mrax"), "MRax bundle (*.mrax)")
+        if path:
+            self.run_guarded_task(
+                lambda progress: self.session.save_fit_result(self.last_fit_result, Path(path).with_suffix(".mrax"), progress_callback=progress),
+                lambda saved: self.statusBar().showMessage(f"Saved fitted study: {saved}"),
+                "Saving fit...", error_title="Could not save fit",
+            )
 
     @property
     def is_busy(self) -> bool:
@@ -10140,6 +10070,9 @@ class _MainWindowMixin:
         self._hover_status_message = None
         if self._central_splitter is not None:
             self._central_splitter.setEnabled(False)
+            effect = QtWidgets.QGraphicsOpacityEffect(self._central_splitter)
+            effect.setOpacity(0.45)
+            self._central_splitter.setGraphicsEffect(effect)
         if self.progress_bar is not None:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
@@ -10152,6 +10085,7 @@ class _MainWindowMixin:
     def _end_busy(self):
         self._busy_message = None
         if self._central_splitter is not None:
+            self._central_splitter.setGraphicsEffect(None)
             self._central_splitter.setEnabled(True)
         if self.progress_bar is not None:
             self.progress_bar.hide()
@@ -10170,6 +10104,7 @@ class _MainWindowMixin:
         self.progress_bar.setFormat(f"{percent}%")
         if detail:
             self.progress_bar.setToolTip(detail)
+            self.statusBar().showMessage(detail)
         self._flush_gui_events()
 
     def _flush_gui_events(self):
@@ -13157,36 +13092,6 @@ def _write_mrax_package_manifest(root: Path, entries: dict[str, str], *, warning
     return path
 
 
-def _stamp_copied_study_snapshot(manifest_path: Path, session: GuiSession) -> None:
-    """Stamp a copied legacy snapshot without placing metadata in MRD payloads."""
-
-    manifest_path = Path(manifest_path)
-    root = manifest_path.parent.resolve()
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["format"] = "mrax.study"
-    payload["format_version"] = 1
-    payload[MRAX_VERSION_TAG] = MRAX_VERSION
-    geometry_by_name: dict[str, Any] = {}
-    session_experiments = ((session.data or {}).get("experiments") or {})
-    for name, pointer in dict(payload.get("experiments") or {}).items():
-        exp_data = session_experiments.get(name) or {}
-        geometry_by_name[str(name)] = _session_spatial_geometry_metadata(
-            session,
-            str(name),
-            exp_data,
-        )
-        if not isinstance(pointer, Mapping) or not pointer.get("metadata"):
-            continue
-        metadata_path = (root / str(pointer["metadata"])).resolve()
-        if not _is_relative_to(metadata_path, root) or not metadata_path.is_file():
-            continue
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        metadata[MRAX_VERSION_TAG] = MRAX_VERSION
-        if str(name) in geometry_by_name:
-            metadata["spatial_geometry"] = geometry_by_name[str(name)]
-        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    payload["spatial_geometry"] = geometry_by_name
-    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _mrax_package_entries(root: Path) -> dict[str, Path]:
@@ -13223,30 +13128,6 @@ def _mrax_package_entries(root: Path) -> dict[str, Path]:
             entries["roi_npz" if roi_path.suffix.lower() == ".npz" else "roi_json"] = roi_path
     return entries
 
-
-def _write_mrax_bundle(path: Path, source_dir: Path) -> Path:
-    path = Path(path)
-    source_dir = Path(source_dir)
-    if path.exists():
-        path.unlink()
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(source_dir.rglob("*")):
-            if file_path.is_file():
-                zf.write(file_path, file_path.relative_to(source_dir))
-    return path
-
-
-def _extract_mrax_bundle(path: Path, output_dir: Path) -> Path:
-    path = Path(path)
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(path, "r") as zf:
-        for member in zf.infolist():
-            target = output_dir / member.filename
-            if not _is_relative_to(target.resolve(), output_dir.resolve()):
-                raise ValueError(f"Unsafe path in MRax bundle: {member.filename}")
-        zf.extractall(output_dir)
-    return output_dir
 
 
 def _find_study_manifest(root: Path) -> Path | None:
@@ -13954,6 +13835,12 @@ def _export_object_records_for_session(session: GuiSession) -> list[dict[str, An
         )
         record["nifti_reference"] = _roi_nifti_reference(session, roi.metadata)
         records.append(record)
+    for record in records:
+        if record.get("kind") != "roi":
+            experiment = experiments.get(record.get("experiment"), {})
+            reference = record.setdefault("nifti_reference", {})
+            reference.setdefault("affine", _experiment_nifti_affine(session, record.get("experiment")))
+            reference["geometry"] = experiment.get("spatial_geometry")
     return records
 
 
@@ -14001,8 +13888,14 @@ def _single_export_file_types(record: Mapping[str, Any]) -> list[dict[str, str]]
         formats.insert(0, {"id": "roi_set", "label": "MRax ROI set (.npz + .json)", "suffix": ".npz"})
     if arr.ndim in (1, 2) and not np.iscomplexobj(arr):
         formats.append({"id": "csv", "label": "CSV table (.csv)", "suffix": ".csv"})
-    if kind != "k_space" and arr.ndim in (2, 3) and not np.iscomplexobj(arr):
-        formats.append({"id": "nifti", "label": "NIfTI image (.nii)", "suffix": ".nii"})
+    if kind != "k_space" and not np.iscomplexobj(arr):
+        try:
+            next(image_frames(arr, record.get("dims")))
+        except (ValueError, StopIteration):
+            pass
+        else:
+            formats.append({"id": "nifti", "label": "NIfTI frames (.nii)", "suffix": ".nii"})
+            formats.append({"id": "dicom", "label": "DICOM image series (.dcm)", "suffix": ".dcm"})
     formats.append({"id": "json", "label": "Metadata JSON (.json)", "suffix": ".json"})
     return formats
 
@@ -14060,6 +13953,7 @@ def _single_export_name_filter(file_type: str) -> str:
         "npz": "Compressed NumPy archive (*.npz)",
         "csv": "CSV table (*.csv)",
         "nifti": "NIfTI image (*.nii)",
+        "dicom": "DICOM image series (*.dcm)",
         "json": "JSON metadata (*.json)",
     }
     return f"{labels.get(str(file_type), 'All files (*)')};;All files (*)"
@@ -14079,7 +13973,7 @@ def _write_single_export_object(record: Mapping[str, Any], path: Path, file_type
         path.parent.mkdir(parents=True, exist_ok=True)
         roi_npz, roi_json = save_roi_set([roi], path, metadata=metadata)
         return [roi_npz, roi_json]
-    suffix_by_format = {"npy": ".npy", "npz": ".npz", "csv": ".csv", "nifti": ".nii", "json": ".json"}
+    suffix_by_format = {"npy": ".npy", "npz": ".npz", "csv": ".csv", "nifti": ".nii", "dicom": ".dcm", "json": ".json"}
     suffix = suffix_by_format.get(fmt)
     if suffix is None:
         raise ValueError(f"Unsupported export file type '{file_type}'")
@@ -14100,16 +13994,12 @@ def _write_single_export_object(record: Mapping[str, Any], path: Path, file_type
         if np.iscomplexobj(value):
             raise ValueError("CSV export does not support complex arrays")
         np.savetxt(path, value, delimiter=",")
-    elif fmt == "nifti":
-        if arr.ndim not in (2, 3) or np.iscomplexobj(arr):
-            raise ValueError("NIfTI export supports real-valued 2D or 3D arrays only")
-        from mrax.io.nifti import save_nifti
-
+    elif fmt in {"nifti", "dicom"}:
         reference = dict(record.get("nifti_reference") or {})
-        affine = _validated_nifti_affine(reference.get("affine"))
-        if affine is None:
-            affine = np.eye(4, dtype=float)
-        save_nifti(path, arr.astype(np.float32) if arr.dtype == bool else arr, affine)
+        return export_image_files(path, arr, dims=record.get("dims"),
+                                  affine=_validated_nifti_affine(reference.get("affine")),
+                                  geometry=reference.get("geometry"), format=fmt,
+                                  unit=str(record.get("unit") or ""), description=str(record.get("name") or "MRax image"))
     elif fmt == "json":
         path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
     return [path]

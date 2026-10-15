@@ -202,7 +202,7 @@ def build_experiment_dims(
         frame_count,
         observables,
         specs,
-        fallback_dim=fallback_dim,
+        fallback_dim=TEMPORAL_DIM if exp_type == "dce" else fallback_dim,
     )
     dims: dict[str, int] = {}
     for name, size in non_spatial:

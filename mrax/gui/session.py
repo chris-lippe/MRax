@@ -2212,13 +2212,15 @@ class GuiSession:
             "model": model.name,
         }
 
-    def save_fit_result(self, fit_result: Mapping[str, Any], output_dir: str | Path) -> Path:
+    def save_fit_result(self, fit_result: Mapping[str, Any], output_dir: str | Path, *, bundle=True, progress_callback=None) -> Path:
         _experiment, model, _dataset, study = self.build_fit_inputs(fit_result.get("model"))
         return save_study_results(
             study,
             [dict(fit_result)],
             output_dir=output_dir,
-            study_name=Path(output_dir).name,
+            study_name=Path(output_dir).stem,
+            bundle=bundle,
+            progress_callback=progress_callback,
         )
 
     def save_imported_study(
@@ -2226,32 +2228,40 @@ class GuiSession:
         output_dir: str | Path,
         *,
         study_name: str | None = None,
+        bundle: bool = True,
+        progress_callback=None,
     ) -> Path:
-        """Persist an imported in-memory study as an MRax manifest/ISMRMRD folder."""
+        """Save the current study, with a portable bundle by default."""
 
-        if self.study is None:
+        study = self.fit_study()
+        if study is None:
             raise RuntimeError("No imported Study is available to save")
         out = Path(output_dir)
         results = [
             {
                 "name": name,
                 "model": model.name,
-                "fields": {},
+                "fields": dict(((self.data or {}).get("experiments", {}).get(name, {})).get("fitted_maps", {})),
                 "loss_history": [],
                 "cached": False,
             }
-            for name, _experiment, model, _dataset in self.study.iter_entries()
+            for name, _experiment, model, _dataset in study.iter_entries()
         ]
         metadata = (self.import_metadata or {}).get("experiments")
+        if not isinstance(metadata, dict):
+            metadata = {name: dict(entry.get("extra_metadata") or {})
+                        for name, entry in ((self.data or {}).get("experiments") or {}).items()}
         study_to_save = _study_with_save_compatible_image_dims(
-            self.study,
+            study,
             metadata if isinstance(metadata, dict) else None,
         )
         return save_study_results(
             study_to_save,
             results,
             output_dir=out,
-            study_name=study_name or out.name,
+            study_name=study_name or out.stem,
+            bundle=bundle,
+            progress_callback=progress_callback,
             experiment_metadata=metadata if isinstance(metadata, dict) else None,
         )
 

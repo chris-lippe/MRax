@@ -26,11 +26,11 @@ def discover_study_manifests(output_root: str | Path) -> dict[str, Path]:
     if not root.exists():
         raise FileNotFoundError(f"Output root '{root}' does not exist")
 
-    manifests: dict[str, Path] = {}
+    manifests: dict[str, Path] = {path.stem: path for path in root.rglob("*.mrax") if path.is_file()}
     for entry in root.iterdir():
         if entry.is_dir():
             manifest = entry / MANIFEST_NAME
-            if manifest.exists():
+            if manifest.exists() and entry.name not in manifests:
                 manifests[entry.name] = manifest
 
     if manifests:
@@ -51,7 +51,8 @@ def _resolve_manifest(
     path = Path(member)
     if path.exists():
         if path.is_dir():
-            manifest = path / MANIFEST_NAME
+            bundles = sorted(path.glob("*.mrax"))
+            manifest = bundles[0] if len(bundles) == 1 else path / MANIFEST_NAME
         else:
             manifest = path
         if not manifest.exists():

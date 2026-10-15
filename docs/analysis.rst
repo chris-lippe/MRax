@@ -18,7 +18,7 @@ Compute per-map ROI summaries (mean, variance, etc.) from fitted parameter maps:
    from mrax.analysis import ROI, collect_roi_stats
    from mrax.data_struct import load_study_results
 
-   data = load_study_results("batch_output/subj_a/study_manifest.json")
+   data = load_study_results("batch_output/subj_a/subj_a.mrax")
    maps = data["experiments"]["t1_ir"]["fitted_maps"]
 
    mask = np.zeros((16, 16), dtype=bool)

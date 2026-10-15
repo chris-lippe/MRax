@@ -14,6 +14,7 @@ from .dicom import (
 )
 from .dicom_bruker import BrukerDicomMetadataAdapter
 from .dipy import load_dipy_gradients, load_dipy_nifti, save_dipy_nifti
+from .image_export import export_image_files
 from .nifti import (
     export_nifti_4d,
     export_nifti_series,
@@ -27,6 +28,7 @@ from .pulseq_import import import_pulseq_experiment, read_pulseq, read_pulseq_ac
 from .study_selection import auto_select_scans, pick_scan_by_type, scan_text
 
 __all__ = [
+    "export_image_files",
     "load_acquisition",
     "save_acquisition",
     "import_bruker_experiment",

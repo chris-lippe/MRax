@@ -38,6 +38,10 @@ The GUI can also be launched from Python:
 The GUI defaults ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` to avoid reserving GPU
 memory at startup. Set overrides before starting Python.
 
+Plot axes match the image sliders. Selecting one sweeps that dimension while
+other dimensions stay at their slider positions. Axes include observable units;
+``t`` uses elapsed seconds.
+
 Loading Data
 ------------
 
@@ -65,7 +69,8 @@ that manifest in the GUI.
 Saving and Exporting
 --------------------
 
-``Save...`` writes a ``.mrax`` bundle or an editable package folder. It can include:
+``Save...`` defaults to a ``.mrax`` bundle; an editable package folder is optional.
+Saving fades the workspace and shows writing/compression progress. It can include:
 
 - the study snapshot and latest fit result,
 - GUI state,
@@ -73,9 +78,11 @@ Saving and Exporting
 
 ``Export...`` writes analysis files outside the MRax package layout. Images, raw
 k-space, fitted maps, and ROIs can be exported as NumPy arrays, compressed NumPy
-files, CSV tables for suitable 1D/2D real arrays, NIfTI for compatible 2D/3D image
-data, ROI sets, or metadata JSON. Each export folder includes
-``export_manifest.json`` with file paths and any conversion warnings.
+files, CSV tables for suitable 1D/2D real arrays, NIfTI frames, derived DICOM image
+series, ROI sets, or metadata JSON. Each export folder includes
+``export_manifest.json`` with file paths and any conversion warnings. NIfTI export
+splits non-spatial frames and removes singleton non-spatial axes; spatial geometry
+is retained. See :doc:`storage` for DICOM scaling and Python export.
 
 MRax raw reconstructions can be exported as combined magnitude, combined phase,
 and per-coil magnitude/phase arrays. Phase is expressed in radians. The combined

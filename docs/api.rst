@@ -67,18 +67,14 @@ Data structures that keep arrays, units, and experiment context together.
 
 .. _api-storage:
 
-Storage and Manifests
----------------------
+Study Storage
+-------------
 
-Persist inputs/outputs for one or more experiments in an ISMRMRD-backed manifest. All
-files referenced in the manifest are created relative to the provided ``output_dir``.
-
-- ``save_study_results(study, results, output_dir, ...)`` writes MR images, optional
-  k-space, fitted parameter maps with units, plots when requested by the result payload,
-  and optional NIfTI exports when ``save_nifti=True``. Returns ``study_manifest.json``.
-- ``load_study_results(manifest_path)`` reads the manifest plus all referenced arrays
-  and reconstructs per-experiment dictionaries containing fitted maps, metadata, units,
-  and optional plot paths.
+``Study.save(path)`` saves inputs to a portable ``.mrax`` bundle.
+``save_study_results(study, results, path)`` includes fitted outputs and also
+defaults to a bundle. Pass ``bundle=False`` for a manifest folder.
+``load_study_results`` and ``load_precomputed_fields`` accept either format.
+See :doc:`storage` for examples and image exports.
 
 .. autofunction:: mrax.data_struct.storage.save_study_results
 .. autofunction:: mrax.data_struct.storage.load_study_results
@@ -399,3 +395,5 @@ See :doc:`bruker_import` and :doc:`importer_development` for definitions and opt
 .. autofunction:: mrax.library.default_models.make_multipool_lorentzian_model
 .. autofunction:: mrax.library.default_models.make_AB_MT_n_model
 .. autofunction:: mrax.library.default_models.make_zaiss_full_model
+
+.. autofunction:: mrax.io.export_image_files

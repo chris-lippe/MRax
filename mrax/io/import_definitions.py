@@ -366,7 +366,9 @@ def extract_observables_from_metadata(
         obs["flip_angle"] = Quantity(fa_arr, "deg")
 
     if exp_type == "dce" and meta.scan_time_ms is not None:
-        obs["scan_time"] = Quantity(jnp.asarray(float(meta.scan_time_ms), dtype=jnp.float32), "ms")
+        duration = float(meta.scan_time_ms)
+        obs["scan_time"] = Quantity(jnp.asarray(duration, dtype=jnp.float32), "ms")
+        obs["time"] = Quantity(jnp.arange(frame_count, dtype=jnp.float32) * duration / frame_count / 1000., "s")
 
     if exp_type == "fair_asl":
         fair_labels = _trim_to_frames(meta.fair_labels, frame_count)

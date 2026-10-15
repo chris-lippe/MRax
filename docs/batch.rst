@@ -81,5 +81,5 @@ Provide ``analysis_fn`` to run a custom pipeline per study. The function receive
        save_kwargs={"file_extension": ".mrd"},
    )
 
-Outputs land in ``batch_output/<study_name>/`` with ``study_manifest.json`` (including
-structured summary) plus per-experiment ISMRMRD data, mirroring the single-study export.
+Outputs are saved to ``batch_output/<study_name>/<study_name>.mrax``.
+Pass ``save_kwargs={"bundle": False}`` for an editable manifest folder.

@@ -290,6 +290,7 @@ def test_mrax_save_versions_json_geometry_but_not_mrd_payload(tmp_path):
         study,
         [{"name": "t2_demo", "model": model.name, "fields": {}}],
         tmp_path / "versioned",
+        bundle=False,
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     metadata_path = manifest_path.parent / manifest["experiments"]["t2_demo"]["metadata"]

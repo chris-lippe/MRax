@@ -6,6 +6,10 @@ Version 0.3.0
 
 Unreleased.
 
+- Study saves default to portable ``.mrax`` bundles; Python saves omit GUI context.
+  GUI saves show progress. NIfTI export splits frames, and DICOM export is available.
+- Plot axes follow the sliders with units; DCE uses elapsed time in seconds.
+
 - Bruker and Pulseq imports prepare raw acquisitions for a shared FFT,
   variational and model-based reconstruction pipeline with editable plans.
 - Bruker study import accepts standalone exports and skips incomplete or
