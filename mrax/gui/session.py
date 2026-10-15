@@ -269,15 +269,13 @@ class GuiSession:
         self.manifest_path = None
         self.source_kind = "memory"
 
-    def load_bruker_study(
+    def import_bruker_study(
         self,
         study_root: str | Path,
         *,
         field_strength_mhz: float | Quantity | None = None,
         pdata_index: str | Mapping[str, str] = "1",
         load_raw_kspace: bool = False,
-        prefer_raw_image: bool = False,
-        slice_crop_mode: str | None = None,
         type_overrides: Mapping[str, str] | None = None,
         model_overrides_by_name: Mapping[str, str] | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
@@ -288,7 +286,7 @@ class GuiSession:
         this method returns, GUI operations use the in-memory ``Study`` and arrays.
         """
 
-        from mrax.io.bruker_import import load_bruker_study
+        from mrax.io.bruker_import import import_bruker_study
 
         root = Path(study_root)
         model_map_by_name = None
@@ -298,15 +296,13 @@ class GuiSession:
                 for name, model_key in model_overrides_by_name.items()
                 if model_key
             }
-        study, metadata = load_bruker_study(
+        study, metadata = import_bruker_study(
             root,
             type_overrides=dict(type_overrides or {}),
             model_map_by_name=model_map_by_name,
             field_strength_mhz=field_strength_mhz,
             pdata_index=pdata_index,
             load_raw_kspace=load_raw_kspace,
-            prefer_raw_image=prefer_raw_image,
-            slice_crop_mode=slice_crop_mode,
             progress_callback=progress_callback,
         )
         self.study = study
@@ -754,6 +750,9 @@ class GuiSession:
                 name=name,
                 kspace=None if exp_data.get("raw_kspace") is None else jnp.asarray(exp_data.get("raw_kspace")),
                 spatial_geometry=_spatial_geometry_from_experiment_data(exp_data, dims=dims),
+                acquisition=exp_data.get("acquisition"),
+                trajectory=exp_data.get("trajectory"), density=exp_data.get("density"),
+                sampling_mask=exp_data.get("sampling_mask"),
             )
             experiments.append(experiment)
             datasets.append(dataset)
@@ -992,19 +991,22 @@ class GuiSession:
             raise RuntimeError(f"No source path is available for lazy raw import of experiment {exp_name}")
         if progress_callback is not None:
             progress_callback(0, 2, f"Loading raw k-space for scan {exp_name}")
-        from mrax.io.bruker_import import load_bruker_experiment
+        from mrax.io.bruker_import import import_bruker_experiment
 
-        experiment, dataset, _model, meta = load_bruker_experiment(
+        experiment, dataset, _model, meta = import_bruker_experiment(
             exp_path,
             override_type=exp_data.get("exp_type"),
             study_globals=dict((self.data or {}).get("study_globals") or {}),
             pdata_index=str(extra.get("pdata_index") or "1"),
             load_raw_kspace=True,
-            prefer_raw_image=False,
         )
         if progress_callback is not None:
             progress_callback(1, 2, f"Attaching raw data for scan {exp_name}")
         exp_data["raw_kspace"] = dataset.kspace
+        exp_data["acquisition"] = dataset.acquisition
+        exp_data["trajectory"] = dataset.trajectory
+        exp_data["density"] = dataset.density
+        exp_data["sampling_mask"] = dataset.sampling_mask
         exp_data["processed"] = dict(dataset.processed or {})
         loaded = dataset.kspace is not None or (dataset.processed or {}).get("raw_reconstruction") is not None
         status = "loaded" if loaded else "unavailable"
@@ -1012,7 +1014,7 @@ class GuiSession:
         exp_data["extra_metadata"] = {**extra, **dict(meta or {})}
         if self.import_metadata and isinstance(self.import_metadata.get("experiments"), dict):
             imp_exp = self.import_metadata["experiments"].setdefault(exp_name, {})
-            imp_exp["raw_reconstruction"] = dict(dataset.kspace_metadata or {})
+            imp_exp["raw_import"] = dict(dataset.kspace_metadata or {})
         self._update_study_raw_data(exp_name, dataset)
         self._slice_cache.clear()
         if progress_callback is not None:
@@ -1056,6 +1058,52 @@ class GuiSession:
             progress_callback(total, total, "Raw data loading complete")
         return loaded
 
+    def can_reconstruct_raw_data(self, name: str | None = None) -> bool:
+        entry = self.current_experiment if name is None else (self.data or {}).get("experiments", {}).get(name, {})
+        acquisition = entry.get("acquisition")
+        return acquisition is not None and acquisition.domain == "kspace"
+
+    def reconstruct_raw_data_for_experiment(self, name: str | None = None, *, method="fft",
+                                           device: DeviceLike = "cpu", **options):
+        """Run the generic reconstruction stage after raw data have been imported."""
+        from mrax.reco import reconstruct_acquisition
+        from mrax.reco.components import RAW_RECONSTRUCTION_FREQUENCY_KEY
+
+        exp_name = name or self.selected_experiment
+        if not exp_name or not self.can_reconstruct_raw_data(exp_name):
+            raise RuntimeError("This experiment has no prepared MRI acquisition")
+        entry = self.data["experiments"][exp_name]
+        acquisition = entry["acquisition"]
+        result = reconstruct_acquisition(acquisition, method=method, device=device, **options)
+        processed = dict(entry.get("processed") or {})
+        processed["raw_reconstruction"] = np.asarray(result.image)
+        processed["raw_reconstruction_coils"] = np.asarray(result.coil_images)
+        if acquisition.recipe.output_product == "frequency_hz":
+            processed[RAW_RECONSTRUCTION_FREQUENCY_KEY] = np.asarray(result.image)
+        else:
+            processed.pop(RAW_RECONSTRUCTION_FREQUENCY_KEY, None)
+        entry["processed"] = processed
+        entry["kspace_metadata"] = {**dict(entry.get("kspace_metadata") or {}),
+            "reconstruction_status": "completed", "output_product": acquisition.recipe.output_product}
+        if self.study is not None and exp_name in self.study.names:
+            target = self.study.datasets[list(self.study.names).index(exp_name)]
+            target.processed = processed
+            target.kspace_metadata = dict(entry["kspace_metadata"])
+        self._slice_cache.clear()
+        return result
+
+    def prepare_raw_view(self, view: str, *, progress_callback=None, device: DeviceLike = "cpu") -> bool:
+        """Import missing samples, then reconstruct only when the chosen view needs it."""
+        if not self.raw_data_loaded():
+            self.load_raw_data_for_experiment(progress_callback=progress_callback)
+        if view in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"} and self.reconstruction_array is None:
+            if progress_callback is not None:
+                progress_callback(0, 1, "Reconstructing selected experiment")
+            self.reconstruct_raw_data_for_experiment(device=device)
+            if progress_callback is not None:
+                progress_callback(1, 1, "Reconstruction ready")
+        return self.raw_data_loaded()
+
     def _update_study_raw_data(self, name: str, dataset: DataSet) -> None:
         if self.study is None or name not in (self.study.names or ()):
             return
@@ -1064,6 +1112,10 @@ class GuiSession:
         target.kspace = None if dataset.kspace is None else jnp.asarray(dataset.kspace)
         target.processed = dict(dataset.processed or {})
         target.kspace_metadata = dict(dataset.kspace_metadata or {})
+        target.acquisition = dataset.acquisition
+        target.trajectory = dataset.trajectory
+        target.density = dataset.density
+        target.sampling_mask = dataset.sampling_mask
         if dataset.spatial_geometry is not None:
             target.spatial_geometry = dataset.spatial_geometry
 
@@ -1725,6 +1777,10 @@ class GuiSession:
                 self.current_experiment,
                 dims=self.experiment_dims,
             ),
+            acquisition=self.current_experiment.get("acquisition"),
+            trajectory=self.current_experiment.get("trajectory"),
+            density=self.current_experiment.get("density"),
+            sampling_mask=self.current_experiment.get("sampling_mask"),
         )
 
     def build_fit_inputs(self, model_name: str | None = None) -> tuple[Experiment, Any, DataSet, Study]:
@@ -2811,6 +2867,9 @@ def _study_to_session_data(
             "mr_image": image,
             "original_mr_image": np.asarray(image).copy(),
             "raw_kspace": dataset.kspace,
+            "acquisition": dataset.acquisition,
+            "trajectory": dataset.trajectory, "density": dataset.density,
+            "sampling_mask": dataset.sampling_mask,
             "fitted_maps": {},
             "model": model.name,
             "exp_type": experiment.exp_type,

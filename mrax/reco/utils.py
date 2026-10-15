@@ -5,7 +5,9 @@ from typing import Literal
 import jax.numpy as jnp
 import numpy as np
 
-from .pipeline import POCSStage, RecoState, make_sampling_mask
+from mrax.devices import DeviceLike, device_function
+
+from .acquisition import complete_partial_fourier
 from .variational import ifftnc
 
 
@@ -52,20 +54,20 @@ def pick_sensitivity_frame(
     return int(np.argmax(energies))
 
 
+@device_function
 def pocs_complete_kspace(
     kspace: np.ndarray | jnp.ndarray,
     *,
     iterations: int = 20,
-    enforce_real: bool = True,
-    mask: np.ndarray | None = None,
+    mask: np.ndarray,
+    spatial_ndim: int = 2,
+    device: DeviceLike = "cpu",
 ) -> np.ndarray:
     """Fill missing Cartesian k-space via POCS (useful for partial Fourier)."""
 
-    k = np.asarray(kspace)
-    mask_arr = make_sampling_mask(k) if mask is None else np.asarray(mask)
-    state = RecoState(kspace=k, mask=mask_arr)
-    filled = POCSStage(iterations=iterations, enforce_real=enforce_real).run(state).kspace
-    return np.asarray(filled)
+    return np.asarray(complete_partial_fourier(kspace, mask, spatial_ndim=spatial_ndim,
+        method="pocs", iterations=iterations))
+
 
 
 __all__ = [

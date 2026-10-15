@@ -35,6 +35,9 @@ The GUI can also be launched from Python:
    import mrax.gui
    mrax.gui.launch("path/to/study_manifest.json")
 
+The GUI defaults ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` to avoid reserving GPU
+memory at startup. Set overrides before starting Python.
+
 Loading Data
 ------------
 
@@ -142,6 +145,8 @@ ROIs and Masks
 ROI tools create rectangles, circles/ellipses, regular polygons, lassos,
 brush/erase edits, wand masks, and Otsu-threshold masks on the active image slice.
 Masks are stored as :class:`mrax.analysis.ROI` objects.
+
+Draw and edit ROIs in image or map views on the native image grid.
 
 Geometric ROIs remain editable until they are consolidated. Brush, erase, and wand
 edits convert the selected geometric ROI to a raster mask. Label masks are

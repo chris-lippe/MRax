@@ -108,7 +108,7 @@ Defining a Study
    study = Study.from_examples(examples, study_globals=study_globals)
 
 Synthetic builders (:func:`mrax.core.synthetic.make_synthetic_study`) and importers
-(:func:`mrax.io.bruker_import.load_bruker_study`) both emit ``Study`` objects,
+(:func:`mrax.io.bruker_import.import_bruker_study`) both emit ``Study`` objects,
 so the downstream fitting and storage flows are identical regardless of the data source.
 Study-wide globals, such as scanner or protocol constants, belong in ``study_globals`` and are
 merged into every experiment when fitting.

@@ -1,5 +1,6 @@
 """Modular experiment/model/data abstractions."""
 
+from .acquisition import AcquisitionData, ReadoutModel, ReconstructionRecipe
 from .dataset import DataSet
 from .dimensions import (
     FRAME_DIM,
@@ -30,6 +31,7 @@ from .storage import load_precomputed_fields, load_study_results, save_study_res
 from .study import Study
 
 __all__ = [
+    "AcquisitionData",
     "DataSet",
     "DimensionSpec",
     "Experiment",
@@ -40,6 +42,8 @@ __all__ = [
     "NATIVE_AXIS_CONVENTION",
     "NIFTI_AFFINE_CONVENTION",
     "Quantity",
+    "ReadoutModel",
+    "ReconstructionRecipe",
     "ResolvedSpatialGeometry",
     "SPATIAL_GEOMETRY_VERSION",
     "SPATIAL_DIMS",

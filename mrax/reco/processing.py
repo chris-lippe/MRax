@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Literal, Sequence
 
+import jax.numpy as jnp
 import numpy as np
 
 ReadoutTransform = Literal["none", "fft", "ifft", "fft_ifftshift", "ifft_ifftshift"]
@@ -278,3 +279,18 @@ def fid_profiles_to_kspace(
     if dtype is not None:
         out = out.astype(dtype, copy=False)
     return np.asarray(out)
+
+
+def pad_centered_kspace(array, target_shape):
+    """Pad trailing Fourier axes, preserving DC at index ``size // 2``."""
+    values = jnp.asarray(array)
+    target = tuple(int(size) for size in target_shape)
+    if not target or len(target) > values.ndim or any(size <= 0 for size in target):
+        raise ValueError("Target shape must identify positive trailing encoding dimensions")
+    widths = [(0, 0)] * (values.ndim - len(target))
+    for source, destination in zip(values.shape[-len(target):], target, strict=True):
+        if destination < source:
+            raise ValueError("Fourier padding cannot discard acquired samples")
+        before = destination // 2 - source // 2
+        widths.append((before, destination - source - before))
+    return jnp.pad(values, widths)

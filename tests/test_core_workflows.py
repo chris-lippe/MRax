@@ -23,11 +23,41 @@ from mrax.data_struct import (
     save_study_results,
 )
 from mrax.library import build_default_experiment, default_model_for_type, make_t2_se_model
-from mrax.library.default_models import make_dti_tensor_model
+from mrax.library.default_models import make_dti_tensor_model, make_fair_asl_model
 from mrax.opt.regularizers import total_variation_penalty
 from mrax.preprocessing import denoise_filter, regularized_denoise
-from mrax.reco import fftnc, ifftnc, reconstruct_ifft, reconstruct_regrid, unwrap_phase_image
+from mrax.reco import fftnc, ifftnc, unwrap_phase_image
 from mrax.versioning import MRaxVersionIncompatibilityError
+
+
+@pytest.mark.parametrize("order", [("ti", "fair"), ("fair", "ti")])
+@pytest.mark.parametrize("storage", ["axis", "grid", "frame"])
+@pytest.mark.parametrize("n_ti", [2, 3])
+def test_model_callable_expands_independent_observable_axes(order, storage, n_ti):
+    ti = np.asarray([80., 360., 1500.], dtype=np.float32)[:n_ti]
+    labels = np.asarray([0., 1.], dtype=np.float32)
+    sizes = {"ti": len(ti), "fair": len(labels)}
+    dims = {name: sizes[name] for name in order}
+    dims.update(x=2, y=4)
+    grids = np.meshgrid(*(ti if name == "ti" else labels for name in order), indexing="ij")
+    ti_grid, label_grid = (grids[order.index(name)] for name in ("ti", "fair"))
+    ti_obs, label_obs = (ti, labels) if storage == "axis" else (ti_grid, label_grid)
+    if storage == "frame":
+        ti_obs, label_obs = ti_obs.reshape(-1), label_obs.reshape(-1)
+    experiment = Experiment(dims=dims, exp_type="fair_asl", observables={
+        "TI": Quantity(ti_obs, "ms"), "fair_label": Quantity(label_obs, "1"),
+    })
+    model = make_fair_asl_model()
+    fields = {"amplitude_sel": jnp.full((2, 4), 1.2), "amplitude_non": jnp.full((2, 4), 0.9),
+              "t1_sel": jnp.full((2, 4), 850.), "t1_non": jnp.full((2, 4), 1400.)}
+    amp = np.where(label_grid >= .5, .9, 1.2)
+    t1 = np.where(label_grid >= .5, 1400., 850.)
+    signal = np.abs(amp - 2 * amp * np.exp(-ti_grid / t1)) + 1e-6
+    expected = np.broadcast_to(signal.reshape((-1, 1, 1)), (n_ti * 2, 2, 4))
+    predict = make_model_callable(experiment, model)
+    np.testing.assert_allclose(predict(fields), expected, rtol=2e-6, atol=2e-7)
+    gradient = jax.grad(lambda values: jnp.sum(predict(values)))(fields)
+    assert all(np.isfinite(value).all() for value in gradient.values())
 
 
 def _small_t2_study():
@@ -366,7 +396,7 @@ def test_models_dimensions_reconstruction_and_preprocessing_workflow():
     image = jnp.arange(16, dtype=jnp.float32).reshape((4, 4))
     kspace = fftnc(image)
     assert np.allclose(np.asarray(ifftnc(kspace)), np.asarray(image), atol=1e-5)
-    assert np.allclose(np.asarray(reconstruct_ifft(kspace)), np.asarray(image), atol=1e-5)
+    assert np.allclose(np.asarray(ifftnc(kspace)), np.asarray(image), atol=1e-5)
 
     noisy = jnp.ones((5, 5), dtype=jnp.float32).at[2, 2].set(5.0)
     filtered = denoise_filter(noisy, method="gaussian", sigma=0.8)
@@ -399,23 +429,15 @@ def test_non_cartesian_reconstruction_can_return_complex_coil_images():
         ],
         dtype=np.complex64,
     )
-    coil_images = reconstruct_regrid(
-        samples,
-        trajectory,
-        spatial_shape=(2, 2),
-        density=np.ones((4,), dtype=np.float32),
-        return_coils=True,
-    )
-    combined = reconstruct_regrid(
-        samples,
-        trajectory,
-        spatial_shape=(2, 2),
-        density=np.ones((4,), dtype=np.float32),
-    )
+    from mrax.data_struct import AcquisitionData, ReconstructionRecipe
+    from mrax.reco import reconstruct_acquisition
 
-    assert coil_images.shape == (1, 2, 2, 2)
-    assert np.iscomplexobj(np.asarray(coil_images))
-    np.testing.assert_allclose(np.sum(coil_images, axis=1), combined, atol=1e-6)
+    result = reconstruct_acquisition(AcquisitionData(samples, (2, 2), ("x", "y"),
+        kind="sampled", trajectory=trajectory, density=np.ones(4),
+        recipe=ReconstructionRecipe(coil_combine="sum")))
+    assert result.coil_images.shape == (1, 2, 2, 2)
+    assert np.iscomplexobj(np.asarray(result.coil_images))
+    np.testing.assert_allclose(np.abs(np.sum(result.coil_images, axis=1)), result.image, atol=1e-6)
 
 
 def test_phase_unwrapping_is_spatial_and_independent_per_frame():

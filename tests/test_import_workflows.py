@@ -15,14 +15,49 @@ from mrax.gui import GuiSession
 from mrax.gui.app import _detect_import_vendor, _load_dicom_experiment_from_dialog
 from mrax.io import (
     discover_dicom_series,
-    load_bruker_experiment,
-    load_bruker_study,
+    import_bruker_experiment,
+    import_bruker_study,
+    import_pulseq_experiment,
     load_dicom_series,
     load_dicom_study,
-    load_pulseq_experiment,
 )
-from mrax.io.bruker_import import bruker_spatial_geometry, extract_observables
+from mrax.io.bruker_images import bruker_spatial_geometry
+from mrax.io.bruker_metadata import extract_observables
 from mrax.library.default_models import make_AB_MT_n_model, make_zaiss_full_model
+
+
+def test_bruker_experiment_accepts_string_paths(tmp_path):
+    _write_minimal_bruker_scan(tmp_path)
+    _, dataset, _, _ = import_bruker_experiment(str(tmp_path / "1"))
+    assert dataset.shape == (1, 2, 2)
+
+
+def test_bruker_study_discovers_standalone_exports_and_nonnumeric_experiment_names(tmp_path):
+    _write_minimal_bruker_scan(tmp_path)
+    exported = tmp_path / "exported_scan"
+    (tmp_path / "1").rename(exported)
+    for root in [tmp_path, exported]:
+        study, metadata = import_bruker_study(root, field_strength_mhz=100)
+        assert study.names == ["exported_scan"]
+        assert study.datasets[0].shape == (1, 2, 2)
+        assert not metadata["skipped_experiments"]
+
+
+def test_bruker_study_skips_missing_and_unsupported_acquisitions(tmp_path):
+    import shutil
+
+    _write_minimal_bruker_scan(tmp_path)
+    shutil.copytree(tmp_path / "1", tmp_path / "2")
+    (tmp_path / "2/pdata/1/visu_pars").unlink()
+    shutil.copytree(tmp_path / "1", tmp_path / "3")
+    (tmp_path / "3/acqp").write_text('##$ACQ_dim=2\n##$ACQ_size=( 2 )\n4 2\n##$NI=1\n##$NR=1\n##$GO_raw_data_format=UNSUPPORTED_SCALAR\n')
+    (tmp_path / "3/fid").write_bytes(bytes(16))
+    with pytest.warns(RuntimeWarning, match="skipped Bruker scan"):
+        study, metadata = import_bruker_study(tmp_path, field_strength_mhz=100)
+    assert study.names == ["1"]
+    assert set(metadata["skipped_experiments"]) == {"2", "3"}
+    assert metadata["skipped_experiments"]["2"]["reason"] == "missing_file"
+    assert metadata["skipped_experiments"]["3"]["reason"] == "import_failed"
 
 
 def _base_dicom_dataset(path, *, series_uid, sop_class_uid, instance_number=1):
@@ -391,7 +426,7 @@ def test_synthetic_bruker_study_import_workflow(tmp_path):
     root = tmp_path / "bruker"
     _write_minimal_bruker_scan(root)
 
-    study, metadata = load_bruker_study(
+    study, metadata = import_bruker_study(
         root,
         study_globals={"field_strength_mhz": Quantity(jnp.asarray(400.0), "MHz")},
         load_raw_kspace=False,
@@ -449,7 +484,7 @@ def test_imported_bruker_spin_lock_selects_model_projection(tmp_path, backend, f
         encoding="utf-8",
     )
     model = factory(pools=[])
-    experiment, _, _, _ = load_bruker_experiment(root / "1", model_map_by_type={"sat_trans": model})
+    experiment, _, _, _ = import_bruker_experiment(root / "1", model_map_by_type={"sat_trans": model})
     assert experiment.exp_type == "sat_trans"
     assert bool(experiment.observables["spin_lock"].values) is enabled
     experiment = experiment.insert_observables({
@@ -479,28 +514,24 @@ def test_imported_bruker_spin_lock_selects_model_projection(tmp_path, backend, f
 def test_bruker_multicycle_slice_stack_sorts_vendor_images_and_raw_kspace(tmp_path):
     scan, expected_images = _write_multicycle_bruker_slice_scan(tmp_path / "bruker")
 
-    experiment, dataset, _, metadata = load_bruker_experiment(scan, load_raw_kspace=True)
+    experiment, dataset, _, metadata = import_bruker_experiment(scan, load_raw_kspace=True)
 
     assert experiment.dims == {"frame": 3, "x": 3, "y": 2, "z": 2}
     np.testing.assert_allclose(np.asarray(dataset.data), expected_images)
-    assert dataset.kspace.shape == (3, 2, 2, 2, 3)
-    assert metadata["raw_reconstruction"]["kspace_layout"] == [
-        "frame",
-        "coil",
-        "z",
-        "ky",
-        "kx",
-    ]
-    assert metadata["raw_reconstruction"]["sample_sorting"]["sample_order"] == (
-        "pv360_repetition_phase_slice_channel_read"
-    )
+    assert dataset.kspace.shape == (6, 2, 2, 3)
+    assert dataset.acquisition.samples.shape == dataset.kspace.shape
+    assert metadata["raw_import"]["reconstruction_status"] == "not_run"
+    assert "raw_reconstruction" not in (dataset.processed or {})
+    from mrax.reco import reconstruct_acquisition
+
+    result = reconstruct_acquisition(dataset.acquisition)
     np.testing.assert_allclose(
-        np.asarray(dataset.processed["raw_reconstruction"]),
+        np.asarray(result.image),
         expected_images,
         rtol=1e-5,
         atol=1e-5,
     )
-    coil_images = np.asarray(dataset.processed["raw_reconstruction_coils"])
+    coil_images = np.asarray(result.coil_images)
     assert coil_images.shape == (3, 2, 3, 2, 2)
     assert np.iscomplexobj(coil_images)
     np.testing.assert_allclose(np.abs(coil_images[:, 0]), expected_images, rtol=1e-5, atol=1e-5)
@@ -791,7 +822,7 @@ def test_synthetic_pulseq_import_workflow(tmp_path):
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        experiment, dataset, model, metadata = load_pulseq_experiment(
+        experiment, dataset, model, metadata = import_pulseq_experiment(
             seq,
             image_data=image_data,
             spatial_shape=(2, 2),

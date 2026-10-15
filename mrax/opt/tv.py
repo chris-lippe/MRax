@@ -6,6 +6,7 @@ from math import isfinite, prod
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 
 @jax.custom_jvp
@@ -114,6 +115,30 @@ class TVOperator:
         return dual * scale[..., None]
 
 
+@dataclass(frozen=True)
+class L1Operator:
+    """Elementwise magnitude penalty sharing the certified proximal interface."""
+
+    weights: jax.Array
+    axes: tuple[int, ...] = (0,)
+    norm_bound_squared: float = 1.0
+
+    def gradient(self, value):
+        return value[..., None]
+
+    def adjoint(self, value):
+        return value[..., 0]
+
+    def value(self, value, smoothed=False):
+        return jnp.sum(self.weights * jnp.abs(value))
+
+    def project_dual(self, value, multiplier=1.0):
+        bound = multiplier * self.weights
+        norm = vector_norm(value)
+        scale = jnp.minimum(1., bound / jnp.where(norm > 0, norm, 1.))
+        return value * scale[..., None]
+
+
 def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_steps=512):
     """Solve prox(rate * weighted TV + box indicator) with a checked dual gap.
 
@@ -121,32 +146,40 @@ def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_s
     convex problem; this does not imply global convergence of a nonlinear fit.
     """
     lower, upper = bounds
+    def project(array):
+        if jnp.iscomplexobj(array):
+            if np.any(np.isfinite(lower)) or np.any(np.isfinite(upper)):
+                raise ValueError("Complex TV fields require unbounded box constraints")
+            return array
+        return jnp.clip(array, lower, upper)
+
     active = tuple(op for op in operators if op.axes)
     if not active:
-        return jnp.clip(value, lower, upper), (), jnp.asarray(0.0), jnp.asarray(0)
+        return project(value), (), jnp.asarray(0.0), jnp.asarray(0)
     duals = (tuple(jnp.zeros_like(op.gradient(value)) for op in active)
              if duals is None else tuple(op.project_dual(p, rate) for op, p in zip(active, duals, strict=True)))
     norm_bound = sum(op.norm_bound_squared for op in active)
-    initial_step = jnp.asarray(.99 / norm_bound ** .5, dtype=value.dtype)
-    initial = jnp.clip(value, lower, upper)
+    real_dtype = jnp.real(value).dtype
+    initial_step = jnp.asarray(.99 / norm_bound ** .5, dtype=real_dtype)
+    initial = project(value)
 
     def objective_and_gap(x, ps):
         divergence = sum(op.adjoint(p) for op, p in zip(active, ps, strict=True))
-        minimizer = jnp.clip(value - divergence, lower, upper)
+        minimizer = project(value - divergence)
 
         def gap_at(candidate):
             difference = candidate - minimizer
-            gap = .5 * jnp.sum(difference**2) + jnp.sum((minimizer - value + divergence) * difference)
+            gap = .5 * jnp.sum(jnp.abs(difference)**2) + jnp.real(jnp.vdot(minimizer - value + divergence, difference))
             for op, p in zip(active, ps, strict=True):
                 grad = op.gradient(candidate)
-                complementarity = rate * op.weights * vector_norm(grad) - jnp.sum(p * grad, axis=-1)
+                complementarity = rate * op.weights * vector_norm(grad) - jnp.real(jnp.sum(jnp.conj(p) * grad, axis=-1))
                 gap = gap + jnp.sum(jnp.maximum(complementarity, 0))
             return jnp.maximum(gap, 0)
 
         original_gap, reconstructed_gap = gap_at(x), gap_at(minimizer)
         use_reconstruction = reconstructed_gap < original_gap
         candidate = jnp.where(use_reconstruction, minimizer, x)
-        primal = .5 * jnp.sum((candidate - value)**2) + rate * sum(op.value(candidate) for op in active)
+        primal = .5 * jnp.sum(jnp.abs(candidate - value)**2) + rate * sum(op.value(candidate) for op in active)
         return primal, jnp.minimum(original_gap, reconstructed_gap), candidate
 
     def body(state):
@@ -154,7 +187,7 @@ def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_s
         new_ps = tuple(op.project_dual(p + dual_step * op.gradient(extrapolated), rate)
                        for op, p in zip(active, ps, strict=True))
         divergence = sum(op.adjoint(p) for op, p in zip(active, new_ps, strict=True))
-        candidate = jnp.clip((x - primal_step * divergence + primal_step * value) / (1 + primal_step), lower, upper)
+        candidate = project((x - primal_step * divergence + primal_step * value) / (1 + primal_step))
         theta = 1 / jnp.sqrt(1 + 2 * primal_step)
         primal, gap, solution = objective_and_gap(candidate, new_ps)
         return (candidate, candidate + theta * (candidate - x), new_ps,
@@ -164,6 +197,6 @@ def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_s
         return (state[5] < max_steps) & (state[7] > tolerance * (1 + state[6]))
 
     state = jax.lax.while_loop(condition, body, (initial, initial, duals, initial_step, initial_step,
-                                               jnp.asarray(0), jnp.asarray(0., value.dtype),
-                                               jnp.asarray(jnp.inf, value.dtype), initial))
+                                               jnp.asarray(0), jnp.asarray(0., real_dtype),
+                                               jnp.asarray(jnp.inf, real_dtype), initial))
     return state[8], state[2], state[7], state[5]

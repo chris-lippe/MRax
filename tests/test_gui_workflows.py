@@ -1,5 +1,9 @@
 import json
 import os
+import subprocess
+import sys
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import jax.numpy as jnp
 import numpy as np
@@ -20,6 +24,7 @@ from mrax.gui.app import (
     _export_object_records_for_session,
     _fit_settings_from_dict,
     _load_experiment_metadata_template_from_file,
+    _MainWindowMixin,
     _optimizer_choices_for_regularizers,
     _rectangle_overlap_area,
     _resize_edge_names,
@@ -37,6 +42,153 @@ from mrax.io.nifti import load_nifti
 from mrax.library import build_default_experiment, make_t2_se_model
 
 
+@pytest.mark.parametrize("preallocate", [None, "true", "false"])
+def test_gui_allocator_default_precedes_session_import(preallocate):
+    env = dict(os.environ)
+    env["JAX_PLATFORMS"] = "cpu"
+    env.pop("XLA_PYTHON_CLIENT_PREALLOCATE", None)
+    if preallocate is not None:
+        env["XLA_PYTHON_CLIENT_PREALLOCATE"] = preallocate
+    script = """
+import importlib.abc
+import os
+import sys
+
+expected = sys.argv[1]
+class ImportGuard(importlib.abc.MetaPathFinder):
+    seen = False
+    def find_spec(self, fullname, path, target=None):
+        if fullname == 'mrax.gui.session':
+            assert os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] == expected
+            self.seen = True
+guard = ImportGuard()
+sys.meta_path.insert(0, guard)
+import mrax.gui
+assert guard.seen
+assert os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] == expected
+"""
+    subprocess.run([sys.executable, "-c", script, preallocate or "false"], env=env, check=True, capture_output=True, timeout=45)
+
+
+@pytest.fixture
+def roi_editor():
+    # Exercise controller edits and real session masks without a Qt event loop.
+    editor = object.__new__(_MainWindowMixin)
+    editor.session = GuiSession()
+    editor.session.create_empty_study("synthetic", field_strength_mhz=100)
+    editor.session.add_experiment("synthetic", np.ones((2, 7, 11, 3)), dims={"frame": 2, "x": 7, "y": 11, "z": 3})
+    editor.view_combo = SimpleNamespace(currentText=lambda: "Image")
+    editor._displayed_image = editor.session.frame_image()
+    editor._displayed_view_key = "image"
+    editor._displayed_image_label = "intensity"
+    editor._displayed_image_unit = None
+    editor.brush_mode = None
+    editor._last_brush_stamp = None
+    editor.brush_size_spin = SimpleNamespace(value=lambda: 1)
+    editor.brush_label_spin = SimpleNamespace(value=lambda: 1)
+    editor.brush_auto_subtract_check = None
+    editor._task_running = False
+    editor._busy_message = None
+    editor.statusBar = Mock(return_value=Mock())
+    for method in ("_begin_brush_stroke", "refresh_roi_list", "update_view", "mark_dirty", "_clear_brush_preview",
+                   "_update_brush_preview", "_finish_brush_stroke"):
+        setattr(editor, method, Mock())
+    editor._left_mouse_pressed = lambda: True
+    editor.image_view = SimpleNamespace(getView=lambda: SimpleNamespace(
+        mapSceneToView=lambda point: point,
+        sceneBoundingRect=lambda: SimpleNamespace(contains=lambda point: True),
+    ))
+    return editor
+
+
+@pytest.mark.parametrize("plane", ["axial", "coronal", "sagittal"])
+@pytest.mark.parametrize("label", [1, 7])
+def test_brush_and_erase_edit_native_voxels_on_each_plane(roi_editor, plane, label):
+    editor = roi_editor
+    editor.session.active_image_plane = plane
+    editor._displayed_image = editor.session.frame_image()
+    shape = editor._displayed_image.shape
+    editor.brush_label_spin.value = lambda: label
+    editor.brush_mode = "brush"
+    editor._apply_brush_at(shape[1] - 1, shape[0] - 1, shape)
+    roi = editor.session.roi()
+    assert roi is not None
+    expected = np.zeros(editor.session.spatial_shape, dtype=int)
+    index = tuple(editor._current_slice_indices().get(dim, 0) if dim not in editor._current_plane_dims()
+                  else editor.session.spatial_shape[axis] - 1
+                  for axis, dim in enumerate(editor.session.spatial_dim_names))
+    expected[index] = label
+    np.testing.assert_array_equal(roi.mask, expected)
+    editor.brush_mode = "erase"
+    editor._apply_brush_at(shape[1] - 1, shape[0] - 1, shape)
+    assert not np.any(editor.session.roi().mask)
+
+
+@pytest.mark.parametrize("view", ["Vendor vs MRax", "Vendor MRax Diff", "K Space", "MRax Reconstruction"])
+def test_roi_tools_reject_non_image_views_without_editing_masks(roi_editor, view):
+    editor = roi_editor
+    editor.view_combo.currentText = lambda: view
+    editor._displayed_image = np.zeros((7, 24))
+    editor._displayed_view_key = view.lower().replace(" ", "_")
+    for tool in (editor.enable_brush, editor.enable_erase, editor.enable_wand,
+                 editor.add_polygon_roi, editor.add_lasso_roi, editor.add_flexible_shape_roi,
+                 lambda: editor._add_editable_roi("rectangle"), editor._finish_polygon_roi):
+        tool()
+        assert editor.brush_mode is None
+    # Switching views during a stroke must also prevent click/drag edits.
+    editor.brush_mode = "brush"
+    editor._apply_brush_at(1, 1, (7, 24))
+    editor.on_image_clicked(None)
+    editor.on_image_hovered(SimpleNamespace(x=lambda: 1, y=lambda: 1))
+    assert not editor.session.rois
+    editor._begin_brush_stroke.assert_not_called()
+    editor._update_brush_preview.assert_not_called()
+    assert "image and map views" in editor.statusBar().showMessage.call_args.args[0]
+
+
+def test_roi_brush_rejects_stale_or_resampled_display_grid(roi_editor):
+    editor = roi_editor
+    editor.brush_mode = "brush"
+    for displayed, key, shape in ((np.zeros((9, 13)), "image", (9, 13)),
+                                  (editor.session.frame_image(), "registration_mask_preview", (7, 11)),
+                                  (editor.session.frame_image(), "image", (7, 24))):
+        editor._displayed_image = displayed
+        editor._displayed_view_key = key
+        editor._apply_brush_at(1, 1, shape)
+        assert not editor.session.rois
+    editor._begin_brush_stroke.assert_not_called()
+
+
+def test_roi_brush_edits_native_mask_from_colored_map_view(roi_editor):
+    editor = roi_editor
+    editor.session.replace_fitted_maps({"level": np.ones(editor.session.spatial_shape)})
+    editor.view_combo.currentText = lambda: "Map"
+    editor._displayed_image = np.zeros((7, 11, 3))
+    editor._displayed_view_key = "map"
+    editor.brush_mode = "brush"
+    editor._apply_brush_at(5, 3, (7, 11))
+    roi = editor.session.roi()
+    assert np.count_nonzero(roi.mask) == 1
+    assert roi.mask[3, 5, 0]
+
+
+def test_gui_bruker_detection_uses_file_based_experiment_discovery(tmp_path):
+    pytest.importorskip("PySide6")
+    from test_import_workflows import _write_minimal_bruker_scan
+
+    from mrax.gui.app import _detect_bruker_import_summary, _looks_like_bruker_study
+
+    _write_minimal_bruker_scan(tmp_path)
+    exported = tmp_path / "exported_scan"
+    (tmp_path / "1").rename(exported)
+    for root in [tmp_path, exported]:
+        assert _looks_like_bruker_study(root)
+        assert [row["scan"] for row in _detect_bruker_import_summary(root)] == ["exported_scan"]
+        session = GuiSession()
+        session.import_bruker_study(root, field_strength_mhz=100, load_raw_kspace=False)
+        assert list(session.data["experiments"]) == ["exported_scan"]
+
+
 def test_gui_optimizer_defaults_preserve_auto_and_explicit_adam():
     assert GuiSession().fit_settings.optimizer_name == "auto"
     assert _fit_settings_from_dict({}).optimizer_name == "auto"
@@ -44,6 +196,63 @@ def test_gui_optimizer_defaults_preserve_auto_and_explicit_adam():
     assert _optimizer_choices_for_regularizers({"tv"})[:3] == ["auto", "fista", "split_bregman"]
     assert "adam" in _optimizer_choices_for_regularizers({"tv"})
     assert _optimizer_choices_for_regularizers(set())[0] == "auto"
+
+
+def test_roi_preview_renders_fair_axes_and_preserves_frame_selection():
+    ti = np.asarray([70., 190., 410., 930., 1800.], dtype=np.float32)
+    labels = np.asarray([0., 1.], dtype=np.float32)
+    amp = np.asarray([1.3, 1.1])
+    t1 = np.asarray([900., 1400.])
+    signal = np.abs(amp - 2 * amp * np.exp(-ti[:, None] / t1)) + 1e-6
+    mask = np.zeros((3, 4), dtype=bool)
+    mask[1:, 1:3] = True
+    data = np.where(mask, signal[:, :, None, None], 20.).astype(np.float32)
+    session = GuiSession()
+    session.create_empty_study("synthetic", field_strength_mhz=100)
+    session.add_experiment("synthetic", data, dims={"ti": 5, "fair": 2, "x": 3, "y": 4},
+                           exp_type="fair_asl", model_name="fair_asl", observables={
+                               "TI": Quantity(ti, "ms"), "fair_label": Quantity(labels, "1"),
+                           })
+    session.add_roi(ROI("signal", mask, dims=("x", "y")))
+    session.frame_mask.exclude(1, 6)
+    result = session.run_preview_fit(model_name="fair_asl", roi_name="signal", num_steps=5)
+    np.testing.assert_allclose(result["observed"], signal.reshape(-1), rtol=2e-6)
+    np.testing.assert_array_equal(result["included"], session.frame_mask.as_array())
+    fields = result["fields"]
+    fitted_amp = np.asarray([np.asarray(fields[key].values).item() for key in ("amplitude_sel", "amplitude_non")])
+    fitted_t1 = np.asarray([np.asarray(fields[key].values).item() for key in ("t1_sel", "t1_non")])
+    expected = np.abs(fitted_amp - 2 * fitted_amp * np.exp(-ti[:, None] / fitted_t1)) + 1e-6
+    np.testing.assert_allclose(result["predicted"], expected.reshape(-1), rtol=2e-6, atol=2e-7)
+    assert len(result["x"]) == len(result["predicted"]) == 10
+    assert np.isfinite(result["loss_history"]).all()
+
+
+def test_gui_prepares_reconstruction_as_a_separate_requested_view():
+    from mrax.data_struct import AcquisitionData
+    from mrax.reco import fftnc
+
+    image = np.arange(20, dtype=np.float32).reshape((1, 4, 5)) / 20 + 1
+    acquisition = AcquisitionData(np.asarray(fftnc(jnp.asarray(image[:, None]))), (4, 5), ("phase", "read"))
+    session = GuiSession()
+    session.create_empty_study("synthetic")
+    session.add_experiment("synthetic", image, dims={"frame": 1, "x": 4, "y": 5})
+    session.current_experiment["acquisition"] = acquisition
+    session.current_experiment["raw_kspace"] = acquisition.samples
+    assert session.can_reconstruct_raw_data()
+    assert session.reconstruction_array is None
+    session.prepare_raw_view("k_space")
+    assert session.reconstruction_array is None
+    assert session.prepare_raw_view("mrax_reconstruction")
+    np.testing.assert_allclose(session.reconstruction_array, image, atol=1e-6)
+    np.testing.assert_array_equal(session.image_array, image)
+
+
+def test_frequency_reconstruction_components_preserve_signed_values():
+    from mrax.reco.components import reconstruction_variant
+
+    frequency = np.asarray([[[-20., 0., 30.], [-5., 4., 12.]]])
+    reconstructed = reconstruction_variant({"raw_reconstruction_frequency_hz": frequency}, component="magnitude")
+    np.testing.assert_array_equal(reconstructed, frequency)
 
 
 def _write_small_manifest(tmp_path):

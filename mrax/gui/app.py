@@ -2397,11 +2397,6 @@ class _MainWindowMixin:
         raw_kspace_check = QtWidgets.QCheckBox()
         raw_kspace_check.setChecked(False)
         form.addRow("Load/reconstruct raw k-space now", raw_kspace_check)
-        prefer_raw_check = QtWidgets.QCheckBox()
-        prefer_raw_check.setChecked(False)
-        prefer_raw_check.setEnabled(False)
-        form.addRow("Prefer raw image", prefer_raw_check)
-        raw_kspace_check.toggled.connect(prefer_raw_check.setEnabled)
         layout.addLayout(form)
 
         layout.addWidget(QtWidgets.QLabel("Detected scans"))
@@ -2462,8 +2457,6 @@ class _MainWindowMixin:
             "field_strength_mhz": None if field_value <= 0 else field_value,
             "pdata_index": pdata_edit.text().strip() or "1",
             "load_raw_kspace": raw_kspace_check.isChecked(),
-            "prefer_raw_image": raw_kspace_check.isChecked() and prefer_raw_check.isChecked(),
-            "slice_crop_mode": None,
             "type_overrides": {
                 scan: widget.currentText().strip()
                 for scan, widget in type_widgets.items()
@@ -2485,13 +2478,11 @@ class _MainWindowMixin:
         if progress is not None:
             progress(0, 1, "Preparing Bruker import")
         session = GuiSession()
-        session.load_bruker_study(
+        session.import_bruker_study(
             path,
             field_strength_mhz=options.get("field_strength_mhz"),
             pdata_index=options.get("pdata_index") or "1",
             load_raw_kspace=bool(options.get("load_raw_kspace", False)),
-            prefer_raw_image=bool(options.get("prefer_raw_image", False)),
-            slice_crop_mode=options.get("slice_crop_mode"),
             type_overrides=options.get("type_overrides") or {},
             model_overrides_by_name=options.get("model_overrides_by_name") or {},
             progress_callback=progress,
@@ -5330,9 +5321,9 @@ class _MainWindowMixin:
         prior_view_state = self._capture_image_view_state() if preserve_image_view else None
         if self._view_needs_lazy_raw_data(view):
             self.run_guarded_task(
-                lambda progress: self.session.load_raw_data_for_experiment(progress_callback=progress),
+                lambda progress: self.session.prepare_raw_view(view, progress_callback=progress),
                 self.on_lazy_raw_data_loaded,
-                "Loading raw k-space for selected scan...",
+                "Preparing selected view...",
                 error_title="Could not load raw k-space",
             )
             return
@@ -5349,6 +5340,12 @@ class _MainWindowMixin:
                     else f"coil {self.session.active_reconstruction_coil + 1}"
                 )
                 component_label = self.session.active_reconstruction_component
+                frequency_product = (
+                    (self.session.current_experiment.get("kspace_metadata") or {}).get("output_product") == "frequency_hz"
+                    and component_label == "magnitude" and self.session.active_reconstruction_coil is None
+                )
+                if frequency_product:
+                    component_label = "frequency"
                 phase_label = (
                     " unwrapped"
                     if component_label == "phase"
@@ -5358,7 +5355,7 @@ class _MainWindowMixin:
                 self._displayed_image_label = (
                     f"MRax {channel_label} {component_label}{phase_label}"
                 )
-                self._displayed_image_unit = "rad" if component_label == "phase" else None
+                self._displayed_image_unit = "Hz" if frequency_product else "rad" if component_label == "phase" else None
             elif view == "vendor_vs_mrax":
                 vendor, mrax = _matched_2d_pair(
                     self.session.frame_image(original=use_original_image),
@@ -5832,7 +5829,8 @@ class _MainWindowMixin:
         if view == "k_space":
             return self.session.kspace_array is None and self.session.can_lazy_load_raw_data()
         if view in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"}:
-            return self.session.reconstruction_array is None and self.session.can_lazy_load_raw_data()
+            return self.session.reconstruction_array is None and (
+                self.session.can_lazy_load_raw_data() or self.session.can_reconstruct_raw_data())
         return False
 
     def on_lazy_raw_data_loaded(self, _loaded: bool):
@@ -8827,9 +8825,9 @@ class _MainWindowMixin:
         self._add_editable_roi("ellipse")
 
     def add_flexible_shape_roi(self):
-        if not self.session.is_loaded:
+        current = self._roi_source_image()
+        if current is None:
             return
-        current = np.asarray(self.session.frame_image())
         h, w = current.shape[-2], current.shape[-1]
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("Add ROI Shape")
@@ -8887,7 +8885,7 @@ class _MainWindowMixin:
         )
 
     def add_polygon_roi(self):
-        if not self.session.is_loaded:
+        if self._roi_source_image() is None:
             return
         self.brush_mode = "polygon"
         self._polygon_points = []
@@ -8900,7 +8898,7 @@ class _MainWindowMixin:
         )
 
     def add_lasso_roi(self):
-        if not self.session.is_loaded:
+        if self._roi_source_image() is None:
             return
         self.brush_mode = "lasso"
         self._polygon_points = []
@@ -8914,6 +8912,8 @@ class _MainWindowMixin:
         )
 
     def enable_brush(self):
+        if self._roi_source_image() is None:
+            return
         self.brush_mode = "brush"
         self._begin_brush_edit_session()
         self._clear_polygon_preview()
@@ -8922,6 +8922,8 @@ class _MainWindowMixin:
         self.statusBar().showMessage("Brush mode: click or drag on the image to add mask pixels.")
 
     def enable_erase(self):
+        if self._roi_source_image() is None:
+            return
         self.brush_mode = "erase"
         self._begin_brush_edit_session()
         self._clear_polygon_preview()
@@ -8930,6 +8932,8 @@ class _MainWindowMixin:
         self.statusBar().showMessage("Erase mode: click or drag on the image to remove mask pixels.")
 
     def enable_wand(self):
+        if self._roi_source_image() is None:
+            return
         self.brush_mode = "wand"
         self._last_brush_stamp = None
         self._clear_brush_preview()
@@ -9040,9 +9044,9 @@ class _MainWindowMixin:
         sides: int | None = None,
         angle: float = 0.0,
     ):
-        if not self.session.is_loaded:
+        current = self._roi_source_image()
+        if current is None:
             return
-        current = np.asarray(self.session.frame_image())
         h, w = current.shape[-2], current.shape[-1]
         spatial_dims = tuple(self.session.spatial_dim_names)
         spatial_shape = tuple(self.session.spatial_shape)
@@ -9120,6 +9124,8 @@ class _MainWindowMixin:
 
     def on_image_clicked(self, event):
         if self.brush_mode is None or not self.session.is_loaded:
+            return
+        if self._roi_source_image() is None:
             return
         coords = self._image_coords_from_scene_pos(event.scenePos(), rounding="round")
         if coords is None:
@@ -9215,6 +9221,12 @@ class _MainWindowMixin:
 
     def _apply_brush_at(self, x: int, y: int, display_shape: tuple[int, int]):
         if self.brush_mode not in {"brush", "erase"}:
+            return
+        image = self._roi_source_image()
+        if image is None:
+            return
+        if tuple(display_shape) != _display_spatial_shape(image):
+            self.statusBar().showMessage("ROI editing requires the native image grid.")
             return
         radius = _brush_radius_from_size(self.brush_size_spin.value())
         roi = self._active_roi_for_mask_edit(display_shape, prefix="brush", generated_by="mrax.gui.brush")
@@ -9361,6 +9373,8 @@ class _MainWindowMixin:
             self.update_view(preserve_image_view=True)
 
     def _roi_source_image(self) -> np.ndarray | None:
+        if not self.session.is_loaded:
+            return None
         view = _view_key(self.view_combo.currentText())
         if view not in {"image", "map"}:
             self.statusBar().showMessage("ROI tools are available on image and map views.")
@@ -9373,7 +9387,16 @@ class _MainWindowMixin:
             )
         except Exception:
             return None
-        return image if image.ndim >= 2 else None
+        if image.ndim != 2:
+            return None
+        displayed = self._displayed_image
+        if (
+            self._displayed_view_key not in {None, view}
+            or displayed is not None and _display_spatial_shape(displayed) != image.shape
+        ):
+            self.statusBar().showMessage("ROI editing requires the native image grid. Select an image or map view.")
+            return None
+        return image
 
     def on_image_hovered(self, scene_pos):
         if self.is_busy:
@@ -9399,6 +9422,9 @@ class _MainWindowMixin:
         self.statusBar().showMessage(
             f"x={x}, y={y} | {self._displayed_image_label}: {value_text}{unit}"
         )
+        if self.brush_mode is not None and self._roi_source_image() is None:
+            self._clear_brush_preview()
+            return
         if self.brush_mode in {"brush", "erase"} and self._left_mouse_pressed():
             self._apply_brush_at(x, y, (h, w))
         elif self.brush_mode in {"brush", "erase"}:
@@ -9701,6 +9727,9 @@ class _MainWindowMixin:
         self.statusBar().showMessage("Polygon drawing cancelled.")
 
     def _finish_polygon_roi(self):
+        current = self._roi_source_image()
+        if current is None:
+            return
         draw_mode = self.brush_mode or "polygon"
         raw_points = np.asarray(self._polygon_points, dtype=float)
         lasso_snap = False
@@ -9729,7 +9758,6 @@ class _MainWindowMixin:
             self.statusBar().showMessage("Polygon ROI needs at least three vertices.")
             self._refresh_drawing_controls()
             return
-        current = np.asarray(self.session.frame_image())
         h, w = current.shape[-2], current.shape[-1]
         mask_2d = _polygon_mask((h, w), points)
         spatial_dims = tuple(self.session.spatial_dim_names)
@@ -11452,10 +11480,10 @@ def _detect_import_vendor(root: Path) -> str:
 def _looks_like_bruker_study(root: Path) -> bool:
     if not root.is_dir():
         return False
-    for entry in root.iterdir():
-        if entry.is_dir() and entry.name.isdigit() and (entry / "method").is_file():
-            return True
-    return False
+    from mrax.io.bruker_parameters import discover_bruker_experiments
+
+    return any((entry / "method").is_file() or (entry / "acqp").is_file()
+        for entry in discover_bruker_experiments(root))
 
 
 def _looks_like_dicom_study(root: Path) -> bool:
@@ -11471,15 +11499,13 @@ def _looks_like_dicom_study(root: Path) -> bool:
 
 def _detect_bruker_import_summary(root: Path) -> list[dict[str, Any]]:
     try:
-        from mrax.io.bruker_import import detect_type, parse_jcamp
+        from mrax.io.bruker_metadata import detect_type
+        from mrax.io.bruker_parameters import discover_bruker_experiments, parse_jcamp
     except Exception:
         return []
 
     rows: list[dict[str, Any]] = []
-    for scan_dir in sorted(
-        (entry for entry in root.iterdir() if entry.is_dir() and entry.name.isdigit()),
-        key=lambda path: (int(path.name), path.name),
-    ):
+    for scan_dir in discover_bruker_experiments(root):
         method_path = scan_dir / "method"
         pdata_dir = scan_dir / "pdata" / "1"
         visu_path = pdata_dir / "visu_pars"
@@ -11531,7 +11557,7 @@ def _detect_bruker_field_strength_mhz(method: dict[str, Any], visu: dict[str, An
     acqp_path = scan_dir / "acqp"
     if acqp_path.is_file():
         try:
-            from mrax.io.bruker_import import parse_jcamp
+            from mrax.io.bruker_parameters import parse_jcamp
 
             acqp = parse_jcamp(acqp_path)
             for key in ("BF1", "SFO1", "ACQ_imaging_frequency"):
@@ -14152,7 +14178,7 @@ def _experiment_nifti_affine(
     visu = extra.get("visu") if isinstance(extra, Mapping) else None
     if isinstance(visu, Mapping):
         try:
-            from mrax.io.bruker_import import bruker_affine_from_visu
+            from mrax.io.bruker_images import bruker_affine_from_visu
 
             affine_value = bruker_affine_from_visu(dict(visu))
         except Exception:

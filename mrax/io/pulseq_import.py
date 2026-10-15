@@ -8,24 +8,19 @@ from typing import Callable, Mapping, Sequence
 
 import numpy as np
 
-from mrax.data_struct import DataSet, Experiment, Model
+from mrax.data_struct import AcquisitionData, DataSet, Experiment, Model
 from mrax.io.import_definitions import (
     ImportDefinition,
-    KSpaceImportDefinition,
     NormalizedMetadata,
-    build_cartesian_kspace_definition,
-    build_epi_kspace_definition,
     build_imported_experiment_dataset,
-    build_non_cartesian_kspace_definition,
-    build_rare_kspace_definition,
     detect_experiment_type,
     extract_observables_from_metadata,
     needs_manual_type_override,
     normalize_sequence_type,
+    reshape_epi_samples,
+    reshape_rare_samples,
 )
 from mrax.library.default_experiments import default_model_for_type
-from mrax.reco.pipeline import cartesian_ifft
-from mrax.reco.variational import reconstruct_regrid
 
 
 @dataclass(frozen=True)
@@ -557,30 +552,8 @@ def read_pulseq(
     )
 
 
-def _preview_from_cartesian(kspace: np.ndarray) -> np.ndarray:
-    image = np.asarray(cartesian_ifft(kspace, axes=(-2, -1)))
-    if image.ndim >= 4:
-        coil_axis = image.ndim - 3
-        image = np.sqrt(np.sum(np.abs(image) ** 2, axis=coil_axis))
-    return np.real(image).astype(np.float32)
 
 
-def _preview_from_non_cartesian(
-    samples: np.ndarray,
-    trajectory: np.ndarray,
-    *,
-    spatial_shape: tuple[int, int],
-    density: np.ndarray | None,
-) -> np.ndarray:
-    image = np.asarray(
-        reconstruct_regrid(
-            samples,
-            trajectory,
-            spatial_shape=spatial_shape,
-            density=density,
-        )
-    )
-    return np.abs(image).astype(np.float32)
 
 
 def default_interleaved_slice_order(slice_count: int) -> list[int]:
@@ -663,7 +636,7 @@ def _expand_rare_trajectory_for_repetitions(
     return np.concatenate(expanded_lines, axis=0), tuple(expanded_counts)
 
 
-def _make_pulseq_kspace_definition(
+def _prepare_pulseq_acquisition(
     info: PulseqSequenceInfo,
     kspace: np.ndarray,
     *,
@@ -673,7 +646,7 @@ def _make_pulseq_kspace_definition(
     rare_slice_order: Sequence[int] | None,
     sidecar_metadata: Mapping[str, object] | None = None,
     sample_axis: int = -1,
-) -> KSpaceImportDefinition:
+) -> tuple[AcquisitionData, dict]:
     resolved_sequence_type = normalize_sequence_type(sequence_type or info.sequence_type)
     kind = info.sequence_kind if info.sequence_kind != "unknown" else "non_cartesian"
     meta = {
@@ -709,33 +682,20 @@ def _make_pulseq_kspace_definition(
         meta["trajectory_repetitions"] = int(repetition_count)
         if rare_slice_order is not None:
             meta["slice_order"] = [int(v) for v in rare_slice_order]
-        return build_rare_kspace_definition(
-            serial,
-            trajectory=rare_trajectory,
-            adc_counts=rare_adc_counts,
-            spatial_shape=spatial_shape,
-            frame_order=rare_slice_order,
-            metadata=meta,
-        )
+        values = reshape_rare_samples(serial, trajectory=rare_trajectory,
+            adc_counts=rare_adc_counts, spatial_shape=spatial_shape, frame_order=rare_slice_order)
+        acquired = reshape_rare_samples(np.ones(serial.shape, bool), trajectory=rare_trajectory,
+            adc_counts=rare_adc_counts, spatial_shape=spatial_shape, frame_order=rare_slice_order)
+        return _canonical_acquisition(values, spatial_shape, acquired=acquired), meta
     if kind == "epi" and info.adc_counts and len(set(info.adc_counts)) == 1:
-        return build_epi_kspace_definition(
-            kspace,
-            samples_per_line=int(info.adc_counts[0]),
-            line_count=len(info.adc_counts),
-            spatial_shape=spatial_shape,
-            sequence_type=resolved_sequence_type,
-            metadata=meta,
-        )
+        values = reshape_epi_samples(kspace, samples_per_line=int(info.adc_counts[0]),
+            line_count=len(info.adc_counts), reverse_odd_lines=True)
+        return _canonical_acquisition(values, spatial_shape), meta
     if kind == "cartesian" and info.adc_counts and len(set(info.adc_counts)) == 1:
         grid = np.asarray(kspace)
         if grid.shape[-1] == int(sum(info.adc_counts)):
             grid = grid.reshape(grid.shape[:-1] + (len(info.adc_counts), int(info.adc_counts[0])))
-        return build_cartesian_kspace_definition(
-            grid,
-            spatial_shape=spatial_shape,
-            sequence_type=resolved_sequence_type,
-            metadata=meta,
-        )
+        return _canonical_acquisition(grid, spatial_shape), meta
     if info.trajectory is None:
         raise ValueError("Pulseq non-Cartesian import requires a calculated ADC trajectory")
     matched_samples, matched_trajectory, matched_density, matching_meta = _match_non_cartesian_samples_to_trajectory(
@@ -751,18 +711,11 @@ def _make_pulseq_kspace_definition(
             "trajectory_samples": int(np.asarray(matched_trajectory).shape[0]),
         }
     )
-    return build_non_cartesian_kspace_definition(
-        matched_samples,
-        trajectory=matched_trajectory,
-        density=matched_density,
-        spatial_shape=spatial_shape,
-        sample_axis=-1,
-        sequence_type=resolved_sequence_type,
-        metadata=meta,
-    )
+    return _canonical_acquisition(matched_samples, spatial_shape,
+        trajectory=matched_trajectory[:, ::-1], density=matched_density), meta
 
 
-def load_pulseq_experiment(
+def import_pulseq_experiment(
     seq_path: str | Path,
     *,
     kspace: np.ndarray | None = None,
@@ -779,8 +732,8 @@ def load_pulseq_experiment(
     """Build MRax containers from a Pulseq sequence and optional acquired data.
 
     Pulseq files define the sequence and ADC trajectory, but not measured signal
-    samples. Supply either ``kspace`` or ``image_data``; if only ``kspace`` is
-    provided, a quick preview image is reconstructed for ``DataSet.data``.
+    samples. Supply ``image_data`` for the experiment and optionally ``kspace``.
+    Raw-only workflows use ``read_pulseq_acquisition`` and reconstruct separately.
     """
 
     info = read_pulseq(seq_path)
@@ -795,7 +748,8 @@ def load_pulseq_experiment(
         resolved_shape = (int(arr.shape[-2]), int(arr.shape[-1]))
     resolved_shape = (int(resolved_shape[0]), int(resolved_shape[1]))
 
-    kspace_def: KSpaceImportDefinition | None = None
+    acquisition = None
+    raw_metadata = {}
     if kspace is not None:
         resolved_rare_slice_order = None
         if normalize_sequence_type(sequence_type or info.sequence_type) == "rare":
@@ -809,7 +763,7 @@ def load_pulseq_experiment(
                         explicit=rare_slice_order,
                         sidecar_metadata=sidecar_metadata,
                     )
-        kspace_def = _make_pulseq_kspace_definition(
+        acquisition, raw_metadata = _prepare_pulseq_acquisition(
             info,
             np.asarray(kspace),
             spatial_shape=resolved_shape,
@@ -827,17 +781,7 @@ def load_pulseq_experiment(
         )
 
     if image_data is None:
-        if kspace_def is None:
-            raise ValueError("Pulseq import requires image_data when kspace is not supplied")
-        if kspace_def.kind in ("cartesian", "epi"):
-            image_data = _preview_from_cartesian(kspace_def.samples)
-        else:
-            image_data = _preview_from_non_cartesian(
-                kspace_def.samples,
-                np.asarray(kspace_def.trajectory),
-                spatial_shape=resolved_shape,
-                density=kspace_def.density,
-            )
+        raise ValueError("Image data are required for an experiment; prepare raw samples with read_pulseq_acquisition and reconstruct_acquisition first")
 
     data_arr = np.asarray(image_data)
     frame_count = int(np.prod(data_arr.shape[:-2])) if data_arr.ndim > 2 else 1
@@ -855,7 +799,8 @@ def load_pulseq_experiment(
             spatial_shape=resolved_shape,
             exp_type=exp_type,
             observables=obs,
-            kspace=kspace_def,
+            acquisition=acquisition, kspace_metadata=raw_metadata,
+            sequence_type=sequence_type or info.sequence_type,
         )
     )
 
@@ -911,8 +856,41 @@ __all__ = [
     "PulseqSequenceInfo",
     "default_interleaved_slice_order",
     "detect_pulseq_kspace_kind",
-    "load_pulseq_experiment",
+    "import_pulseq_experiment",
     "read_pulseq",
+    "read_pulseq_acquisition",
     "read_pulseq_sidecar_metadata",
     "resolve_rare_slice_order",
 ]
+
+
+def _canonical_acquisition(values, shape, *, trajectory=None, density=None, acquired=None):
+    """Give prepared Pulseq values explicit frame/receiver/encoding axes."""
+    values = np.asarray(values)
+    original_shape = values.shape
+    ndim = 1 if trajectory is not None else len(shape)
+    if values.ndim == ndim:
+        values = values[None, None]
+    elif values.ndim == ndim + 1:
+        values = values[:, None]
+    if values.ndim != ndim + 2:
+        raise ValueError("Pulseq samples require explicit frame and receiver axes")
+    if acquired is not None and np.shape(acquired) == original_shape:
+        acquired = np.asarray(acquired).reshape(values.shape)
+    return AcquisitionData(values.astype(np.result_type(values.dtype, np.complex64), copy=False),
+        tuple(shape), ("phase", "read"), kind="sampled" if trajectory is not None else "cartesian",
+        trajectory=trajectory, density=density, acquired=acquired)
+
+
+def read_pulseq_acquisition(seq_path, samples, *, spatial_shape=None, density=None,
+                            sequence_type=None, rare_slice_order=None, sample_axis=-1):
+    """Prepare measured samples without creating a reconstructed image."""
+    info = read_pulseq(seq_path)
+    shape = spatial_shape or info.spatial_shape
+    if shape is None:
+        raise ValueError("An encoding shape is required for raw Pulseq samples")
+    sidecar = read_pulseq_sidecar_metadata(seq_path)
+    acquisition, _ = _prepare_pulseq_acquisition(info, np.asarray(samples), spatial_shape=tuple(shape),
+        density=density, sequence_type=sequence_type, rare_slice_order=rare_slice_order,
+        sidecar_metadata=sidecar, sample_axis=sample_axis)
+    return acquisition

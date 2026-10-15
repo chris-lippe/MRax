@@ -275,35 +275,22 @@ and return scalar costs.
 Reconstruction
 --------------
 
-Vendor-agnostic reconstruction utilities for both Cartesian and non-Cartesian k-space.
+Reconstruct prepared acquisitions with one vendor-independent entry point.
+Plans select FFT, variational or model-based algorithms and numerical stages.
+See :doc:`acquisition_reconstruction` for the acquisition contract and recipes.
 
-- ``RecoPipeline`` (plus stages like ``FFTStage``/``POCSStage``) provides a compact,
-  NumPy-first pipeline (accepting JAX arrays) used by importers when turning raw k-space
-  into images.
-- ``reconstruct_ifft`` provides zero-filled reconstruction for Cartesian k-space.
-- ``reconstruct_regrid`` provides a non-Cartesian gridding preview and optional
-  vendor-style post-processing controls for oversampled grids, crop offsets,
-  deapodization, support masks, RSS coil combination, and magnitude output.
-- ``mrax.reco.processing`` exposes importer-independent k-space preprocessing blocks:
-  receiver scale/phase factors, per-sample complex corrections, FID/readout transforms,
-  readout crops, radial density estimates, and fractional readout phase shifts.
-- ``reconstruct_variational`` solves variational reconstruction problems with Optax and
-  proximal variants, for example TV regularization via FISTA plus a TV proximal operator
-  [BeckTeboulle2009]_.
-- ``reconstruct_model_based`` reconstructs quantitative parameter maps directly from k-space
-  by chaining a :class:`mrax.data_struct.model.Model` forward model with the MRI encoding
-  operator and, when needed, a reference-image term.
-- ``jax-finufft`` from the optional ``mrax[nufft]`` extra is used when you supply
-  non-Cartesian trajectories.
+.. autoclass:: mrax.data_struct.AcquisitionData
+   :members: select_frames, require_prepared
 
-.. autoclass:: mrax.reco.pipeline.RecoPipeline
-   :members: add, run
+.. autoclass:: mrax.data_struct.ReconstructionRecipe
 
-.. autoclass:: mrax.reco.pipeline.RecoState
-   :members: copy
+.. autoclass:: mrax.reco.ReconstructionPipeline
+   :members: from_acquisition, from_toml, replace_stage, run
 
-.. autofunction:: mrax.reco.pipeline.cartesian_fft
-.. autofunction:: mrax.reco.pipeline.cartesian_ifft
+.. autoclass:: mrax.reco.ReconstructionStage
+
+.. autofunction:: mrax.reco.reconstruct_acquisition
+.. autofunction:: mrax.reco.processing.pad_centered_kspace
 .. autofunction:: mrax.reco.utils.estimate_sensitivities_cartesian
 .. autofunction:: mrax.reco.utils.pick_sensitivity_frame
 .. autofunction:: mrax.reco.utils.pocs_complete_kspace
@@ -330,10 +317,8 @@ Vendor-agnostic reconstruction utilities for both Cartesian and non-Cartesian k-
 .. autofunction:: mrax.reco.variational.elliptical_support_mask
 .. autofunction:: mrax.reco.variational.apply_image_support_mask
 .. autofunction:: mrax.reco.variational.combine_coil_images
-.. autofunction:: mrax.reco.variational.reconstruct_ifft
-.. autofunction:: mrax.reco.variational.reconstruct_regrid
-.. autofunction:: mrax.reco.variational.reconstruct_variational
-.. autofunction:: mrax.reco.variational.reconstruct_model_based
+.. autofunction:: mrax.reco.variational.solve_variational
+.. autofunction:: mrax.reco.variational.solve_model_based
 
 .. _api-importers:
 
@@ -364,16 +349,11 @@ vendor-neutral experiments/datasets from importer payloads.
 
 .. autoclass:: mrax.io.import_definitions.NormalizedMetadata
 .. autoclass:: mrax.io.import_definitions.ImportDefinition
-.. autoclass:: mrax.io.import_definitions.KSpaceImportDefinition
 
 .. autofunction:: mrax.io.import_definitions.build_imported_experiment_dataset
-.. autofunction:: mrax.io.import_definitions.build_cartesian_kspace_definition
-.. autofunction:: mrax.io.import_definitions.build_epi_kspace_definition
-.. autofunction:: mrax.io.import_definitions.build_non_cartesian_kspace_definition
 .. autofunction:: mrax.io.import_definitions.detect_experiment_type
 .. autofunction:: mrax.io.import_definitions.extract_observables_from_metadata
 .. autofunction:: mrax.io.import_definitions.reshape_epi_samples
-.. autofunction:: mrax.io.import_definitions.reshape_raw_kspace
 
 Pulseq Importers
 ~~~~~~~~~~~~~~~~
@@ -385,57 +365,27 @@ validated on measured scanner data.
 
 .. autoclass:: mrax.io.pulseq_import.PulseqSequenceInfo
 .. autofunction:: mrax.io.pulseq_import.read_pulseq
+.. autofunction:: mrax.io.pulseq_import.read_pulseq_acquisition
 .. autofunction:: mrax.io.pulseq_import.read_pulseq_sidecar_metadata
-.. autofunction:: mrax.io.pulseq_import.load_pulseq_experiment
+.. autofunction:: mrax.io.pulseq_import.import_pulseq_experiment
 .. autofunction:: mrax.io.pulseq_import.detect_pulseq_kspace_kind
 
 Bruker Importers and Models
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Parse ParaVision folders, infer experiment types, extract observables, and map them
-to models. The Bruker importer has been tested on ParaVision
-360 3.5–3.7 data. Other ParaVision versions and sequence families have not been
-validated in MRax.
+Import ParaVision images, raw acquisitions, geometry and model observables.
+Study import warns and skips incomplete or unsupported experiments while retaining
+valid experiments. Import and numerical reconstruction are separate operations.
+See :doc:`bruker_import` and :doc:`importer_development` for definitions and options.
 
-- ``load_bruker_experiment(exp_dir, override_type=None, model_map_by_type=None, study_globals=None, pdata_index="1", recipe=None)`` returns
-  an ``(Experiment, DataSet, Model, metadata)`` tuple with parsed JCAMP dictionaries.
-- ``load_bruker_study(study_root, ..., pdata_index="1", recipe=None)`` walks a subject folder, loads valid scans, and
-  returns ``(Study, metadata)``; scans are kept as a flat study.
-- ``prepare_bruker_cartesian_kspace(kspace, reco, ...)`` applies Bruker reco metadata
-  that act directly in k-space and returns a reconstruction-ready Cartesian grid plus a
-  summary of applied steps.
-- ``prepare_bruker_non_cartesian_kspace(samples, reco)`` applies Bruker receiver scale
-  and phase corrections to non-Cartesian ``(frame, coil, sample)`` streams, while
-  ``read_bruker_regrid_trajectory(exp_dir, ...)`` reads ParaVision ``RecoRegridN``
-  trajectory files and ``read_bruker_regrid_density(exp_dir, ...)`` derives the matching
-  ParaVision density compensation weights for 2D spiral/radial and 3D UTE/ZTE raw-data
-  imports.
-  ``bruker_vendor_regrid_options(reco, ...)`` converts ParaVision image-side regridding
-  steps into optional MRax ``reconstruct_regrid`` arguments for vendor-comparison paths.
-- ``reconstruct_bruker_cartesian_kspace(kspace, reco, ...)`` reconstructs a vendor-like
-  magnitude image from Bruker Cartesian k-space, and
-  ``format_bruker_cartesian_image(image, reco, ...)`` applies the corresponding
-  post-FFT formatting steps to an already reconstructed complex image.
+.. autofunction:: mrax.io.import_bruker_experiment
+.. autofunction:: mrax.io.import_bruker_study
+.. autofunction:: mrax.io.read_bruker_acquisition
+.. autofunction:: mrax.io.load_acquisition
+.. autofunction:: mrax.io.save_acquisition
+.. autoclass:: mrax.io.DefinitionLibrary
+   :members: select
 
-``pdata_index`` accepts a single index (default ``"1"``) or a dict mapping scan numbers to
-indices; when a dict is used, unspecified scans fall back to ``"1"`` (or the value under
-``"default"``). The optional ``recipe`` callback can override the detected experiment type, inject observables, and
-choose a default model based on raw Bruker metadata.
-
-- Model factories in :mod:`mrax.library.default_models` cover the built-in model
-  families listed in :doc:`models`. Each returns a
-  :class:`mrax.data_struct.model.Model` instance. Importer-detected experiment types
-  can be remapped with ``model_map_by_type`` or ``recipe``.
-
-.. autofunction:: mrax.io.bruker_import.load_bruker_experiment
-.. autofunction:: mrax.io.bruker_import.load_bruker_study
-.. autofunction:: mrax.io.bruker_import.prepare_bruker_cartesian_kspace
-.. autofunction:: mrax.io.bruker_import.prepare_bruker_non_cartesian_kspace
-.. autofunction:: mrax.io.bruker_import.bruker_vendor_regrid_options
-.. autofunction:: mrax.io.bruker_import.read_bruker_regrid_density
-.. autofunction:: mrax.io.bruker_import.read_bruker_regrid_trajectory
-.. autofunction:: mrax.io.bruker_import.reconstruct_bruker_cartesian_kspace
-.. autofunction:: mrax.io.bruker_import.format_bruker_cartesian_image
 .. autofunction:: mrax.io.study_selection.auto_select_scans
 .. autofunction:: mrax.io.study_selection.pick_scan_by_type
 

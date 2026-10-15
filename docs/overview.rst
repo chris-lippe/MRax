@@ -52,7 +52,7 @@ Unified Pipeline
 Synthetic examples and imported studies use the same ``Study`` abstraction. Build
 synthetic datasets with :func:`mrax.core.synthetic.make_synthetic_study`, import
 standards-based DICOM series or folders with :func:`mrax.io.dicom.load_dicom_study`,
-or import ParaVision scans with :func:`mrax.io.bruker_import.load_bruker_study`.
+or import ParaVision scans with :func:`mrax.io.bruker_import.import_bruker_study`.
 Importers map metadata into a shared schema (see :mod:`mrax.io.import_definitions`).
 
 Dimension names follow a consistent convention: ``x/y/z`` are spatial axes and ``t``
@@ -149,7 +149,7 @@ Quick tutorial (custom model in a separate file)
    .. code-block:: python
 
      custom_map = {"my_experiment_type": make_my_model}
-     study, meta = load_bruker_study(root, model_map_by_type=custom_map)
+     study, meta = import_bruker_study(root, model_map_by_type=custom_map)
 
 The same pattern applies to synthetic studies: construct your ``Model`` first, then
 pass it into ``Study`` entries or ``run_fit`` directly. For imported data, use

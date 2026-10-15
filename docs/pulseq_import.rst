@@ -3,7 +3,7 @@ Pulseq Import
 
 The module ``mrax.io.pulseq_import`` reads Pulseq ``.seq`` files and exposes their
 definitions, ADC sample timing, and calculated k-space trajectory. Pulseq files do
-not contain measured signal data, so :func:`mrax.io.pulseq_import.load_pulseq_experiment`
+not contain measured signal data, so :func:`mrax.io.pulseq_import.import_pulseq_experiment`
 expects either measured ``kspace`` samples or reconstructed ``image_data``.
 
 Validation scope
@@ -25,15 +25,18 @@ Quick usage
 .. code-block:: python
 
    import numpy as np
-   from mrax.io.pulseq_import import read_pulseq, load_pulseq_experiment
+   from mrax.io import read_pulseq, read_pulseq_acquisition, import_pulseq_experiment
+   from mrax.reco import reconstruct_acquisition
 
    info = read_pulseq("sequence.seq")
    print(info.sequence_kind, info.spatial_shape, info.adc_counts)
 
    kspace = acquire_or_simulate_kspace(info)
-   experiment, dataset, model, metadata = load_pulseq_experiment(
+   acquisition = read_pulseq_acquisition("sequence.seq", kspace, spatial_shape=info.spatial_shape)
+   image = reconstruct_acquisition(acquisition).image
+   experiment, dataset, model, metadata = import_pulseq_experiment(
        "sequence.seq",
-       kspace=kspace,
+       kspace=kspace, image_data=image,
        spatial_shape=info.spatial_shape,
    )
 
@@ -44,7 +47,7 @@ Notebook walkthrough
 --------------------
 
 For an end-to-end example that generates a Cartesian Pulseq sequence, simulates
-k-space, imports it through :func:`mrax.io.pulseq_import.load_pulseq_experiment`,
+k-space, imports it through :func:`mrax.io.pulseq_import.import_pulseq_experiment`,
 and fits a T2 model, see:
 
 - Rendered notebook: :doc:`notebooks/pulseq_import_demo`
@@ -75,7 +78,7 @@ For radial, spiral, and other non-Cartesian trajectories, the importer keeps
 - A flattened serial stream where each frame contains several repeated trajectory
   passes, for example interleave groups or repeated shot blocks.
 
-``load_pulseq_experiment`` resolves these cases by combining the Pulseq ADC
+``import_pulseq_experiment`` resolves these cases by combining the Pulseq ADC
 trajectory with frame-count hints from:
 
 - Pulseq definitions such as ``TE``, ``TR``, ``TI``, or ``FlipAngle``.
@@ -88,19 +91,12 @@ Useful sidecar keys for non-Cartesian imports are:
 - ``frame_count`` / ``num_frames`` / ``frames`` for flattened multi-frame streams.
 - ``trajectory_repetitions_per_frame`` for repeated trajectory passes per frame.
 
-The preview image returned on ``DataSet.data`` uses
-:func:`mrax.reco.variational.reconstruct_regrid`. For iterative reconstruction, use
-the shared non-Cartesian tools in :mod:`mrax.reco.variational`, especially
-:func:`mrax.reco.variational.build_operator` and
-:func:`mrax.reco.variational.reconstruct_variational`.
+``read_pulseq_acquisition`` prepares measured samples independently of images.
+Call :func:`mrax.reco.reconstruct_acquisition` with ``method="fft"`` for a gridding
+preview or ``method="variational"`` for iterative reconstruction. Supply the
+resulting image explicitly when constructing an experiment. ``DataSet.data``
+contains the supplied image and ``DataSet.acquisition`` retains raw measurements.
 
-Shared definitions
-------------------
-
-The vendor-neutral helpers in :mod:`mrax.io.import_definitions` describe raw
-k-space independently of Pulseq:
-
-- ``build_cartesian_kspace_definition`` for grid-shaped Cartesian data.
-- ``build_epi_kspace_definition`` for EPI data and optional serial ADC reshaping.
-- ``build_non_cartesian_kspace_definition`` for sample streams with trajectory
-  and density compensation.
+Prepared acquisitions use the frame, receiver and encoding-axis conventions in
+:doc:`acquisition_reconstruction`. The importer converts the sequence descriptor's
+``(kx, ky)`` coordinates to that order and preserves measured zeros.

@@ -8,9 +8,11 @@ from mrax.analysis.dce import analyze_dce_series, replace_isolated_spikes
 from mrax.analysis.group import compare_group_stats, summarize_group_stats
 from mrax.analysis.stats import describe_values, fdr_bh, nonparametric_test, ttest
 from mrax.data_struct import (
+    AcquisitionData,
     DataSet,
     Experiment,
     Quantity,
+    ReconstructionRecipe,
     SpatialGeometry,
     join_experiments,
     resolve_spatial_geometry,
@@ -23,7 +25,7 @@ from mrax.io.nifti import (
     save_nifti,
 )
 from mrax.io.study_selection import auto_select_scans, pick_scan_by_type, scan_text
-from mrax.reco.pipeline import FFTStage, POCSStage, RecoPipeline, ZeroFillStage
+from mrax.reco import reconstruct_acquisition
 from mrax.reco.processing import (
     apply_channel_scale_phase,
     apply_readout_phase_shift,
@@ -31,9 +33,10 @@ from mrax.reco.processing import (
     crop_along_axis,
     estimate_radial_density,
     fid_profiles_to_kspace,
+    pad_centered_kspace,
     readout_crop_bounds,
 )
-from mrax.reco.variational import reconstruct_ifft, reconstruct_variational
+from mrax.reco.variational import ifftnc, solve_variational
 
 
 def test_nifti_single_volume_and_series_round_trip(tmp_path):
@@ -99,13 +102,12 @@ def test_reconstruction_pipeline_and_processing_helpers():
     mask[2:, :] = True
     measured = kspace * mask
 
-    state = RecoPipeline(
-        [ZeroFillStage(target_shape=(12, 12)), POCSStage(iterations=2), FFTStage("inverse")]
-    ).run(measured, metadata={"mask": mask})
-    copied = state.copy()
-    assert state.image.shape == (12, 12)
-    assert copied.metadata == state.metadata
-    assert copied.kspace is not state.kspace
+    acquisition = AcquisitionData(np.asarray(pad_centered_kspace(measured, (12, 12)))[None, None],
+        (12, 12), ("phase", "read"), acquired=np.asarray(pad_centered_kspace(mask, (12, 12))),
+        recipe=ReconstructionRecipe(partial_fourier="pocs", partial_fourier_iterations=2))
+    result = reconstruct_acquisition(acquisition)
+    assert result.image.shape == (1, 12, 12)
+    np.testing.assert_array_equal(acquisition.samples[0, 0][acquisition.acquired], measured[mask])
 
     channels = np.ones((2, 3, 4), dtype=np.complex64)
     corrected = apply_channel_scale_phase(
@@ -132,8 +134,8 @@ def test_cartesian_variational_reconstruction_smoke():
     kspace = jnp.fft.fftshift(
         jnp.fft.fftn(jnp.fft.ifftshift(image), norm="ortho")
     )
-    baseline = reconstruct_ifft(kspace)
-    reconstructed, history = reconstruct_variational(
+    baseline = ifftnc(kspace)
+    reconstructed, history = solve_variational(
         kspace,
         mask=jnp.ones_like(kspace, dtype=bool),
         num_steps=2,

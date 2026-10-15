@@ -19,7 +19,7 @@ from mrax.core.variance import _prepare_mask
 from mrax.data_struct import DataSet, Experiment, Model, Quantity
 from mrax.library.default_models import _inverse_transform
 from mrax.opt.optimizers import make_optimizer
-from mrax.reco.variational import build_operator, reconstruct_variational
+from mrax.reco.variational import build_operator, solve_variational
 
 
 def _problem(values, initial=0.0, **options):
@@ -292,7 +292,7 @@ def test_tv_solver_rejects_invalid_inner_options(options):
 def test_reconstruction_proximal_l1_matches_declared_mean_penalty(name):
     target = jnp.ones((2, 2))
     op = build_operator(spatial_shape=(2, 2), kspace=jnp.zeros((2, 2)))
-    result = reconstruct_variational(op.forward(target), spatial_shape=(2, 2),
+    result = solve_variational(op.forward(target), spatial_shape=(2, 2),
                                      initial_image=jnp.zeros((2, 2)), regularizer="l1",
                                      regularizer_weight=0.1, optimizer_name=name,
                                      step_size=0.5, num_steps=300)

@@ -1,6 +1,30 @@
 Release Notes
 =============
 
+Version 0.3.0
+-------------
+
+Unreleased.
+
+- Bruker and Pulseq imports prepare raw acquisitions for a shared FFT,
+  variational and model-based reconstruction pipeline with editable plans.
+- Bruker study import accepts standalone exports and skips incomplete or
+  unsupported scans with a warning.
+- Fitting defaults to CPU; select a device with ``device``. TV regularization
+  selects FISTA automatically; explicit Adam uses smoothed TV with a warning.
+- Data normalization defaults to the included ROI and frames. See :doc:`models`
+  for regularizer-weight adjustment when changing normalization scope.
+- Fixed FAIR ASL ROI preview curves and ROI drawing on comparison views.
+  GUI startup avoids bulk GPU memory preallocation by default.
+
+API changes: replace ``load_bruker_*`` with ``import_bruker_*``. Pulseq raw import
+uses ``read_pulseq_acquisition``. Reconstruct explicitly with
+``reconstruct_acquisition`` or ``ReconstructionPipeline``; these replace
+``RecoPipeline``/``RecoState`` and the separate FFT/regridding helpers.
+Configure reconstruction and cropping in the plan; import options
+``prefer_raw_image``, ``reco_pipeline`` and ``slice_crop_mode`` are removed.
+Low-level solvers are ``solve_variational`` and ``solve_model_based``.
+
 Version 0.2.1
 -------------
 

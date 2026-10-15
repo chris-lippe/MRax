@@ -15,7 +15,7 @@ from .fit_execution import _tree_finite
 
 
 def dot(left, right):
-    return sum(jnp.sum(a * b) for a, b in zip(jax.tree.leaves(left), jax.tree.leaves(right), strict=True))
+    return sum(jnp.real(jnp.vdot(a, b)) for a, b in zip(jax.tree.leaves(left), jax.tree.leaves(right), strict=True))
 
 
 def subtract(left, right):
@@ -25,7 +25,7 @@ def subtract(left, right):
 @device_function
 def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
                   tolerance=1e-8, max_prox_steps=2048, penalty=1.0, inner_steps=5,
-                  device: DeviceLike = "cpu"):
+                  device: DeviceLike = "cpu", grad_clip_norm: float | None = None):
     max_prox_steps, inner_steps = index(max_prox_steps), index(inner_steps)
     if not np.isfinite(tolerance) or not np.isfinite(penalty) or tolerance <= 0 or max_prox_steps < 1 or penalty <= 0 or inner_steps < 1:
         raise ValueError("Proximal tolerance, iteration limits and Bregman penalty must be positive")
@@ -35,7 +35,15 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
         raise ValueError("TV learning rate must be finite and positive")
 
     def project(params):
-        return {key: jnp.clip(value, *bounds[key]) for key, value in params.items()}
+        result = {}
+        for key, value in params.items():
+            if jnp.iscomplexobj(value):
+                if np.isfinite(np.asarray(bounds[key])).any():
+                    raise ValueError("Complex fields require unbounded box constraints")
+                result[key] = value
+            else:
+                result[key] = jnp.clip(value, *bounds[key])
+        return result
 
     def rate_at(count):
         rate = jnp.asarray(step_size(count) if callable(step_size) else step_size)
@@ -47,7 +55,7 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
 
     def init(params):
         leaves = jax.tree.leaves(params)
-        dtype = leaves[0].dtype if leaves else jnp.float32
+        dtype = jnp.real(leaves[0]).dtype if leaves else jnp.float32
         state = {"rate": rate_at(0), "schedule_rate": rate_at(0), "count": jnp.asarray(0, jnp.int32),
                  "stationarity": jnp.asarray(0., dtype=dtype)}
         if name == "fista":
@@ -65,13 +73,17 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
                                        tolerance=tolerance, max_steps=max_prox_steps)
             params[key], new_duals[key] = result, ps
             gaps.append(gap)
-            valid = valid & (gap <= tolerance * (1 + .5 * jnp.sum((result - field)**2)
+            valid = valid & (gap <= tolerance * (1 + .5 * jnp.sum(jnp.abs(result - field)**2)
                                                  + rate * sum(op.value(result) for op in operators[key])))
         gap = jnp.max(jnp.stack(gaps)) if gaps else jnp.asarray(0., dtype=rate.dtype)
         return params, new_duals, gap, valid
 
     def forward_backward(point, duals, initial_rate):
         value, grad = jax.value_and_grad(smooth_loss)(point)
+        grad = jax.tree.map(jnp.conj, grad)
+        if grad_clip_norm is not None:
+            multiplier = jnp.minimum(1., grad_clip_norm / jnp.maximum(optax.global_norm(grad), 1e-12))
+            grad = jax.tree.map(lambda g: g * multiplier, grad)
         empty = (initial_rate, point, duals, jnp.asarray(jnp.inf, value.dtype),
                  jnp.asarray(False), jnp.asarray(0))
 
@@ -131,12 +143,16 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
             for key, field in point.items():
                 for op, split, dual in zip(operators[key], state["splits"][key], state["duals"][key], strict=True):
                     residual = op.gradient(field) - split + dual
-                    total = total + .5 * penalty * jnp.sum(residual**2)
+                    total = total + .5 * penalty * jnp.sum(jnp.abs(residual)**2)
             return total
 
         def inner(carry, _):
             point, rate, valid, _ = carry
             value, grad = jax.value_and_grad(augmented)(point)
+            grad = jax.tree.map(jnp.conj, grad)
+            if grad_clip_norm is not None:
+                multiplier = jnp.minimum(1., grad_clip_norm / jnp.maximum(optax.global_norm(grad), 1e-12))
+                grad = jax.tree.map(lambda g: g * multiplier, grad)
 
             def trial(current):
                 rate, _, _, count = current
@@ -171,10 +187,10 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
                 residual = gradient - split
                 new_splits.append(split)
                 new_duals.append(dual + residual)
-                primal_squared = primal_squared + jnp.sum(residual**2)
+                primal_squared = primal_squared + jnp.sum(jnp.abs(residual)**2)
                 divergence = divergence + penalty * op.adjoint(split - old_split)
             splits[key], duals[key] = tuple(new_splits), tuple(new_duals)
-            dual_squared = dual_squared + jnp.sum(divergence**2)
+            dual_squared = dual_squared + jnp.sum(jnp.abs(divergence)**2)
         new_state = {"rate": rate, "schedule_rate": scheduled, "count": optax.safe_int32_increment(state["count"]),
                      "stationarity": stationarity, "splits": splits, "duals": duals,
                      "primal_residual": jnp.sqrt(primal_squared), "dual_residual": jnp.sqrt(dual_squared)}

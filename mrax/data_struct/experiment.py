@@ -203,7 +203,7 @@ class Experiment:
         lines.append("tips: use experiment.merged_observables() to include study globals.")
         lines.append("tips: use experiment.insert_observables({...}) to add maps like r1_map/b0_map/b1_map.")
         lines.append("tips: use experiment.explain_sanity(model, dataset) to check fit readiness.")
-        lines.append("tips: use recipe=... with load_bruker_study(...) for custom scan typing and model selection.")
+        lines.append("tips: use recipe=... with import_bruker_study(...) for custom scan typing and model selection.")
         return "\n".join(lines)
 
     def sanity_check(

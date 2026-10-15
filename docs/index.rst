@@ -71,6 +71,7 @@ Start Here
    overview
    guides
    models
+   acquisition_reconstruction
    setup
    gui
    api

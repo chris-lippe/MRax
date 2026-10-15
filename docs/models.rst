@@ -46,176 +46,81 @@ The parameter library is plain TOML. You can point to another file with
 ``MRAX_PRIVATE_PARAMETER_LIBRARY`` to an overlay TOML file; its contents are merged on
 top of the public library.
 
-Fitting controls and optimizer state
-------------------------------------
+Fitting controls
+----------------
 
-``run_fit`` uses device-side optimizer chunks on CPU and CUDA. ``chunk_size``
-limits work between host-side progress and finiteness checks; the complete loss
-history still contains one entry before each accepted update. Progress callbacks
-retain their existing cadence and can cancel a fit by raising an exception.
-Existing return tuples are preserved unless ``return_fit_info=True`` is requested.
-
-Optimization entry points default to ``device="cpu"``, independently of JAX's
-ambient default backend or the device storing the input arrays. Select
-``device="gpu"``, ``device="gpu:0"``, or pass a local JAX device object. Invalid
-or unavailable selections raise an error without falling back to another device.
-The selection applies to parameters, optimizer state, resumed moments, data,
-observables and compiled update kernels. Inputs and the caller's JAX device
-context are preserved; MRax does not change global precision settings.
-
-``mrax.get_available_devices()`` returns local device objects, CPU first.
-Pass ``"gpu"`` to list only GPUs; an unavailable platform returns an empty list.
-The same helper is exported by ``mrax.core``. For example:
+Optimization defaults to ``device="cpu"``. Choose ``"gpu"``, ``"gpu:0"`` or a
+local JAX device; unavailable selections raise an error.
+``mrax.get_available_devices()`` lists local devices, CPU first; pass ``"gpu"``
+to list only GPUs. Fitting, reconstruction, denoising, drift correction and
+batch entry points accept ``device``. Per-experiment study-plan overrides take
+precedence over the plan default.
 
 .. code-block:: python
 
    from mrax import get_available_devices
    from mrax.core import run_fit
 
-   devices = get_available_devices("gpu")
-   selected = devices[0] if devices else "cpu"
-   fields, history = run_fit(experiment, model, dataset, device=selected)
-
-Device selection is also explicit in ``build_loss``, ``execute_optimizer``,
-``make_optimizer``, ``make_tv_steps``, ``debug_fit_prototype``, variational and
-model-based reconstruction, regularized denoising, and linear drift correction.
-Study-plan and batch runners and the GUI session's current/preview fit methods
-also accept ``device``. Per-experiment device overrides in a study plan take
-precedence over its default. Custom batch analysis callbacks retain their own
-keyword contract and must forward device selection to the optimization they run.
-Nested MRax optimization calls forward the same selection. When using an Optax
-transform returned by ``make_optimizer`` directly, place the parameter tree on
-that device before compiling or applying updates; an enclosing external JAX
-compilation must use the same device. A resumed fit may select a different
-available device; its parameter and optimizer arrays are transferred together.
-
-Data RMS normalization defaults to ``data_normalization="roi"``. Its sample set
-contains finite observations retained by the ROI mask, frame mask and automatic
-observable masks. Excluded pixels and frames therefore do not change the balance
-between the data term and regularization. Select ``data_normalization="full"``
-in ``build_loss`` or ``run_fit`` to use the previous finite-image RMS convention.
-This default changes the objective for masked fits. To preserve previous tuning
-when switching scopes, multiply every regularizer weight, including temporal
-terms, by ``(RMS_full / RMS_roi)**2``; the objective then differs only by an
-overall positive multiplier. Merely changing the optimizer does not require
-this compensation.
-
-Numeric fitting and frame masks are nonnegative residual confidence weights;
-their positive support defines the RMS sample set. Convert segmentation labels
-to a Boolean mask before fitting when all regions should contribute equally.
-``mask_dims`` names the axes of the supplied array, including their order.
-Shared parameter support is the union of its included observations, so one
-missing frame does not hide a parameter fitted from other usable frames.
-No remaining observations raises ``ValueError``. Negative or nonfinite
-regularizer weights, unknown configured parameter names, invalid learning
-rates and invalid box bounds are rejected rather than silently ignored.
-
-Optimizer-level ``regularizer_weight`` supplies coupled gradient decay for
-ordinary Optax optimizers and proximal penalties for FISTA and split Bregman.
-Scalar decay weights or matching per-parameter trees are supported. AdamW also
-retains its constructor's decoupled weight decay. Only supported optimizer
-constructors are accepted; standalone Optax transforms and methods needing
-extra loss callbacks cannot be selected as optimizer names. Complex gradients
-are conjugated before Euclidean descent updates in fitting and reconstruction.
-Explicit study globals take precedence, including an empty mapping; otherwise
-the current experiment's globals take precedence over model fallback globals.
-
-``optimizer_name=None`` or ``"auto"`` selects FISTA when enabled TV terms are
-present, and Adam otherwise. This policy also applies to new GUI fit settings.
-Explicit ``"adam"`` with TV emits a warning and uses an explicitly smoothed TV
-gradient. The GUI also includes this warning in its fit notes. The effective
-optimizer and ``regularization_mode`` are recorded in ``FitInfo``; selecting
-``"fista"`` or ``"split_bregman"`` never silently selects Adam.
-
-True TV is evaluated on physical parameter maps. FISTA applies a joint TV and
-box-constrained proximal map with a checked primal-dual gap, smooth-objective
-backtracking, and acceleration restart. Split Bregman includes the finite-
-difference constraint, the augmented-Lagrangian coupling in its primal solve,
-isotropic shrinkage, and a dual update. Its primal subproblem uses backtracked
-projected gradient steps. Temporal ``smoothness`` remains a squared-difference
-penalty in the smooth objective. Invalid mask edges, including complete
-higher-order stencils, do not couple across the ROI boundary.
-
-Physical coordinates preserve parameter bounds and constant dimensions. They
-use fixed initial block-curvature scaling; this changes coordinates and their
-corresponding TV weights together, preserving the objective. Built-in factories
-provide parameter specs from the parameter library. Custom models using true TV
-must declare ``Model.parameter_specs`` describing their separable physical
-fields and scalar transform bounds. Unsupported parametrizations raise an error
-instead of selecting a different optimizer.
-
-``proximal_tolerance`` controls the inner TV dual-gap accuracy (default
-``1e-10``), and ``proximal_max_steps`` bounds its work (default ``4096``).
-``bregman_penalty`` and ``bregman_inner_steps`` control split-Bregman coupling
-and primal work. Failure to certify a proximal step or find a valid backtracking
-step raises ``FitError`` and preserves the last checked state. An inner convex
-TV certificate does not establish a global optimum of a nonlinear model fit.
-
-Classical FISTA uses Euclidean gradient steps; attaching Adam's adaptive metric
-and momentum does not implement that algorithm. The low-level proximal
-optimizers default to gradient steps and reject Adam base factories. Adam can
-in principle solve a properly specified split-Bregman primal subproblem, but
-the provided solver uses backtracked gradient steps for that subproblem.
-
-In variational reconstruction, the L1 and TV penalties use a mean over image
-elements. Their proximal weights include the same element-count normalization,
-so the declared regularization weight does not acquire an extra image-size
-factor when a proximal solver is selected.
-
-``step_size`` accepts a constant rate or an Optax-compatible schedule. For true
-TV it seeds the backtracking rate; the accepted rate can change during fitting.
-Schedules scale the adaptive rate, and their counters persist when resuming.
-For example, an application can choose a schedule without changing model defaults:
-
-.. code-block:: python
-
-   import optax
-   from mrax.core import run_fit
-
-   rate = optax.exponential_decay(0.03, transition_steps=64, decay_rate=0.8)
+   print(get_available_devices())
    fields, history, info = run_fit(
-       experiment, model, dataset,
-       step_size=rate,
-       num_steps=512,
-       convergence_tolerance=1e-7,
-       parameter_tolerance=1e-5,
-       convergence_patience=5,
-       min_steps=16,
-       return_fit_info=True,
+       experiment, model, dataset, device="gpu", return_fit_info=True,
    )
 
-Convergence is opt-in and requires consecutive small scaled objective changes and
-relative optimizer-coordinate updates and, for TV, stationarity and splitting
-checks. ``num_steps`` is then a maximum, not a guarantee
-that the optimizer found a unique optimum. ``info`` records the termination reason,
-completed updates, actual parameter devices, final objective, and a ``FitState``.
-Raw-coordinate fits store raw parameters. True-TV fits store scaled physical
-coordinates and their fixed scales, along with the primal and dual solver
-state. Resume with the same model, inputs, regularizers and optimizer. Raw
-``initial_params`` from the model factory can initialize a new true-TV fit;
-optimizer states cannot be exchanged between Adam, FISTA and split Bregman.
-``info.final_loss`` evaluates the returned parameters, whereas history entries
-precede their updates. A zero-step fit returns initialization without evaluating
-the model and has ``info.final_loss=None``.
+Normalization and masks
+~~~~~~~~~~~~~~~~~~~~~~~
 
-Pass ``initial_state=info.state`` to continue with raw parameters and optimizer
-moments preserved. Use the same problem and compatible optimizer state structure;
-``initial_state`` and ``initial_params`` are mutually exclusive. State step counts
-and schedule counts continue, while stopping counters start afresh. Supplying
-``initial_params`` alone initializes a new optimizer. With
-``return_model_callable=True``, fit information is appended after the callable.
+``data_normalization="roi"`` computes RMS over finite observations retained by
+ROI, frame and observable masks. ``"full"`` uses all finite image data. When
+switching from full-image to ROI normalization, multiply every regularizer weight
+by ``(RMS_full / RMS_roi)**2`` to preserve the relative data/regularization balance.
 
-Nonfinite initial objectives, gradients, optimizer states, proposals, or final
-chunk objectives raise ``FitError``. Its ``last_valid_state`` and ``loss_history``
-refer to the last verified chunk boundary, or are empty when initialization is
-invalid. Applications can use that checkpoint for recovery with compatible
-optimizer settings. Library calls do not change global JAX precision, device
-selection, or memory-allocation configuration.
+Numeric masks are nonnegative confidence weights. Use Boolean masks for equal
+weight across segmentation labels; ``mask_dims`` specifies their axis order.
+Shared parameters remain visible wherever any included observation supports them.
+A fit with no usable observations raises ``ValueError``.
 
-Symmetric bounded parameter transforms use the centered, algebraically equivalent
-form ``h * tanh(raw / 2)`` for bounds ``[-h, h]``. The inverse preserves small
-nonzero initial values and retains boundary clipping. Bounds, default metadata,
-units, and the forward-model equations are unchanged.
+Regularization
+~~~~~~~~~~~~~~
+
+``optimizer_name=None`` or ``"auto"`` selects FISTA with enabled TV terms and
+Adam otherwise. Explicit Adam with TV warns and uses a smoothed penalty.
+``FitInfo.optimizer_name`` and ``regularization_mode`` record the selection.
+
+FISTA and split Bregman use true proximal TV on physical parameter maps, respect
+bounds and constant dimensions, and avoid coupling across mask boundaries.
+Temporal ``smoothness`` remains a squared-difference penalty. Custom TV models
+must declare separable physical fields and bounds in ``Model.parameter_specs``.
+The proximal optimizers do not accept Adam base factories.
+
+``proximal_tolerance`` and ``proximal_max_steps`` control inner TV accuracy and
+work; ``bregman_penalty`` and ``bregman_inner_steps`` control split Bregman.
+Invalid weights, parameter names, rates or bounds raise errors.
+Optimizer-level ``regularizer_weight`` supplies gradient decay for ordinary
+Optax optimizers and proximal penalties for FISTA/split Bregman. It accepts a
+scalar or matching parameter tree. AdamW also applies its own decoupled decay.
+
+Stopping and resuming
+~~~~~~~~~~~~~~~~~~~~~
+
+``step_size`` accepts a constant or Optax schedule; true-TV solvers adapt it by
+backtracking. ``chunk_size`` sets the interval between host progress and
+finiteness checks. A progress callback can cancel by raising an exception.
+
+Enable early stopping with ``convergence_tolerance`` and ``parameter_tolerance``;
+``convergence_patience`` and ``min_steps`` control when it takes effect.
+``num_steps`` is the maximum. With ``return_fit_info=True``, the result includes
+the termination reason, completed updates, final objective and ``info.state``.
+History entries precede updates; ``info.final_loss`` evaluates the returned fit.
+With ``return_model_callable=True``, fit information follows the callable.
+
+Resume with ``initial_state=info.state`` and the same model, data, regularizers
+and optimizer. State and schedule counters continue; stopping counters restart.
+``initial_params`` starts a fresh optimizer and cannot accompany ``initial_state``.
+Optimizer states cannot be exchanged between Adam, FISTA and split Bregman.
+
+Nonfinite updates or failed proximal/backtracking steps raise ``FitError``.
+Its ``last_valid_state`` and ``loss_history`` retain the last verified checkpoint
+when one exists.
 
 Define your own model
 ---------------------
@@ -536,13 +441,13 @@ Using the models with importers
 - ``sat_trans`` scans use the identity model unless you explicitly pick one. Importing them
   is quiet; fitting the default identity model warns because it only estimates an amplitude
   image. Provide a ``model_map_by_type`` when calling
-  :func:`mrax.io.bruker_import.load_bruker_study` to select a saturation-transfer model:
+  :func:`mrax.io.bruker_import.import_bruker_study` to select a saturation-transfer model:
 
   .. code-block:: python
 
      from mrax.library.default_models import make_multipool_lorentzian_model
      model_map = {"sat_trans": make_multipool_lorentzian_model}
-     study, meta = load_bruker_study(bruker_root, model_map_by_type=model_map)
+     study, meta = import_bruker_study(bruker_root, model_map_by_type=model_map)
 
 - Pool bounds and observable fallbacks can be customized via the factory arguments shown above.
 - For bespoke signal equations, copy ``docs/model_template.py`` and adapt ``model_apply`` / ``parametrization_factory``.
@@ -551,6 +456,6 @@ Model-based reconstruction
 --------------------------
 
 Every :class:`mrax.data_struct.model.Model` can also be used as a non-linear “model operator”
-inside the reconstruction objective via :func:`mrax.reco.variational.reconstruct_model_based`,
+inside the reconstruction objective via :func:`mrax.reco.variational.solve_model_based`,
 which reconstructs parameter maps directly from raw k-space (instead of fitting after a separate
 image reconstruction step).

@@ -29,7 +29,7 @@ from mrax.preprocessing.drift import (
     linear_drift_correct_framestack,
     negative_mean_squared_error,
 )
-from mrax.reco.variational import build_operator, reconstruct_model_based, reconstruct_variational
+from mrax.reco.variational import build_operator, solve_model_based, solve_variational
 
 
 def _device(backend):
@@ -68,8 +68,8 @@ def test_device_discovery_returns_local_devices_cpu_first():
 
 
 @pytest.mark.parametrize("entry", [run_fit, build_loss, execute_optimizer, make_optimizer,
-                                     make_tv_steps, debug_fit_prototype, reconstruct_variational,
-                                     reconstruct_model_based, regularized_denoise,
+                                     make_tv_steps, debug_fit_prototype, solve_variational,
+                                     solve_model_based, regularized_denoise,
                                      linear_drift_correct_framestack, linear_drift_correct_dataset,
                                      execute_study_plan, run_batch_studies, build_study_losses])
 def test_optimizer_entry_points_have_explicit_cpu_default(entry):
@@ -170,7 +170,7 @@ def test_reconstruction_and_denoising_use_selected_device(backend):
     device = _device(backend)
     target = jnp.ones((2, 2))
     op = build_operator(spatial_shape=(2, 2), kspace=jnp.zeros((2, 2)))
-    image = reconstruct_variational(op.forward(target), spatial_shape=(2, 2),
+    image = solve_variational(op.forward(target), spatial_shape=(2, 2),
                                      regularizer="l1", regularizer_weight=0.1,
                                      num_steps=60, device=device)
     _assert_device(image, device)
@@ -185,7 +185,7 @@ def test_model_based_reconstruction_and_diagnostic_forward_device(backend, optim
     device = _device(backend)
     exp, model, data = _problem()
     op = build_operator(spatial_shape=(2, 1), kspace=jnp.zeros((2, 1)))
-    fields = reconstruct_model_based(op.forward(jnp.ones((1, 2, 1))), experiment=exp,
+    fields = solve_model_based(op.forward(jnp.ones((1, 2, 1))), experiment=exp,
                                      model=model, num_steps=2, device=device)
     _assert_device(fields["level"].values, device)
     config = {"level": [{"type": "tv", "axes": (0,), "weight": 0.1}]} if optimizer != "adam" else {}

@@ -425,6 +425,8 @@ def _clone_dataset(dataset: DataSet, data: np.ndarray) -> DataSet:
         density=dataset.density,
         sampling_mask=dataset.sampling_mask,
         kspace_metadata=dataset.kspace_metadata,
+        spatial_geometry=dataset.spatial_geometry,
+        acquisition=dataset.acquisition,
     )
 
 

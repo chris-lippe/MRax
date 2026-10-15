@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 
+from .acquisition import AcquisitionData
 from .geometry import SpatialGeometry
 
 
@@ -27,6 +28,7 @@ class DataSet:
     sampling_mask: jnp.ndarray | None = None
     kspace_metadata: dict | None = None
     spatial_geometry: SpatialGeometry | None = None
+    acquisition: AcquisitionData | None = None
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -34,6 +36,11 @@ class DataSet:
 
     @property
     def spatial_shape(self) -> tuple[int, ...]:
+        if self.spatial_geometry is not None and self.spatial_geometry.spatial_shape:
+            ndim = len(self.spatial_geometry.spatial_shape)
+            if self.data.ndim < ndim:
+                raise ValueError("Image data have fewer axes than their spatial geometry")
+            return tuple(self.data.shape[-ndim:])
         if self.data.ndim >= 2:
             return tuple(self.data.shape[-2:])
         return tuple(self.data.shape)

@@ -61,28 +61,15 @@ Then open ``http://localhost:8888`` on the host.
 VS Code Dev Container
 ---------------------
 
-The repository includes two VS Code compatible dev container configurations in
-``.devcontainer/``. Both reuse ``docker/Dockerfile.dev``:
+Choose a dev container configuration, both using ``docker/Dockerfile.dev``:
 
-.. list-table::
-   :widths: 2 3 3
-   :header-rows: 1
+- **CPU (default):** ``.devcontainer/devcontainer.json``; no GPU required.
+- **NVIDIA GPU:** ``.devcontainer/gpu/devcontainer.json``; GPU passthrough and
+  CUDA 12-enabled JAX.
 
-   * - Configuration
-     - File
-     - GPU support
-   * - MRax development (CPU), default
-     - ``.devcontainer/devcontainer.json``
-     - No GPU required; standard JAX installation.
-   * - MRax development (NVIDIA GPU), opt-in
-     - ``.devcontainer/gpu/devcontainer.json``
-     - NVIDIA GPU passthrough and CUDA 12-enabled JAX.
-
-With Docker running, open the repository in VS Code and run
-``Dev Containers: Reopen in Container``. Select ``MRax development (CPU)`` for the
-default setup, which works on machines without a GPU. The post-create step
-installs MRax in editable mode with all runtime features plus development,
-documentation, and notebook extras:
+With Docker running, use ``Dev Containers: Reopen in Container`` and select a
+configuration. The post-create step installs MRax with runtime and development
+extras:
 
 .. code-block:: bash
 
@@ -91,36 +78,26 @@ documentation, and notebook extras:
 NVIDIA GPU Development
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Select ``MRax development (NVIDIA GPU)`` when opening the repository in a dev
-container. From an open container, use ``Dev Containers: Switch Container`` to
-change the configuration. The GPU option enables Docker's ``--gpus=all`` flag and
-installs the same editable checkout with CUDA 12-enabled JAX:
+The GPU configuration enables ``--gpus=all`` and installs CUDA-enabled JAX:
 
 .. code-block:: bash
 
    python -m pip install -e '.[all,dev,docs,notebooks]' 'jax[cuda12]>=0.4.35,<0.11'
 
-The Docker host must have an NVIDIA GPU and a compatible NVIDIA driver. On Linux,
-install the `NVIDIA Container Toolkit
+The host needs an NVIDIA GPU and compatible driver. Configure the
+`NVIDIA Container Toolkit
 <https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html>`_
-and configure it for Docker. On Windows, use `Docker Desktop's WSL 2 GPU setup
-<https://docs.docker.com/desktop/features/gpu/>`_. CUDA libraries for JAX are
-installed through the pip extra; a separate CUDA toolkit installation on the host
-is not required. See the `JAX installation guide
-<https://docs.jax.dev/en/latest/installation.html#nvidia-gpu>`_ for driver and GPU
-compatibility requirements.
+on Linux or `Docker Desktop WSL 2 GPU support
+<https://docs.docker.com/desktop/features/gpu/>`_ on Windows. JAX's pip extra
+supplies CUDA libraries; see `JAX requirements
+<https://docs.jax.dev/en/latest/installation.html#nvidia-gpu>`_.
 
-After changing a configuration, run ``Dev Containers: Rebuild Container`` to apply
-the startup options and dependency installation. Inside the GPU container, verify
-device access:
+After switching configurations, run ``Dev Containers: Rebuild Container``. Verify
+GPU access inside the container:
 
 .. code-block:: bash
 
    python -c "import jax; print(jax.devices())"
-
-The output should include a CUDA device, such as ``CudaDevice(id=0)``. The default
-CPU configuration uses standard JAX and does not request GPU access or install
-the JAX CUDA extra.
 
 Contribution Guide
 ------------------

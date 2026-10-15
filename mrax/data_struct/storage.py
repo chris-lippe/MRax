@@ -412,7 +412,8 @@ def _nifti_params_from_metadata(
     if "VisuCoreSize" not in visu or "VisuCoreExtent" not in visu:
         return geometry_params
     try:
-        from mrax.io.bruker_import import bruker_affine_from_visu, bruker_word_dtype
+        from mrax.io.bruker_images import bruker_affine_from_visu
+        from mrax.io.bruker_parameters import bruker_word_dtype
     except Exception:
         return geometry_params
 
@@ -806,7 +807,7 @@ def save_study_results(
 
         kspace_slices: list[dict[str, object]] = []
         kspace_save_shape: list[int] | None = None
-        if getattr(dataset, "kspace", None) is not None:
+        if getattr(dataset, "kspace", None) is not None and dataset.acquisition is None:
             try:
                 if is_non_imaging:
                     kspace_save_shape = list(np.asarray(dataset.kspace).shape)
@@ -913,6 +914,13 @@ def save_study_results(
             "fitted_map_units": fitted_units,
             "plots": {},
         }
+        if dataset.acquisition is not None:
+            from mrax.io.acquisition import save_acquisition
+
+            acquisition_path = exp_dir / "acquisition.npz"
+            save_acquisition(acquisition_path, dataset.acquisition)
+            entry_meta["paths"]["acquisition"] = _relative(acquisition_path, base)
+            entry_meta["shapes"]["raw_kspace"] = list(dataset.acquisition.samples.shape)
         geometry = getattr(dataset, "spatial_geometry", None)
         if geometry is None and experiment_to_use.spatial_shape and not is_non_imaging:
             geometry = SpatialGeometry(
@@ -1043,6 +1051,13 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
             warn_skipped(f"{name}/raw_kspace: {type(exc).__name__}: {exc}")
             kspace = None
 
+        acquisition = None
+        if paths.get("acquisition"):
+            from mrax.io.acquisition import load_acquisition
+
+            acquisition = load_acquisition(_resolve_manifest_path(base, paths["acquisition"], label="acquisition"))
+            kspace = acquisition.samples
+
         fitted_maps = {}
         fitted_shapes = shapes.get("fitted_maps", {})
         fitted_units = entry.get("fitted_map_units", {})
@@ -1088,6 +1103,7 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
         experiments[name] = {
             "mr_image": mr_image,
             "raw_kspace": kspace,
+            "acquisition": acquisition,
             "fitted_maps": fitted_maps,
             "processed": processed,
             "model": entry.get("model"),

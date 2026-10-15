@@ -853,6 +853,13 @@ def make_model_callable(
     if validate_units is not None:
         validate_units(default_obs, allow_raw=False, context="Observable")
 
+    # Prediction must use the same frame order as loss evaluation when
+    # observables are stored along separate experimental dimensions.
+    expanded_obs = expand_observables_to_frames(
+        default_obs, experiment.dims, _dim_map_for_experiment(experiment, model=model)
+    )
+    default_obs = {key: default_obs[key].with_values(value) for key, value in expanded_obs.items()}
+
     base_apply = getattr(model, "model_apply", None)
     if base_apply is None:
         raise AttributeError(f"Model '{model}' does not define model_apply")

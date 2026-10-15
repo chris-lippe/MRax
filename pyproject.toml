@@ -96,6 +96,7 @@ version = { attr = "mrax._version.MRAX_VERSION" }
 
 [tool.setuptools.package-data]
 "mrax.library" = ["parameter_library.toml"]
+"mrax.io.definitions" = ["*.toml"]
 
 [tool.ruff]
 target-version = "py312"
