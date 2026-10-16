@@ -538,6 +538,69 @@ def test_bruker_multicycle_slice_stack_sorts_vendor_images_and_raw_kspace(tmp_pa
     np.testing.assert_allclose(coil_images[:, 1], 0.0, atol=1e-6)
 
 
+def test_explicit_dicom_contrast_groups_sort_timings_and_reject_misalignment(tmp_path):
+    from pydicom import dcmread
+
+    from mrax.io import import_pulseq_study, load_dicom_study
+
+    uids = [generate_uid() for _ in range(3)]
+    expected = []
+    for echo in range(3):
+        slices = []
+        for plane in range(2):
+            pixels = _write_classic_dicom_slice(tmp_path / f'{2-echo}_{plane}.dcm',
+                series_uid=uids[echo], echo_index=echo, slice_index=plane)
+            slices.append(pixels * 2 + 5)
+        expected.append(np.stack(slices, axis=-1))
+    groups = {'decay': list(reversed(uids))}
+    study, metadata = load_dicom_study(tmp_path, series_groups=groups)
+    name, experiment, _model, dataset = next(study.iter_entries())
+    assert name == 'decay'
+    assert experiment.exp_type == 'mse'
+    assert dataset.spatial_geometry.status == 'known'
+    np.testing.assert_array_equal(experiment.observables['TE'].values, [10., 20., 30.])
+    np.testing.assert_array_equal(dataset.data, expected)
+    assert metadata['source_series_count'] == 3
+    combined, _ = import_pulseq_study(tmp_path, dicom_series_groups=groups)
+    assert len(combined.names) == 1
+    np.testing.assert_array_equal(next(combined.iter_entries())[-1].data, expected)
+    with pytest.raises(ValueError, match='selected more than once'):
+        load_dicom_study(tmp_path, series_groups={'a': uids, 'b': [uids[0]]})
+    changed = tmp_path / '0_0.dcm'
+    header = dcmread(changed)
+    header.ImagePositionPatient = [5., 0., 0.]
+    header.save_as(changed, enforce_file_format=True)
+    with pytest.raises(ValueError, match='geometry'):
+        load_dicom_study(tmp_path, series_groups=groups)
+
+
+def test_dicom_preparation_metadata_and_ima_discovery(tmp_path):
+    from pydicom.uid import generate_uid
+
+    from mrax.io import import_pulseq_study, load_dicom_series
+
+    uid = generate_uid()
+    for frame in range(3):
+        _write_classic_dicom_slice(tmp_path / f'frame_{frame}.IMA', series_uid=uid,
+            echo_index=frame, slice_index=0, description='Synthetic preparation')
+    sequence = tmp_path / 'preparation.seq'
+    sequence.write_text('[DEFINITIONS]\nName saturation\noffsets_ppm -2 0 2\nb1pa 2.5\ntsat 0.004\n')
+    study, metadata = import_pulseq_study(tmp_path,
+        sequence_map={'dicom:' + uid: sequence},
+        type_overrides={'dicom:' + uid: 'sat_trans'},
+        metadata_overrides={'dicom:' + uid: {'sat_b1_uT': [3.]}})
+    assert len(study.names) == 1 and not metadata['import_issues']
+    experiment = study.experiments[0]
+    experiment.validate(study.datasets[0])
+    np.testing.assert_array_equal(experiment.observables['freq_offsets'].values, [-2., 0., 2.])
+    np.testing.assert_array_equal(experiment.observables['sat_b1'].values, [3.])
+    np.testing.assert_array_equal(experiment.observables['sat_time'].values, [4.])
+    with pytest.raises(ValueError, match='Unknown normalized'):
+        load_dicom_series(tmp_path, metadata_overrides={'misspelled_time': [1.]})
+    with pytest.raises(ValueError, match='frame_count'):
+        load_dicom_series(tmp_path, metadata_overrides={'frame_count': 7})
+
+
 def test_standard_dicom_series_import_builds_mrax_experiment(tmp_path):
     series_uid = "1.2.826.0.1.3680043.10.1000.10"
     raw_frames = {}
@@ -565,9 +628,9 @@ def test_standard_dicom_series_import_builds_mrax_experiment(tmp_path):
         np.asarray(metadata["affine"]),
         np.asarray(
             [
-                [-3.0, 0.0, 0.0, 0.0],
-                [0.0, -2.0, 0.0, 0.0],
-                [0.0, 0.0, 2.5, 0.0],
+                [0.0, -3.0, 0.0, 0.0],
+                [0.0, 0.0, -2.0, 0.0],
+                [2.5, 0.0, 0.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ]
         ),

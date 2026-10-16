@@ -21,6 +21,9 @@ def save_acquisition(path: str | Path, acquisition: AcquisitionData) -> None:
     auxiliary = list(acquisition.auxiliary_samples)
     for index, name in enumerate(auxiliary):
         arrays[f"auxiliary_{index}"] = np.asarray(acquisition.auxiliary_samples[name])
+    auxiliary_coordinates = list(acquisition.auxiliary_coordinates)
+    for index, name in enumerate(auxiliary_coordinates):
+        arrays[f"auxiliary_coordinate_{index}"] = np.asarray(acquisition.auxiliary_coordinates[name])
     coordinates = list(acquisition.frame_coordinates)
     for index, name in enumerate(coordinates):
         array = np.asarray(acquisition.frame_coordinates[name])
@@ -34,6 +37,8 @@ def save_acquisition(path: str | Path, acquisition: AcquisitionData) -> None:
         "geometry": None if acquisition.geometry is None else acquisition.geometry.to_metadata(),
         "recipe": asdict(acquisition.recipe), "frame_coordinates": coordinates,
         "auxiliary_samples": auxiliary,
+        "auxiliary_coordinates": auxiliary_coordinates,
+        "auxiliary_frame_axes": dict(acquisition.auxiliary_frame_axes),
     }
     if acquisition.readout_model is not None:
         readout = acquisition.readout_model
@@ -57,6 +62,9 @@ def load_acquisition(path: str | Path) -> AcquisitionData:
             ("acquired", "trajectory", "density", "statistical_weights", "readout_polarity", "readout_coordinates") if name in archive}
         options["auxiliary_samples"] = {name: np.array(archive[f"auxiliary_{index}"])
             for index, name in enumerate(metadata.get("auxiliary_samples", []))}
+        options["auxiliary_coordinates"] = {name: np.array(archive[f"auxiliary_coordinate_{index}"])
+            for index, name in enumerate(metadata.get("auxiliary_coordinates", []))}
+        options["auxiliary_frame_axes"] = metadata.get("auxiliary_frame_axes", {})
         if "readout_model" in metadata:
             options["readout_model"] = ReadoutModel(np.array(archive["profile_coordinates"]),
                 target_trajectory=np.array(archive["profile_target_trajectory"]), **metadata["readout_model"])

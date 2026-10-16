@@ -49,6 +49,18 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
         rate = jnp.asarray(step_size(count) if callable(step_size) else step_size)
         return jnp.where(jnp.isfinite(rate) & (rate > 0), rate, jnp.nan)
 
+    def next_rate(state, scheduled):
+        # Mean-normalized objectives can legitimately need rates above 1e6.
+        # Limit only at the dtype range; backtracking determines stability.
+        multiplier = 1.5 * (scheduled / state["schedule_rate"])
+        maximum = jnp.finfo(state["rate"].dtype).max / 16
+        return jnp.minimum(state["rate"], maximum / jnp.maximum(multiplier, 1.)) * multiplier
+
+    def roundoff(value):
+        # Preserve objective scaling, including weak raw MR signal amplitudes.
+        info = jnp.finfo(value.dtype)
+        return 8 * info.eps * jnp.maximum(jnp.abs(value), info.tiny)
+
     def initial_duals(params):
         return {key: tuple(jnp.zeros_like(op.gradient(value)) for op in operators[key])
                 for key, value in params.items()}
@@ -94,9 +106,9 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
             candidate_value = smooth_loss(proposal)
             delta = subtract(proposal, point)
             majorant = value + dot(grad, delta) + dot(delta, delta) / (2 * rate)
-            roundoff = 8 * jnp.finfo(value.dtype).eps * jnp.maximum(jnp.abs(value), 1e-3)
+            allowance = roundoff(value)
             accepted = prox_valid & _tree_finite((proposal, ps, grad)) & jnp.isfinite(candidate_value)
-            accepted = accepted & (candidate_value <= majorant + roundoff)
+            accepted = accepted & (candidate_value <= majorant + allowance)
             return rate, proposal, ps, gap, accepted, count + 1
 
         def next_trial(state):
@@ -110,10 +122,10 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
     def fista_step(params, state):
         old_loss = loss(params)
         scheduled = rate_at(state["count"])
-        rate = jnp.minimum(state["rate"] * 1.5 * scheduled / state["schedule_rate"], 1e6)
+        rate = next_rate(state, scheduled)
         rate, proposal, ps, gap, accepted, _ = forward_backward(state["y"], state["duals"], rate)
-        roundoff = 8 * jnp.finfo(old_loss.dtype).eps * jnp.maximum(jnp.abs(old_loss), 1e-3)
-        restart = (~accepted) | (loss(proposal) > old_loss + roundoff)
+        allowance = roundoff(old_loss)
+        restart = (~accepted) | (loss(proposal) > old_loss + allowance)
         retried = restart
 
         def retry(_):
@@ -160,7 +172,7 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
                 delta = subtract(proposal, point)
                 upper = value + dot(grad, delta) + dot(delta, delta) / (2 * rate)
                 candidate = augmented(proposal)
-                epsilon = 8 * jnp.finfo(value.dtype).eps * jnp.maximum(jnp.abs(value), 1e-3)
+                epsilon = roundoff(value)
                 accepted = _tree_finite((proposal, grad)) & jnp.isfinite(candidate) & (candidate <= upper + epsilon)
                 return rate, proposal, accepted, count + 1
 
@@ -172,7 +184,7 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
             return (proposal, rate, valid & accepted,
                     jnp.sqrt(dot(delta, delta)) / jnp.maximum(rate, 1e-12)), None
 
-        rate = jnp.minimum(state["rate"] * 1.5 * scheduled / state["schedule_rate"], 1e6)
+        rate = next_rate(state, scheduled)
         (proposal, rate, valid, stationarity), _ = jax.lax.scan(
             inner, (params, rate, jnp.asarray(True), jnp.asarray(0., rate.dtype)), None, length=inner_steps)
         splits, duals, primal_squared, dual_squared = {}, {}, jnp.asarray(0., rate.dtype), jnp.asarray(0., rate.dtype)

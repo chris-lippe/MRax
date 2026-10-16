@@ -63,17 +63,22 @@ class ImportDefinition:
     sequence_type: str = "standard"
     kspace_metadata: Mapping[str, object] = field(default_factory=dict)
     spatial_geometry: SpatialGeometry | None = None
+    dims: Mapping[str, int] | None = None
 
 
 def build_imported_experiment_dataset(definition: ImportDefinition) -> tuple[Experiment, DataSet]:
     """Build MRax containers from a normalized import definition."""
 
-    experiment = build_default_experiment(
-        definition.exp_type,
-        definition.frame_count,
-        definition.spatial_shape,
-        definition.observables,
-    )
+    if definition.dims is None:
+        experiment = build_default_experiment(
+            definition.exp_type,
+            definition.frame_count,
+            definition.spatial_shape,
+            definition.observables,
+        )
+    else:
+        experiment = Experiment(dims=dict(definition.dims), observables=dict(definition.observables),
+            exp_type=definition.exp_type)
     dim_map = getattr(experiment, "_mrax_dim_observables", None)
     experiment.observables = reshape_observables_to_dims(
         experiment.observables,
@@ -158,12 +163,14 @@ def _first_finite_scalar(val) -> float | None:
 
 
 def _trim_to_frames(val, frame_count: int):
+    if isinstance(val, np.ndarray):
+        val = val.tolist()
+    if np.isscalar(val) and not isinstance(val, (str, bytes)):
+        val = [val]
     if isinstance(val, (list, tuple)):
         if len(val) > frame_count:
             return list(val)[-frame_count:]
         return val
-    if isinstance(val, np.ndarray) and val.ndim == 1 and val.size > frame_count:
-        return val[-frame_count:].tolist()
     return val
 
 
@@ -322,7 +329,9 @@ def detect_experiment_type(meta: NormalizedMetadata) -> str:
     ):
         return "dce"
 
-    if any(k in combined for k in ("msme", "multi spin", "spin_echo")) or _contains_keyword_token(combined, "mse"):
+    spin_echo_train = any(_contains_keyword_token(combined, k) for k in ('tse', 'fse', 'rare', 'cpmg'))
+    if (any(k in combined for k in ("msme", "multi spin", "spin_echo")) or _contains_keyword_token(combined, "mse")
+            or spin_echo_train and _has_variation(meta.echo_times)):
         return "mse"
     if any(k in combined for k in ("t2star", "t2*", "multi gradient", "ge3d", "gradient_echo")) or _contains_keyword_token(combined, "mge"):
         return "mge"

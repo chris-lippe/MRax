@@ -30,6 +30,75 @@ from mrax.reco import fftnc, ifftnc, unwrap_phase_image
 from mrax.versioning import MRaxVersionIncompatibilityError
 
 
+def test_lorentzian_pool_overrides_enable_centres_and_keep_initialization_inside_bounds():
+    from mrax.library.default_models import make_multipool_lorentzian_model
+
+    model = make_multipool_lorentzian_model(pools=['water'], pool_overrides={
+        'water': {'amp': (.2, .9), 'gamma': (.2, 12.), 'dw': (-.7, .7), 'train_dw': True}})
+    params, unpack = model.parametrization_factory((2, 3))
+    assert 'dw_water_raw' in params
+    fields = unpack(params)
+    np.testing.assert_allclose(fields['gamma_water'], 6.1)
+    changed = unpack({**params, 'dw_water_raw': jnp.ones((2, 3))})
+    assert np.all(np.asarray(changed['dw_water']) > np.asarray(fields['dw_water']))
+    fixed = make_multipool_lorentzian_model(pools=['water'], pool_overrides={
+        'water': {'amp': (.2, .9), 'gamma': (.2, 12.), 'dw': .4, 'train_dw': False}})
+    params, unpack = fixed.parametrization_factory((2, 3))
+    assert 'dw_water_raw' not in params
+    np.testing.assert_allclose(unpack(params)['dw_water'], .4)
+
+
+@pytest.mark.parametrize('kind', ['ir', 'vtr', 'vfa', 'mse', 'mge', 'fair_asl', 'wasabi', 'lorentzian', 'ab_mt_n'])
+def test_builtin_observables_broadcast_over_volumetric_parameter_maps(kind):
+    from mrax.library.default_models import (
+        make_AB_MT_n_model,
+        make_multipool_lorentzian_model,
+        make_wasabi_model,
+    )
+
+    special = {'wasabi': make_wasabi_model, 'lorentzian': make_multipool_lorentzian_model, 'ab_mt_n': make_AB_MT_n_model}
+    model = special[kind]() if kind in special else default_model_for_type(kind)
+    observations = {
+        'TI': Quantity(jnp.array([60., 220., 900.]), 'ms'),
+        'TE': Quantity(jnp.array([9., 27., 45.]), 'ms'),
+        'TR': Quantity(jnp.array([900., 1100., 1300.]), 'ms'),
+        'flip_angle': Quantity(jnp.array([5., 12., 25.]), 'deg'),
+        'fair_label': Quantity(jnp.array([0., 1., 0.]), '1'),
+        'freq_offsets': Quantity(jnp.array([-1., .2, 1.5]), 'ppm'),
+        'field_strength_mhz': Quantity(120., 'MHz'),
+        'sat_time': Quantity(jnp.array([3., 4., 5.]), 'ms'),
+        'sat_b1': Quantity(jnp.array([3.2, 3.8, 4.2]), 'uT'),
+        'r1_map': Quantity(jnp.ones((2, 3, 4)), '1/s'),
+        'z_prev': Quantity(jnp.array([.9, .95, 1.]), '1'),
+    }
+    params, unpack = model.parametrization_factory((2, 3, 4))
+    fields = unpack(params)
+    predicted = np.asarray(model.model_apply(fields, None, observations, _allow_direct=True))
+    assert predicted.shape == (3, 2, 3, 4)
+    assert np.isfinite(predicted).all()
+    planar_fields = {key: value.reshape((6, 4)) for key, value in fields.items()}
+    planar_observations = {**observations, 'r1_map': Quantity(jnp.ones((6, 4)), '1/s')}
+    planar = model.model_apply(planar_fields, None, planar_observations, _allow_direct=True)
+    np.testing.assert_allclose(predicted.reshape((3, 6, 4)), planar, rtol=1e-6, atol=1e-7)
+
+
+def test_volumetric_wasabi_fit_recovers_synthetic_transmit_field():
+    from mrax.core.loss_builder import run_fit
+    from mrax.library.default_models import make_wasabi_model
+
+    model = make_wasabi_model(param_overrides={key: {'transform': 'identity', 'trainable': False, 'value': value}
+        for key, value in {'c': 1., 'd': 2., 'delta': .04}.items()})
+    experiment = Experiment(exp_type='sat_trans', dims={'offset': 25, 'x': 2, 'y': 3, 'z': 2}, observables={
+        'freq_offsets': Quantity(jnp.linspace(-2.5, 2.5, 25), 'ppm'),
+        'field_strength_mhz': Quantity(120., 'MHz'), 'sat_time': Quantity([4.], 'ms'),
+        'sat_b1': Quantity([3.6], 'uT')})
+    params, unpack = model.parametrization_factory((2, 3, 2))
+    truth = {**unpack(params), 'b1': jnp.full((2, 3, 2), 3.6)}
+    data = DataSet(make_model_callable(experiment, model)(truth))
+    fields, _ = run_fit(experiment, model, data, num_steps=1200)
+    np.testing.assert_allclose(fields['b1'].values, 3.6, atol=2e-4)
+
+
 @pytest.mark.parametrize("order", [("ti", "fair"), ("fair", "ti")])
 @pytest.mark.parametrize("storage", ["axis", "grid", "frame"])
 @pytest.mark.parametrize("n_ti", [2, 3])

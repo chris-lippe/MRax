@@ -926,6 +926,8 @@ def save_study_results(
 
         entry_meta = {
             "model": model.name,
+            "model_parameter_specs": _metadata_to_jsonable(getattr(model, "parameter_specs", None) or
+                getattr(model.parametrization_factory, "parameter_specs", {})),
             "exp_type": experiment_to_use.exp_type,
             "dataset_name": dataset.name,
             "dims": experiment.dims,
@@ -1154,6 +1156,7 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
             "fitted_maps": fitted_maps,
             "processed": processed,
             "model": entry.get("model"),
+            "model_parameter_specs": entry.get("model_parameter_specs", {}),
             "exp_type": entry.get("exp_type"),
             "data_role": (entry.get("extra_metadata") or {}).get("data_role") or entry.get("exp_type"),
             "observable_units": entry.get("observable_units", {}),

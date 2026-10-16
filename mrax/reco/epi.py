@@ -140,6 +140,18 @@ def correct_readout_phase(samples, negative_mask, coefficients):
     return fftnc(hybrid * jnp.where(mask, jnp.exp(-1j * phase), 1), axes=(-1,))
 
 
+def _epi_entropy(parameters, positive, negative, x):
+    image = positive + negative * jnp.exp(-1j * (parameters[0] + parameters[1] * x))
+    power = jnp.sum(jnp.abs(image)**2, axis=0)
+    probability = power / jnp.maximum(jnp.sum(power), 1e-30)
+    return -jnp.sum(probability * jnp.log(jnp.maximum(probability, 1e-30)))
+
+
+_epi_entropy_gradient = jax.jit(jax.value_and_grad(_epi_entropy))
+_epi_entropy_candidates = jax.jit(jax.vmap(_epi_entropy, in_axes=(0, None, None, None)))
+_epi_entropy = jax.jit(_epi_entropy)
+
+
 def correct_epi_entropy(samples, negative_mask, *, spatial_ndim=2, phase_prior=(0., 0.),
                         slope_bound=20., max_iterations=100):
     """Estimate a common offset/slope from coil RSS entropy, then correct data.
@@ -168,19 +180,17 @@ def correct_epi_entropy(samples, negative_mask, *, spatial_ndim=2, phase_prior=(
     negative = ifftnc(jnp.where(mask, array, 0), axes=axes)
     x = (jnp.arange(array.shape[-1]) - array.shape[-1] // 2) / array.shape[-1]
 
-    def entropy(parameters):
-        image = positive + negative * jnp.exp(-1j * (parameters[0] + parameters[1] * x))
-        power = jnp.sum(jnp.abs(image)**2, axis=0)
-        probability = power / jnp.maximum(jnp.sum(power), 1e-30)
-        return -jnp.sum(probability * jnp.log(jnp.maximum(probability, 1e-30)))
+    def evaluate(parameters):
+        return _epi_entropy(parameters, positive, negative, x)
 
-    evaluate = jax.jit(entropy)
-    value_and_grad = jax.jit(jax.value_and_grad(entropy))
+    def value_and_grad(parameters):
+        return _epi_entropy_gradient(parameters, positive, negative, x)
+
     offsets = prior[0] + np.linspace(-np.pi / 2, np.pi / 2, 5)
     slopes = prior[1] + np.linspace(-slope_bound, slope_bound, 21)
     # Coarse search avoids starting refinement at a local sidelobe minimum.
     candidates = np.asarray([(offset, slope) for offset in offsets for slope in slopes])
-    values = np.asarray(jax.jit(jax.vmap(entropy))(jnp.asarray(candidates)))
+    values = np.asarray(_epi_entropy_candidates(jnp.asarray(candidates), positive, negative, x))
     initial = candidates[int(np.argmin(values))]
     def objective(parameters):
         value, gradient = value_and_grad(jnp.asarray(parameters))
@@ -197,3 +207,28 @@ def correct_epi_entropy(samples, negative_mask, *, spatial_ndim=2, phase_prior=(
     corrected = correct_readout_phase(array, mask, fitted)
     return corrected, {"coefficients_radians": fitted.tolist(), "entropy_before": before,
         "entropy_after": after, "converged": bool(fit.success), "offset_branch_prior": prior[0].item()}
+
+
+def calibrate_epi_navigators(acquisition, frame):
+    """Fit aligned three-echo navigators at a common TE, using explicit timing."""
+    auxiliary = acquisition.auxiliary_samples
+    values = jnp.asarray(auxiliary['epi_navigators'][frame])
+    polarity = np.asarray(acquisition.auxiliary_coordinates['epi_navigator_polarity'][frame])
+    times = np.asarray(acquisition.auxiliary_coordinates['epi_navigator_times'][frame], float)
+    if (values.shape != (3, acquisition.coil_count, acquisition.encoding_shape[-1]) or
+            polarity.shape != (3,) or not np.isin(polarity, [-1, 1]).all() or times.shape != (3,) or
+            not np.isfinite(times).all() or np.any(np.diff(times) <= 0) or polarity[0] == 0 or
+            polarity[0] != polarity[2] or polarity[0] != -polarity[1]):
+        raise ValueError("EPI navigator calibration requires three time-ordered alternating readouts")
+    if acquisition.readout_coordinates is not None and acquisition.recipe.readout_regrid:
+        values, _ = regrid_readouts(values[:, :, None, :], acquisition.readout_coordinates,
+            polarity[:, None, None, None], True, kernel=acquisition.recipe.readout_interpolation,
+            radius=acquisition.recipe.readout_kernel_radius)
+        values = values[:, :, 0]
+    hybrid = ifftnc(values, axes=(-1,))
+    fraction = float((times[1] - times[0]) / (times[2] - times[0]))
+    phase_delta = jnp.angle(hybrid[2] * jnp.conj(hybrid[0]))
+    amplitude = jnp.abs(hybrid[0])**(1-fraction) * jnp.abs(hybrid[2])**fraction
+    reference = fftnc(amplitude * jnp.exp(1j * (jnp.angle(hybrid[0]) + fraction * phase_delta)), axes=(-1,))
+    positive, negative = (reference, values[1]) if polarity[0] > 0 else (values[1], reference)
+    return estimate_navigator_phase(positive, negative)

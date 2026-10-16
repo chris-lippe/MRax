@@ -126,7 +126,8 @@ def _resolve_init_raw(cfg):
 
 
 def _require_observable(
-    freq_offsets: object | None, observables: dict | None, keys: Iterable[str] | str, model_name: str
+    freq_offsets: object | None, observables: dict | None, keys: Iterable[str] | str, model_name: str,
+    *, field_ndim: int = 2,
 ):
     """Resolve a required observable from freq_offsets or a mapping."""
     if isinstance(keys, str):
@@ -141,7 +142,12 @@ def _require_observable(
     if candidate is None:
         joined = "/".join(keys)
         raise ValueError(f"{joined} observable is required for the {model_name} model")
-    return _arr(candidate).reshape((-1, 1, 1))
+    return _arr(candidate).reshape((-1,) + (1,) * field_ndim)
+
+
+def _field_ndim(fields):
+    """Observable vectors broadcast over every parameter-map axis."""
+    return max((_arr(value).ndim for value in fields.values()), default=0)
 
 
 def _resolve_scalar_observable(
@@ -233,19 +239,20 @@ def _extract_sat_observables(
     model_name: str,
     require_sat_time: bool,
     require_sat_b1: bool,
+    field_ndim: int = 2,
 ):
     """Prepare shared saturation-transfer observables."""
-    freqs = _require_observable(freq_offsets, observables, ("freq_offsets",), model_name).reshape((-1, 1, 1))  # ppm
+    freqs = _require_observable(freq_offsets, observables, ("freq_offsets",), model_name, field_ndim=field_ndim)  # ppm
     field_strength_mhz = _resolve_field_strength_mhz(observables)
     sat_time_s = None
     sat_b1_uT = None
     obs = observables or {}
     if "sat_time" in obs:
-        sat_time_s = _arr(obs["sat_time"]).reshape((-1, 1, 1)) * 1e-3  # ms -> s
+        sat_time_s = _arr(obs["sat_time"]).reshape((-1,) + (1,) * field_ndim) * 1e-3  # ms -> s
     elif require_sat_time:
         raise ValueError("sat_time observable is required for the saturation-transfer model")
     if "sat_b1" in obs:
-        sat_b1_uT = _arr(obs["sat_b1"]).reshape((-1, 1, 1))
+        sat_b1_uT = _arr(obs["sat_b1"]).reshape((-1,) + (1,) * field_ndim)
     elif require_sat_b1:
         raise ValueError("sat_b1 observable is required for the saturation-transfer model")
     return freqs, field_strength_mhz, sat_time_s, sat_b1_uT
@@ -371,6 +378,11 @@ def _merge_pool_spec(base: dict | None, override: dict) -> dict:
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = {**merged[key], **value}
+            if 'bounds' in value and not {'init', 'init_raw'} & value.keys():
+                initial = merged[key].get('init')
+                lower, upper = value['bounds']
+                if initial is not None and not np.all((np.asarray(initial) > lower) & (np.asarray(initial) < upper)):
+                    merged[key].pop('init', None)
         else:
             merged[key] = value
     return merged
@@ -397,7 +409,7 @@ def _normalize_multipool_pool_spec(pool_name: str, spec: dict) -> dict[str, dict
     else:
         dw_lo = dw_hi = float(dw_val)
     if train_dw:
-        dw_spec = {"transform": "bounded", "bounds": (dw_lo, dw_hi), "unit": "ppm"}
+        dw_spec = {"transform": "bounded", "bounds": (dw_lo, dw_hi), "unit": "ppm", "trainable": True}
     else:
         dw_spec = {"transform": "identity", "trainable": False, "value": dw_lo, "unit": "ppm"}
 
@@ -551,7 +563,7 @@ def _make_relaxometry_model(
     obs_units = _unit_map(obs_keys, "ms")
 
     def model_apply(fields, freq_offsets, observables=None):
-        times = _require_observable(freq_offsets, observables, observable_keys, name)
+        times = _require_observable(freq_offsets, observables, observable_keys, name, field_ndim=_field_ndim(fields))
         return signal_fn(times, fields)
 
     return Model(
@@ -641,7 +653,7 @@ def _make_sat_trans_model(
 
     def model_apply(fields, freq_offsets, observables=None):
         freqs, field_strength, sat_time_s, sat_b1_uT = _extract_sat_observables(
-            freq_offsets, observables, name, require_sat_time, require_sat_b1
+            freq_offsets, observables, name, require_sat_time, require_sat_b1, _field_ndim(fields)
         )
         return signal_fn(fields, freqs, observables or {}, field_strength, sat_time_s, sat_b1_uT)
 
@@ -704,8 +716,8 @@ def make_fair_asl_model(
     units = _units_from_specs("fair_asl", param_specs)
 
     def model_apply(fields, freq_offsets, observables=None):
-        ti = _require_observable(freq_offsets, observables, ("TI",), "fair_asl")
-        labels = _require_observable(None, observables, ("fair_label", "fair_labels"), "fair_asl")
+        ti = _require_observable(freq_offsets, observables, ("TI",), "fair_asl", field_ndim=_field_ndim(fields))
+        labels = _require_observable(None, observables, ("fair_label", "fair_labels"), "fair_asl", field_ndim=_field_ndim(fields))
         non_mask = labels >= 0.5
         a_sel = fields["amplitude_sel"][None, ...]
         a_non = fields["amplitude_non"][None, ...]
@@ -797,12 +809,13 @@ def make_t1_vfa_model(
     units = _units_from_specs("t1_vfa", param_specs)
 
     def model_apply(fields, freq_offsets, observables=None):
-        tr = _require_observable(None, observables, ("TR",), "t1_vfa")
+        tr = _require_observable(None, observables, ("TR",), "t1_vfa", field_ndim=_field_ndim(fields))
         flip = _require_observable(
             freq_offsets,
             observables,
             ("flip_angle", "flip_angles", "FA", "alpha"),
             "t1_vfa",
+            field_ndim=_field_ndim(fields),
         )
         alpha = jnp.deg2rad(flip)
         t1 = fields["t1"][None, ...]
@@ -1318,12 +1331,12 @@ def make_AB_MT_n_model(
             raise ValueError("sat_b1 observable is required for the AB-MT+n model")
 
         t_delay_ppm = fields["t_delay"][None, ...] * 1e-3 * field_strength_mhz
-        rep_time_ms = _require_observable(None, observables, ("TR", "tr"), name)
+        rep_time_ms = _require_observable(None, observables, ("TR", "tr"), name, field_ndim=_field_ndim(fields))
         if rep_time_ms.shape[0] != freqs.shape[0]:
             rep_len = int(rep_time_ms.shape[0])
             freq_len = int(freqs.shape[0])
             if rep_len != 1 and freq_len % rep_len == 0:
-                rep_time_ms = jnp.tile(rep_time_ms, (freq_len // rep_len, 1, 1))
+                rep_time_ms = jnp.tile(rep_time_ms, (freq_len // rep_len,) + (1,) * (rep_time_ms.ndim - 1))
             elif rep_len != 1:
                 raise ValueError(
                     f"TR length {rep_len} does not match freq_offsets length {freq_len} for {name}"
@@ -1348,6 +1361,7 @@ def make_AB_MT_n_model(
                 observables,
                 ("water_offset_time", "b0_drift_time", "t_seconds"),
                 name,
+                field_ndim=_field_ndim(fields),
             )
             drift_time_min = drift_time_s / 60.0
             freqs_ppm = freqs_ppm - fields["dw_water_drift"][None, ...] * drift_time_min
@@ -1415,7 +1429,7 @@ def make_AB_MT_n_model(
         if z_prev_obs is not None:
             z_prev_arr = _arr(z_prev_obs)
             if z_prev_arr.ndim == 1:
-                z_prev = z_prev_arr.reshape((-1, 1, 1))
+                z_prev = z_prev_arr.reshape((-1,) + (1,) * _field_ndim(fields))
             else:
                 z_prev = z_prev_arr
         else:

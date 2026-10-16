@@ -6,6 +6,7 @@ changing that plan never changes the acquired samples or their validity mask.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from operator import index
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -19,7 +20,7 @@ _RECIPE_KEYS = {
     "shift": {"image_shift", "frame_image_shifts"},
     "partial_fourier": {"partial_fourier", "partial_fourier_iterations", "phase_window", "homodyne_weighting", "partial_fourier_tolerance"},
     "gridding": {"gridding_shape", "gridding_kernel_width", "gridding_shape_parameter", "deapodize", "deapodization_normalization"},
-    "format": {"output_shape", "crop_offset", "output_permutation", "output_flips", "frame_permutations", "stack_slices", "output_frame_indices", "checkerboard", "elliptical_support", "output_scale", "encoding_scale"},
+    "format": {"output_shape", "crop_offset", "output_permutation", "output_flips", "frame_permutations", "stack_slices", "output_stack_permutation", "output_frame_indices", "checkerboard", "elliptical_support", "output_scale", "encoding_scale"},
     "combine": {"coil_combine", "average_repeats"},
     "product": {"output_product", "echo_spacing_seconds", "product_unwrap", "product_unwrap_method", "product_mask_snr", "product_signal_fraction", "product_corner_fraction"},
     "window": {"kspace_window", "window_parameters", "window_powers"},
@@ -42,8 +43,12 @@ class ReconstructionStage:
         options = dict(self.options)
         if self.kind in _RECIPE_KEYS and set(options) - _RECIPE_KEYS[self.kind]:
             raise ValueError(f"Unknown options for reconstruction stage: {self.kind}")
-        if self.kind == "fft" and options:
-            raise ValueError("FFT has no optimizer options")
+        if self.kind == "fft":
+            if set(options) - {"frame_batch_size"}:
+                raise ValueError("Unknown FFT options")
+            batch_size = options.get("frame_batch_size")
+            if batch_size is not None and index(batch_size) < 0:
+                raise ValueError("frame_batch_size must be nonnegative or None")
         object.__setattr__(self, "options", MappingProxyType(options))
 
 

@@ -82,6 +82,58 @@ def test_complex_gradient_recovers_complex_target(name):
     np.testing.assert_allclose(result["level"], target, atol=0.003)
 
 
+@pytest.mark.parametrize('name', ['fista', 'split_bregman'])
+@pytest.mark.parametrize('scale', [1., 1e-8, 1e-14])
+def test_objective_aware_steps_are_invariant_to_loss_scaling(name, scale):
+    target = jnp.asarray([1e-4 + 2e-4j, -3e-4 + 1e-4j], dtype=jnp.complex64)
+    def loss(params):
+        return scale * .5 * jnp.sum(jnp.abs(params['level']-target)**2)
+    initial = {'level': jnp.zeros_like(target)}
+    optimizer, step, _ = make_tv_steps(loss, loss, {'level': (-np.inf, np.inf)},
+        {'level': ()}, name, .9/scale, penalty=scale)
+    result, _, info = execute_optimizer(loss, initial, optimizer, num_steps=40, step_function=step)
+    np.testing.assert_allclose(result['level'], target, rtol=2e-5, atol=2e-9)
+    assert float(info.final_loss) < float(loss(initial)) * 1e-8
+
+
+@pytest.mark.parametrize('name', ['fista', 'split_bregman'])
+def test_backtracking_rejects_overshoot_for_small_signal_losses(name):
+    target = jnp.asarray([1e-7, -2e-7], dtype=jnp.float32)
+    def loss(params):
+        return .5 * jnp.sum((params['level']-target)**2)
+    params = {'level': jnp.zeros_like(target)}
+    optimizer, step, _ = make_tv_steps(loss, loss, {'level':(-np.inf,np.inf)},
+        {'level':()}, name, 256.)
+    result, _, info = execute_optimizer(loss, params, optimizer, num_steps=1, step_function=step)
+    assert float(info.final_loss) <= float(loss(params))
+    assert np.linalg.norm(np.asarray(result['level'])-target) < np.linalg.norm(target)
+
+
+def test_weak_signal_3d_sense_removes_aliasing_and_matches_hybrid_factorization():
+    from mrax.reco.variational import fftnc, ifftnc
+
+    nz, ny, nx = 4, 10, 6
+    z, y, x = np.indices((nz, ny, nx))
+    image = ((y >= 3) & (y <= 6) & (x >= 1) & (x <= 4)) * (1e-5 * (1 + .1*z))
+    image = image * np.exp(1j * (.2*x + .1*z))
+    sensitivities = np.stack((np.ones_like(image),
+        (.15 + y/ny)*np.exp(.15j*x), (1.1-y/ny)*np.exp(.1j*z)))
+    sensitivities /= np.sqrt(np.sum(np.abs(sensitivities)**2,axis=0))
+    data = fftnc(jnp.asarray(sensitivities*image), axes=(-3,-2,-1))[None]
+    mask = (np.arange(ny)%2==0)[None,None,None,:,None]
+    samples = data*mask
+    options = dict(regularizer='none', regularizer_weight=0., optimizer_name='fista', num_steps=150)
+    full = solve_variational(samples, spatial_shape=(nz,ny,nx),
+        sensitivities=sensitivities, mask=mask, **options)
+    np.testing.assert_allclose(full[0], image, rtol=2e-3, atol=2e-8)
+    # A fully sampled axis is diagonal in its image representation; no ROI is used.
+    hybrid_samples = jnp.transpose(ifftnc(samples,axes=(2,))[0], (1,0,2,3))
+    hybrid_sensitivities = sensitivities.transpose(1,0,2,3)
+    hybrid = solve_variational(hybrid_samples, spatial_shape=(ny,nx),
+        sensitivities=hybrid_sensitivities, mask=mask[:,:,0], **options)
+    np.testing.assert_allclose(hybrid, full[0], rtol=2e-3, atol=2e-8)
+
+
 def test_coupled_decay_has_analytic_optimum_and_supports_per_leaf_weights():
     params = {"level": jnp.asarray(0.0)}
     def loss(p):

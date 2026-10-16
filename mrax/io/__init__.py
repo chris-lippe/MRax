@@ -15,6 +15,13 @@ from .dicom import (
 from .dicom_bruker import BrukerDicomMetadataAdapter
 from .dipy import load_dipy_gradients, load_dipy_nifti, save_dipy_nifti
 from .image_export import export_image_files
+from .measurement import (
+    MeasurementData,
+    build_measurement_experiment,
+    measurement_entries,
+    read_measurement,
+    register_measurement_reader,
+)
 from .nifti import (
     export_nifti_4d,
     export_nifti_series,
@@ -25,9 +32,16 @@ from .nifti import (
     save_nifti,
 )
 from .pulseq_import import import_pulseq_experiment, read_pulseq, read_pulseq_acquisition
+from .pulseq_measurement import (
+    discover_pulseq_measurements,
+    import_pulseq_study,
+    read_pulseq_measurement,
+)
 from .study_selection import auto_select_scans, pick_scan_by_type, scan_text
 
 __all__ = [
+    "MeasurementData", "build_measurement_experiment", "measurement_entries", "read_measurement", "register_measurement_reader",
+    "discover_pulseq_measurements", "import_pulseq_study", "read_pulseq_measurement",
     "export_image_files",
     "load_acquisition",
     "save_acquisition",

@@ -12,6 +12,9 @@ Acquisition contract
 
 - Complex samples: ``(frame, coil, *encoding_shape)`` for Cartesian data or
   ``(frame, coil, sample)`` for trajectories.
+- Auxiliary samples hold complex calibration data; auxiliary coordinates hold
+  real values such as navigator times. ``auxiliary_frame_axes`` declares their
+  frame-dependent axes for selection, batching and saving.
 - Trajectory columns follow ``encoding_axes``, in cycles per pixel of the encoding
   grid. Cartesian DC is at ``size // 2``; the inverse FFT is centered and orthonormal.
 - ``acquired`` marks measured support, including measured zeros. Interpolated or
@@ -71,8 +74,9 @@ without angular averaging. These conventions have different image units.
 For iterative density design, see
 `Pipe and Menon (1999) <https://pubmed.ncbi.nlm.nih.gov/10025627/>`_.
 
-**EPI:** navigator fitting estimates a linear phase in readout hybrid space;
-entropy fitting searches phase offset and slope. The entropy method needs a
+**EPI:** timed three-echo navigators interpolate the outer echoes to the middle
+TE before fitting a linear phase in readout hybrid space. Entropy fitting
+searches phase offset and slope. The entropy method needs a
 phase prior or navigators to resolve half-FOV ambiguity. Calibration uses a
 common phase across receivers. See
 `Poser (2013) <https://doi.org/10.1002/mrm.24222>`_ and

@@ -318,6 +318,28 @@ class GuiSession:
         self.selected_experiment = names[0] if names else None
         self._reset_current_view_state()
 
+    def import_pulseq_study(self, source, *, options=None, progress_callback=None):
+        """Read a prepared GUI import plan into the same containers as other vendors."""
+        from mrax.gui.pulseq_import import (
+            PulseqImportPlan,
+            load_pulseq_import_plan,
+            plan_pulseq_import,
+        )
+
+        plan = source if isinstance(source, PulseqImportPlan) else plan_pulseq_import(source)
+        study, metadata = load_pulseq_import_plan(plan, dict(options or {}), progress_callback)
+        self.study = study
+        self.import_metadata = metadata
+        self.data = _study_to_session_data(study, metadata, source_root=plan.root, source_kind="pulseq")
+        self._ensure_original_image_snapshots()
+        self.manifest_path = None
+        self.source_kind = "pulseq"
+        self.view_states.clear()
+        self.shared_rois.clear()
+        self._slice_cache.clear()
+        self.selected_experiment = self.experiment_names[0] if self.experiment_names else None
+        self._reset_current_view_state()
+
     def load_dicom_study(
         self,
         study_root: str | Path,
@@ -756,7 +778,8 @@ class GuiSession:
             )
             experiments.append(experiment)
             datasets.append(dataset)
-            models.append(make_model(exp_data.get("model") or "identity"))
+            models.append(make_model(exp_data.get("model") or "identity",
+                param_overrides=exp_data.get("model_parameter_specs") or None))
             names.append(name)
         if not experiments:
             return None
@@ -1785,6 +1808,19 @@ class GuiSession:
 
     def build_fit_inputs(self, model_name: str | None = None) -> tuple[Experiment, Any, DataSet, Study]:
         entry = self.current_study_entry()
+        selected_key = normalize_model_key(model_name or self.fit_settings.model_name or self.current_model_name)
+        source_model = entry[1] if entry is not None else None
+        source_key = normalize_model_key(getattr(source_model, "name", None) if source_model is not None else self.current_model_name)
+        saved_specs = {}
+        if selected_key == source_key:
+            if source_model is None:
+                saved_specs = self.current_experiment.get("model_parameter_specs", {}) or {}
+            else:
+                saved_specs = (getattr(source_model, "parameter_specs", None) or
+                    getattr(getattr(source_model, "parametrization_factory", None), "parameter_specs", {})) or {}
+        parameter_overrides = {str(key): dict(value) for key, value in saved_specs.items()}
+        for key, value in self.fit_settings.param_overrides.items():
+            parameter_overrides[key] = {**parameter_overrides.get(key, {}), **value}
         if entry is not None:
             experiment, existing_model, dataset = entry
             selected = model_name or self.fit_settings.model_name
@@ -1800,7 +1836,7 @@ class GuiSession:
                 model = make_model(
                     selected or getattr(existing_model, "name", None),
                     pools=self.fit_settings.selected_pools or None,
-                    param_overrides=self.fit_settings.param_overrides or None,
+                    param_overrides=parameter_overrides or None,
                     pool_overrides=self.fit_settings.pool_overrides or None,
                     parameter_constant_dims=self.fit_settings.parameter_constant_dims or None,
                 )
@@ -1811,7 +1847,7 @@ class GuiSession:
             model = make_model(
                 model_name or self.fit_settings.model_name or self.current_model_name,
                 pools=self.fit_settings.selected_pools or None,
-                param_overrides=self.fit_settings.param_overrides or None,
+                param_overrides=parameter_overrides or None,
                 pool_overrides=self.fit_settings.pool_overrides or None,
                 parameter_constant_dims=self.fit_settings.parameter_constant_dims or None,
             )

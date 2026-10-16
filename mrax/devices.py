@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import os
 from dataclasses import fields, is_dataclass
 from functools import wraps
 from typing import TypeAlias
@@ -12,6 +13,18 @@ import jax
 import optax
 
 DeviceLike: TypeAlias = str | jax.Device
+_constant_buffers_configured = False
+
+
+def _configure_constant_buffers():
+    """Keep large captured arrays in runtime buffers on JAX versions supporting it."""
+    global _constant_buffers_configured
+    if _constant_buffers_configured:
+        return
+    if (hasattr(jax.config, 'jax_use_simplified_jaxpr_constants') and
+            'JAX_USE_SIMPLIFIED_JAXPR_CONSTANTS' not in os.environ):
+        jax.config.update('jax_use_simplified_jaxpr_constants', True)
+    _constant_buffers_configured = True
 
 
 def get_available_devices(platform: str | None = None) -> list[jax.Device]:
@@ -134,5 +147,6 @@ def place_optimizer(optimizer, device):
 
 def jit_on_device(function, device):
     """Compile array-only callbacks on the requested local device."""
+    _configure_constant_buffers()
     sharding = jax.sharding.SingleDeviceSharding(device)
     return jax.jit(function, in_shardings=sharding, out_shardings=sharding)

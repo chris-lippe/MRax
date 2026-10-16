@@ -920,8 +920,10 @@ def solve_variational(
             y = y[:, None, :]
     else:
         has_coils = independent_coils or _has_coils_cartesian(y, op.spatial_shape, op.sensitivities)
-        if initial_image is not None and op.forward(jnp.asarray(initial_image)).shape == y.shape:
-            has_coils = True
+        if initial_image is not None and not has_coils:
+            initial = jnp.asarray(initial_image)
+            layout = jax.eval_shape(op.forward, jax.ShapeDtypeStruct(initial.shape, initial.dtype))
+            has_coils = layout.shape == y.shape
         if not has_coils:
             y = jnp.expand_dims(y, -ndim - 1)
     if not independent_coils and y.shape[-(2 if op.is_non_cartesian else ndim + 1)] != op.coil_count:
@@ -929,12 +931,13 @@ def solve_variational(
 
     def sample_weights(value, default):
         if value is None:
-            return jnp.full(y.shape, default, dtype=jnp.real(y).dtype)
+            return jnp.asarray(default, dtype=jnp.real(y).dtype)
         array = jnp.asarray(value)
         # Image-shaped frame masks acquire their missing receiver dimension.
         if array.ndim == y.ndim - 1 and tuple(array.shape) == tuple(y.shape[:-ndim - 1] + y.shape[-ndim:]) and not op.is_non_cartesian:
             array = jnp.expand_dims(array, -ndim - 1)
-        array = jnp.broadcast_to(array, y.shape)
+        if np.broadcast_shapes(array.shape, y.shape) != y.shape:
+            raise ValueError("Sampling weights do not broadcast to measured samples")
         checked = np.asarray(array)
         if not np.isfinite(checked).all() or np.any(checked < 0):
             raise ValueError("Sampling and statistical weights must be finite and nonnegative")
@@ -943,16 +946,17 @@ def solve_variational(
     weights = sample_weights(mask, 1) * sample_weights(data_weights, 1)
     if not bool(jnp.any(weights > 0)):
         raise ValueError("No acquired samples have positive weight")
-    if not bool(jnp.all(jnp.isfinite(jnp.where(weights > 0, y, 0)))):
+    if not bool(jax.jit(lambda data, weight: jnp.all(jnp.where(weight > 0, jnp.isfinite(data), True)))(y, weights)):
         raise ValueError("Acquired samples must be finite")
-    y = jnp.where(weights > 0, y, 0)
+    weight_sum = jnp.sum(weights) * (int(np.prod(y.shape)) // int(np.prod(weights.shape)))
     shifts = None
     if frame_shifts is not None:
         if ndim != 2 or independent_coils:
             raise ValueError("Frame motion requires two-dimensional sensitivity-combined images")
         shifts = jnp.asarray(frame_shifts)
+        full_weights = jnp.broadcast_to(weights, y.shape)
         y = jnp.moveaxis(y, frame_axis, 0)
-        weights = jnp.moveaxis(weights, frame_axis, 0)
+        weights = jnp.moveaxis(full_weights, frame_axis, 0)
         if shifts.shape != (y.shape[0], 2):
             raise ValueError("frame_shifts must have shape (frames, 2)")
 
@@ -961,7 +965,7 @@ def solve_variational(
             mode=shift_mode, cval=cval)
 
     if initial_image is None:
-        backprojection = op.adjoint(y, kspace_has_coils=True,
+        backprojection = op.adjoint(jnp.where(weights > 0, y, 0), kspace_has_coils=True,
             density_compensation=True, normalize_sensitivities=True)
         x0 = (jnp.mean(jax.vmap(lambda image, shift: shift_image(image, -shift))(backprojection, shifts), axis=0)
               if shifts is not None else backprojection)
@@ -982,7 +986,16 @@ def solve_variational(
         prediction = encode(image)
         if prediction.shape != y.shape:
             raise ValueError("Encoded image layout does not match measured samples")
-        return .5 * jnp.sum(weights * jnp.abs(prediction - y)**2) / jnp.sum(weights)
+        residual = jnp.where(weights > 0, prediction - y, 0)
+        return .5 * jnp.sum(weights * jnp.abs(residual)**2) / weight_sum
+
+    homogeneous_data_loss = None
+    if (sensitivities is not None and not independent_coils and not op.is_non_cartesian and shifts is None and
+            op.readout_coordinates is None and op.readout_phase is None and y.ndim in (ndim + 1, ndim + 2)):
+        from .cartesian_loss import cartesian_sense_loss
+
+        data_loss = cartesian_sense_loss(y, weights, op.sensitivities, op.spatial_shape)
+        homogeneous_data_loss = cartesian_sense_loss(y, weights, op.sensitivities, op.spatial_shape, homogeneous=True)
 
     tv_operator = None
     if reg == "tv" and regularizer_weight:
@@ -1004,10 +1017,11 @@ def solve_variational(
             l2_curvature = 2 * regularizer_weight / x0.size if reg == "l2" else 0.
             if not op.is_non_cartesian and op.readout_coordinates is None and op.readout_phase is None and sensitivities is None and shifts is None:
                 # Unitary Fourier encoding diagonalizes the sample weights.
-                curvature = jnp.max(weights) / jnp.sum(weights) + l2_curvature
+                curvature = jnp.max(weights) / weight_sum + l2_curvature
             else:
                 def homogeneous_loss(image):
-                    value = .5 * jnp.sum(weights * jnp.abs(encode(image, homogeneous=True))**2) / jnp.sum(weights)
+                    value = (homogeneous_data_loss(image) if homogeneous_data_loss is not None else
+                        .5 * jnp.sum(weights * jnp.abs(encode(image, homogeneous=True))**2) / weight_sum)
                     return value + (regularizer_weight * jnp.mean(jnp.abs(image)**2) if reg == "l2" else 0)
                 gradient = jax.grad(homogeneous_loss)
                 direction = jax.random.rademacher(jax.random.key(0), x0.shape, dtype=jnp.real(x0).dtype).astype(x0.dtype)

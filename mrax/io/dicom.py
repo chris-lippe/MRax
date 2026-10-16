@@ -126,6 +126,7 @@ def load_dicom_series(
     recursive: bool = True,
     force: bool = False,
     include_identifiers: bool = False,
+    metadata_overrides: Mapping[str, object] | None = None,
 ) -> tuple[Experiment, DataSet, dict[str, object]]:
     """Load one classic or enhanced DICOM image series into MRax containers.
 
@@ -146,6 +147,7 @@ def load_dicom_series(
         override_type=override_type,
         metadata_adapters=metadata_adapters,
         include_identifiers=include_identifiers,
+        metadata_overrides=metadata_overrides,
     )
 
 
@@ -157,12 +159,23 @@ def load_dicom_study(
     recursive: bool = True,
     force: bool = False,
     include_identifiers: bool = False,
+    series_groups: Mapping[str, Sequence[str]] | None = None,
+    metadata_overrides: Mapping[str, Mapping[str, object]] | None = None,
 ) -> tuple[Study, dict[str, object]]:
-    """Load every readable DICOM image series below ``source`` as an MRax study."""
+    """Load DICOM series, optionally assembling explicitly named contrast sweeps.
+
+    ``series_groups`` maps experiment names to series UIDs. Selected series must
+    share study, frame of reference, pixel layout and physical geometry. Unlisted
+    series remain separate. Series are never merged by filename or description.
+    """
+
+    from mrax.io.measurement import image_signal_scale
 
     grouped = _read_grouped_headers(source, recursive=recursive, force=force)
     if not grouped:
         raise FileNotFoundError("No readable DICOM image series found")
+    source_series_count = len(grouped)
+    grouped = _combine_series(grouped, series_groups or {})
 
     experiments: list[Experiment] = []
     datasets_out: list[DataSet] = []
@@ -173,7 +186,7 @@ def load_dicom_study(
     field_strengths: list[float] = []
     for index, (uid, entries) in enumerate(grouped.items(), start=1):
         datasets = [dcmread(path, force=force) for path, _header in entries]
-        base_name = _compact_series_name(datasets[0], fallback_index=index)
+        base_name = uid if uid in (series_groups or {}) else _compact_series_name(datasets[0], fallback_index=index)
         entry_name = _unique_name(base_name, used_names)
         override = (type_overrides or {}).get(uid) or (type_overrides or {}).get(entry_name)
         experiment, dataset, metadata = _materialize_dicom_series(
@@ -182,10 +195,12 @@ def load_dicom_study(
             override_type=override,
             metadata_adapters=metadata_adapters,
             include_identifiers=include_identifiers,
+            metadata_overrides=(metadata_overrides or {}).get(uid, (metadata_overrides or {}).get(entry_name)),
         )
         experiments.append(experiment)
         datasets_out.append(dataset)
-        models.append(default_model_for_type(str(experiment.exp_type or "anatomical")))
+        models.append(default_model_for_type(str(experiment.exp_type or "anatomical"),
+            scale=image_signal_scale(dataset.data), observables=experiment.observables, image_data=dataset.data))
         names.append(entry_name)
         experiment_metadata[entry_name] = metadata
         strength = _finite_float(metadata.get("magnetic_field_strength_t"))
@@ -208,9 +223,50 @@ def load_dicom_study(
     return study, {
         "format": "dicom",
         "series_count": len(names),
+        "source_series_count": source_series_count,
         "experiments": experiment_metadata,
         "identifiers_included": bool(include_identifiers),
     }
+
+
+def _combine_series(grouped, groups):
+    selected: set[str] = set()
+    combined = {}
+    for name, uids in groups.items():
+        if isinstance(uids, str) or not uids:
+            raise ValueError("DICOM series_groups requires nonempty sequences of series UIDs")
+        if not name or name in grouped:
+            raise ValueError("DICOM group names must be nonempty and distinct from series UIDs")
+        entries = []
+        signatures = []
+        for uid in uids:
+            if uid not in grouped or uid in selected:
+                raise ValueError("DICOM grouped series is missing or selected more than once")
+            selected.add(uid)
+            series = grouped[uid]
+            signatures.append(_series_geometry_signature(series))
+            entries.extend(series)
+        if any(signature != signatures[0] for signature in signatures[1:]):
+            raise ValueError("DICOM grouped series must share study, frame of reference, image layout and geometry")
+        combined[name] = entries
+    combined.update({uid: entries for uid, entries in grouped.items() if uid not in selected})
+    return combined
+
+
+def _series_geometry_signature(entries):
+    signatures = set()
+    for _path, header in entries:
+        for frame in range(_declared_frame_count(header)):
+            row = _standard_frame_metadata(header, frame)
+            geometry = tuple(tuple(np.round(row.get(key) or (), 5)) for key in (
+                "image_orientation_patient", "image_position_patient", "pixel_spacing"))
+            if any(not values for values in geometry):
+                raise ValueError("Explicit DICOM series grouping requires complete physical geometry")
+            signatures.add((str(getattr(header, "StudyInstanceUID", "")),
+                str(getattr(header, "FrameOfReferenceUID", "")), int(header.Rows), int(header.Columns),
+                str(getattr(header, "ComplexImageComponent", "")), tuple(getattr(header, "ImageType", ())),
+                _rounded(row.get("slice_thickness")), *geometry))
+    return frozenset(signatures)
 
 
 def _source_files(source: str | Path | Sequence[str | Path], *, recursive: bool) -> list[Path]:
@@ -279,6 +335,7 @@ def _materialize_dicom_series(
     override_type: str | None,
     metadata_adapters: Sequence[DicomMetadataAdapter] | None,
     include_identifiers: bool,
+    metadata_overrides: Mapping[str, object] | None = None,
 ) -> tuple[Experiment, DataSet, dict[str, object]]:
     if not datasets:
         raise ValueError("A DICOM series must contain at least one dataset")
@@ -312,9 +369,28 @@ def _materialize_dicom_series(
             if key in _NORMALIZED_FIELDS and value is not None
         }
     )
+    overrides = dict(metadata_overrides or {})
+    if set(overrides) - _NORMALIZED_FIELDS:
+        raise ValueError("Unknown normalized DICOM metadata fields")
+    if 'frame_count' in overrides and int(overrides['frame_count']) != len(volumes):
+        raise ValueError("DICOM metadata frame_count must match the decoded volume count")
+    normalized_values.update(overrides)
     normalized = NormalizedMetadata(**cast(Any, normalized_values))
     exp_type = str(override_type or detect_experiment_type(normalized))
     observables = extract_observables_from_metadata(exp_type, normalized, len(volumes))
+    from mrax.data_struct.dimensions import get_default_dim_specs
+
+    specs = get_default_dim_specs(exp_type) if exp_type in {'ir', 'mse', 'mge', 'vfa', 'vtr'} else ()
+    columns = [np.asarray(observables[spec.observable].values).reshape(-1)
+        for spec in specs if spec.observable in observables
+        and np.asarray(observables[spec.observable].values).size == len(volumes)]
+    order = np.lexsort(tuple(reversed(columns))) if columns else np.arange(len(volumes))
+    data = data[order]
+    volume_metadata = [volume_metadata[i] for i in order]
+    affines = [affines[i] for i in order]
+    observables = {key: value.with_values(jnp.asarray(np.asarray(value.values)[order]))
+        if np.asarray(value.values).ndim and np.asarray(value.values).shape[0] == len(volumes) else value
+        for key, value in observables.items()}
     dataset_name = str(name or _compact_series_name(datasets[0]))
     first_geometry_row = volume_metadata[0] if volume_metadata else {}
     pixel_spacing = tuple(first_geometry_row.get("pixel_spacing") or ())
@@ -329,6 +405,9 @@ def _materialize_dicom_series(
         if len(spatial_shape) == 3 and len(pixel_spacing) >= 2
         else tuple(float(value) for value in pixel_spacing[: len(spatial_shape)])
     )
+    if len(spatial_shape) == 3:
+        # Native rows/columns/slices reverse to slices/columns/rows at NIfTI I/O.
+        affines = [None if affine is None else np.asarray(affine)[:, [2, 0, 1, 3]] for affine in affines]
     spatial_geometry = SpatialGeometry.from_affines(
         affines,
         spatial_shape=spatial_shape,

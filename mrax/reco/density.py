@@ -6,6 +6,35 @@ from operator import index
 import numpy as np
 
 
+def triangulated_density(trajectory, *, spatial_shape):
+    """Barycentric quadrature on a 2D/3D sampling mesh in cycles/pixel.
+
+    Each simplex contributes its area/volume equally to its vertices. Repeated
+    coordinates share their cell weight. The convex hull bounds support; no
+    unmeasured frequencies are extrapolated. These initialization weights never
+    replace statistical noise weights in an iterative data term.
+    """
+    from scipy.spatial import Delaunay, QhullError
+
+    coords = np.asarray(trajectory, float)
+    ndim = len(spatial_shape)
+    if coords.ndim != 2 or coords.shape[1] != ndim or ndim not in (2, 3) or not np.isfinite(coords).all():
+        raise ValueError("Density estimation requires finite 2D/3D cycles/pixel coordinates")
+    unique, inverse, counts = np.unique(np.round(coords, 7), axis=0, return_inverse=True, return_counts=True)
+    if len(unique) <= ndim:
+        raise ValueError("Too few distinct coordinates for sampling-density estimation")
+    try:
+        cells = Delaunay(unique).simplices
+    except QhullError as exc:
+        raise ValueError("Sampling coordinates do not span the declared encoding space") from exc
+    edges = unique[cells[:, 1:]] - unique[cells[:, :1]]
+    volume = np.abs(np.linalg.det(edges)) / (2 if ndim == 2 else 6)
+    weights = np.zeros(len(unique), float)
+    np.add.at(weights, cells.ravel(), np.repeat(volume / (ndim + 1), ndim + 1))
+    weights *= int(np.prod(spatial_shape))
+    return (weights[inverse] / counts[inverse]).astype(np.float32)
+
+
 def radial_cell_density(trajectory, *, points_per_readout, angular_weights=None, target_sum=None):
     """Integrate radial cells, including the central cell and variable spacing.
 

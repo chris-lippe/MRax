@@ -30,6 +30,7 @@ class ReconstructionRecipe:
     output_flips: tuple[int, ...] = ()
     frame_permutations: tuple[tuple[int, ...], ...] = ()
     stack_slices: int = 1
+    output_stack_permutation: tuple[int, ...] = ()
     output_frame_indices: tuple[int, ...] = ()
     output_shape: tuple[int, ...] = ()
     crop_offset: tuple[int, ...] = ()
@@ -71,7 +72,7 @@ class ReconstructionRecipe:
             raise ValueError("Unknown homodyne weighting")
         if not np.isfinite(self.partial_fourier_tolerance) or self.partial_fourier_tolerance < 0:
             raise ValueError("Partial Fourier tolerance must be finite and nonnegative")
-        if self.epi_phase_correction not in {"none", "entropy", "fixed"}:
+        if self.epi_phase_correction not in {"none", "entropy", "fixed", "navigator"}:
             raise ValueError("Unknown EPI phase correction")
         if np.shape(self.epi_phase_prior) != (2,) or not np.isfinite(self.epi_phase_prior).all():
             raise ValueError("EPI phase prior requires two finite radian coefficients")
@@ -101,6 +102,8 @@ class ReconstructionRecipe:
             raise ValueError("Image shifts must be finite")
         if index(self.stack_slices) < 1:
             raise ValueError("stack_slices must be positive")
+        if self.output_stack_permutation and (self.stack_slices <= 1 or sorted(self.output_stack_permutation) != [0, 1, 2]):
+            raise ValueError("Stack output permutation requires three spatial axes and multiple slices")
         if index(self.average_repeats) < 1:
             raise ValueError("average_repeats must be positive")
         if not np.isfinite(np.asarray(self.frame_image_shifts, float)).all():
@@ -175,6 +178,8 @@ class AcquisitionData:
     recipe: ReconstructionRecipe = field(default_factory=ReconstructionRecipe)
     readout_model: ReadoutModel | None = None
     schema_version: int = 1
+    auxiliary_coordinates: Mapping[str, np.ndarray] = field(default_factory=dict)
+    auxiliary_frame_axes: Mapping[str, int] = field(default_factory=dict)
 
     def __post_init__(self):
         samples = np.asarray(self.samples)
@@ -236,6 +241,17 @@ class AcquisitionData:
             array = np.asarray(values)
             if not isinstance(name, str) or not name or not np.iscomplexobj(array) or array.dtype.hasobject:
                 raise ValueError("Auxiliary sample roles require names and complex numeric arrays")
+        for name, values in self.auxiliary_coordinates.items():
+            array = np.asarray(values)
+            if not isinstance(name, str) or not name or name in self.auxiliary_samples or array.dtype.kind not in 'biuf' or not np.isfinite(array).all():
+                raise ValueError("Auxiliary coordinates require distinct names and finite real numeric arrays")
+        for name, axis in self.auxiliary_frame_axes.items():
+            values = self.auxiliary_samples.get(name, self.auxiliary_coordinates.get(name))
+            if values is None:
+                raise ValueError("An auxiliary frame axis must name an existing array")
+            axis = index(axis)
+            if not -np.ndim(values) <= axis < np.ndim(values) or np.shape(values)[axis] != samples.shape[0]:
+                raise ValueError("Auxiliary frame axes must match the acquisition frame count")
         if self.readout_coordinates is not None:
             coordinates = np.asarray(self.readout_coordinates)
             if self.kind != "cartesian" or self.readout_polarity is None or coordinates.shape != (2, shape[-1]) or not np.isfinite(coordinates).all():
@@ -308,6 +324,10 @@ class AcquisitionData:
                 options[name] = np.asarray(value)[selected]
         frame_shifts = tuple(recipe.frame_image_shifts[i] for i in selected) if recipe.frame_image_shifts else ()
         permutations = tuple(recipe.frame_permutations[i] for i in selected) if recipe.frame_permutations else ()
+        for field_name in ('auxiliary_samples', 'auxiliary_coordinates'):
+            options[field_name] = {name: np.take(value, selected, axis=self.auxiliary_frame_axes[name])
+                if name in self.auxiliary_frame_axes else value
+                for name, value in getattr(self, field_name).items()}
         return replace(self, samples=self.samples[selected],
             frame_coordinates={name: np.asarray(value)[selected] for name, value in self.frame_coordinates.items()},
             recipe=replace(recipe, output_frame_indices=(), frame_image_shifts=frame_shifts,
@@ -319,5 +339,5 @@ class AcquisitionData:
         valid = None if self.acquired is None else np.broadcast_to(self.acquired, self.samples.shape)
         if valid is not None and not np.any(valid):
             raise ValueError("Acquisition has no acquired samples")
-        if not np.isfinite(self.samples if valid is None else self.samples[valid]).all():
+        if not np.isfinite(self.samples).all(where=True if valid is None else valid):
             raise ValueError("Acquired samples must be finite")

@@ -6,6 +6,7 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from mrax.data_struct.acquisition import AcquisitionData, ReconstructionRecipe
 from mrax.devices import DeviceLike, device_function
@@ -174,6 +175,8 @@ def format_coil_images(coils, recipe: ReconstructionRecipe, *, spatial_ndim: int
             raise ValueError("Slice grouping must exactly account for two-dimensional frames")
         array = array.reshape((array.shape[0] // recipe.stack_slices, recipe.stack_slices) + array.shape[1:])
         array = jnp.transpose(array, (0, 2, 3, 4, 1))
+        if recipe.output_stack_permutation:
+            array = jnp.transpose(array, (0, 1) + tuple(i + 2 for i in recipe.output_stack_permutation))
     elif recipe.output_frame_indices:
         array = array[jnp.asarray(recipe.output_frame_indices)]
     if recipe.output_flips:
@@ -192,6 +195,7 @@ def reconstruct_acquisition(
     experiment=None,
     model=None,
     device: DeviceLike = "cpu",
+    frame_batch_size: int | None = None,
     **options,
 ) -> ReconstructionResult:
     """Reconstruct explicit samples without consulting source-format metadata.
@@ -204,10 +208,23 @@ def reconstruct_acquisition(
     name = method.lower().replace("-", "_")
     if name not in {"fft", "variational", "model_based"}:
         raise ValueError("method must be fft, variational, or model_based")
+    if frame_batch_size is not None:
+        from operator import index
+
+        frame_batch_size = index(frame_batch_size)
+        if frame_batch_size < 0:
+            raise ValueError("frame_batch_size must be nonnegative or None")
+        if name != "fft" and frame_batch_size:
+            raise ValueError("Frame batching is available for FFT reconstruction")
+    if name == "fft" and frame_batch_size != 0 and acquisition.recipe.output_product == "image":
+        batched = _batched_fft(acquisition, sensitivities, device, frame_batch_size)
+        if batched is not None:
+            return batched
     ndim = len(acquisition.encoding_shape)
     axes = tuple(range(-ndim, 0))
     samples = jax.device_put(acquisition.samples, device)
-    mask = jnp.ones(samples.shape, bool) if acquisition.acquired is None else jnp.broadcast_to(jnp.asarray(acquisition.acquired), samples.shape)
+    mask_shape = samples.shape[-ndim:] if acquisition.kind == "cartesian" else samples.shape[-1:]
+    mask = jnp.ones(mask_shape, bool) if acquisition.acquired is None else jnp.asarray(acquisition.acquired)
     recipe = acquisition.recipe
     encoding_scale = recipe.output_scale if recipe.encoding_scale is None else recipe.encoding_scale
     samples = jnp.where(mask, samples, 0)
@@ -237,6 +254,12 @@ def reconstruct_acquisition(
             if recipe.epi_phase_correction == "fixed":
                 values = correct_readout_phase(preview[frame], polarity[frame] < 0, recipe.epi_phase_prior)
                 report = {"coefficients_radians": list(recipe.epi_phase_prior), "method": "fixed"}
+            elif recipe.epi_phase_correction == "navigator":
+                from .epi import calibrate_epi_navigators
+
+                coefficients = calibrate_epi_navigators(acquisition, frame)
+                values = correct_readout_phase(preview[frame], polarity[frame] < 0, coefficients)
+                report = {"coefficients_radians": coefficients.tolist(), "method": "navigator"}
             else:
                 values, report = correct_epi_entropy(preview[frame], polarity[frame] < 0,
                     spatial_ndim=ndim, phase_prior=recipe.epi_phase_prior)
@@ -290,7 +313,7 @@ def reconstruct_acquisition(
         if acquisition.kind == "sampled":
             initial = format_coil_images(coils, replace(recipe,
                 output_shape=acquisition.encoding_shape, output_permutation=(),
-                frame_permutations=(), stack_slices=1, output_frame_indices=(),
+                frame_permutations=(), stack_slices=1, output_stack_permutation=(), output_frame_indices=(),
                 checkerboard=False, elliptical_support=False), spatial_ndim=ndim)
         else:
             initial = initial * recipe.output_scale
@@ -300,6 +323,7 @@ def reconstruct_acquisition(
                                   (acquisition.frame_count, acquisition.coil_count) + acquisition.encoding_shape):
                 raise ValueError("Sensitivities must match the receivers and encoding grid")
             initial = jnp.sum(initial * jnp.conj(sens), axis=1) / jnp.maximum(jnp.sum(jnp.abs(sens)**2, axis=-ndim - 1), 1e-12)
+        del coils
         solved, losses = solve_variational(samples * encoding_scale,
             spatial_shape=acquisition.encoding_shape,
             mask=mask, data_weights=acquisition.statistical_weights,
@@ -375,3 +399,60 @@ def reconstruct_acquisition(
         diagnostics.append({"stage": "frequency_product", "units": "Hz",
             "reliable_fraction": float(jnp.mean(reliable))})
     return ReconstructionResult(image, coils, name, history, parameters, tuple(diagnostics))
+
+
+def _batched_fft(acquisition, sensitivities, device, batch_size):
+    """Execute independent frame groups before any whole-array device placement."""
+    recipe = acquisition.recipe
+    frames = acquisition.frame_count
+    group_size = recipe.stack_slices * recipe.average_repeats
+    order = np.asarray(recipe.output_frame_indices or tuple(range(frames)), dtype=int)
+    if batch_size is None:
+        bytes_per_frame = acquisition.samples.nbytes // frames
+        batch_size = max(1, (256 * 1024**2) // max(bytes_per_frame, 1))
+    batch_size = max(group_size, batch_size // group_size * group_size)
+    if batch_size >= len(order):
+        return None
+    if len(order) % group_size:
+        raise ValueError("Frame batches require complete slice and repeat groups")
+
+    def select(value, indices):
+        if value is not None and np.ndim(value) == acquisition.samples.ndim and np.shape(value)[0] == frames:
+            return value[indices]
+        return value
+
+    images = coils = None
+    diagnostics = [{"stage": "frame_batches", "batch_size": batch_size}]
+    output_index = 0
+    for start in range(0, len(order), batch_size):
+        indices = order[start:start + batch_size]
+        part_recipe = replace(recipe, output_frame_indices=(),
+            frame_permutations=tuple(recipe.frame_permutations[i] for i in indices) if recipe.frame_permutations else (),
+            frame_image_shifts=tuple(recipe.frame_image_shifts[i] for i in indices) if recipe.frame_image_shifts else ())
+        part = replace(acquisition, samples=acquisition.samples[indices],
+            acquired=select(acquisition.acquired, indices),
+            statistical_weights=select(acquisition.statistical_weights, indices),
+            readout_polarity=select(acquisition.readout_polarity, indices),
+            frame_coordinates={key: np.asarray(value)[indices] for key, value in acquisition.frame_coordinates.items()},
+            auxiliary_samples={key: np.take(value, indices, axis=acquisition.auxiliary_frame_axes[key])
+                if key in acquisition.auxiliary_frame_axes else value for key, value in acquisition.auxiliary_samples.items()},
+            auxiliary_coordinates={key: np.take(value, indices, axis=acquisition.auxiliary_frame_axes[key])
+                if key in acquisition.auxiliary_frame_axes else value for key, value in acquisition.auxiliary_coordinates.items()},
+            geometry=None, recipe=part_recipe)
+        result = reconstruct_acquisition(part, method="fft", sensitivities=select(sensitivities, indices),
+            device=device, frame_batch_size=0)
+        image_part, coil_part = np.asarray(result.image), np.asarray(result.coil_images)
+        if images is None:
+            output_frames = len(order) // group_size
+            images = np.empty((output_frames,) + image_part.shape[1:], image_part.dtype)
+            coils = np.empty((output_frames,) + coil_part.shape[1:], coil_part.dtype)
+        end = output_index + len(image_part)
+        images[output_index:end] = image_part
+        coils[output_index:end] = coil_part
+        output_index = end
+        for report in result.diagnostics:
+            report = dict(report)
+            if 'frame' in report:
+                report['frame'] = int(indices[report['frame']])
+            diagnostics.append(report)
+    return ReconstructionResult(jax.device_put(images, device), coils, "fft", diagnostics=tuple(diagnostics))

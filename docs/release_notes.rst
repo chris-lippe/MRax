@@ -12,10 +12,20 @@ Unreleased.
 
 - Bruker and Pulseq imports prepare raw acquisitions for a shared FFT,
   variational and model-based reconstruction pipeline with editable plans.
+- Pulseq imports extracted MRD, Siemens, NIfTI and DICOM measurements, with
+  editable metadata mappings and separate reconstruction.
+- Explicit DICOM series groups assemble quantitative sweeps; MRD metadata
+  templates and receiver-noise whitening support externally converted raw data.
+- Image-based inversion-recovery imports initialize T1 from the recovery curve.
+- Built-in relaxometry and saturation-transfer models support volumetric maps.
+- GUI import accepts Pulseq files/folders, discovers nearby measurements and
+  shares the study overview with Bruker imports.
 - Bruker study import accepts standalone exports and skips incomplete or
   unsupported scans with a warning.
 - Fitting defaults to CPU; select a device with ``device``. TV regularization
   selects FISTA automatically; explicit Adam uses smoothed TV with a warning.
+- FISTA and split Bregman retain appropriate steps for large mean-normalized
+  problems and use relative line-search tolerances for weak signals.
 - Data normalization defaults to the included ROI and frames. See :doc:`models`
   for regularizer-weight adjustment when changing normalization scope.
 - Fixed FAIR ASL ROI preview curves and ROI drawing on comparison views.

@@ -33,6 +33,8 @@ def image_to_encoding(image, acquisition: AcquisitionData):
     array = jnp.asarray(image)
     if recipe.output_flips:
         array = jnp.flip(array, axis=tuple(axis + 1 for axis in recipe.output_flips))
+    if recipe.output_stack_permutation:
+        array = jnp.transpose(array, (0,) + tuple(i + 1 for i in np.argsort(recipe.output_stack_permutation)))
     frame_map = encoding_frame_map(acquisition)
     output_frames = int(frame_map.max()) + 1
     if array.shape[0] != output_frames:

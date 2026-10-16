@@ -2340,10 +2340,7 @@ class _MainWindowMixin:
     def import_study_dialog(self):
         if self.is_busy:
             return
-        directory = self._get_existing_directory(
-            "Choose study folder to import",
-            str(Path.cwd()),
-        )
+        directory = self._get_import_source("Choose study folder or Pulseq file")
         if not directory:
             return
         root = Path(directory)
@@ -2356,10 +2353,35 @@ class _MainWindowMixin:
                 error_title="Could not import DICOM folder",
             )
             return
+        if vendor == "Pulseq":
+            from mrax.gui.pulseq_import import plan_pulseq_import
+
+            try:
+                plan = plan_pulseq_import(root)
+                if not plan.entries:
+                    measurement = self._get_import_source("Choose images or raw data for the Pulseq sequence", measurements=True)
+                    if not measurement:
+                        return
+                    plan = plan_pulseq_import(root, measurement_source=measurement)
+                if not plan.entries:
+                    raise ValueError("No measurements could be paired. Select one sequence file and its measurement folder or file.")
+            except (OSError, ValueError, ImportError) as exc:
+                self.show_error("Could not prepare Pulseq import", str(exc))
+                return
+            options = self._show_import_options_dialog(root, vendor, summary=plan.summary)
+            if options is None:
+                return
+            self.run_guarded_task(
+                lambda progress: self._load_pulseq(plan, options, progress),
+                self.on_pulseq_import_finished,
+                "Importing Pulseq measurements into MRax structures...",
+                error_title="Could not import Pulseq measurements",
+            )
+            return
         if vendor != "Bruker":
             self.show_error(
                 "Unsupported import folder",
-                "The selected folder does not contain a recognizable Bruker study or DICOM image series.",
+                "Select a Bruker study, a Pulseq sequence file/folder, or a DICOM folder.",
             )
             return
         options = self._show_import_options_dialog(root, vendor)
@@ -2372,8 +2394,40 @@ class _MainWindowMixin:
             error_title="Could not import Bruker study",
         )
 
-    def _show_import_options_dialog(self, root: Path, vendor: str):
-        summary = _detect_bruker_import_summary(root) if vendor == "Bruker" else []
+    def _get_import_source(self, title: str, *, measurements: bool = False):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle(title)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.addWidget(QtWidgets.QLabel("Choose a folder or measurement file." if measurements else
+            "Import a Bruker, Pulseq or DICOM folder, or select a Pulseq sequence file."))
+        buttons = QtWidgets.QHBoxLayout()
+        selected = []
+
+        def choose(folder):
+            if folder:
+                path = self._get_existing_directory(title, str(Path.cwd()))
+            else:
+                pattern = "Measurements (*.mrd *.h5 *.hdf5 *.dat *.nii *.nii.gz *.dcm *.dicom *.ima *.IMA);;All files (*)" if measurements else "Pulseq sequence (*.seq);;All files (*)"
+                path, _ = self._get_open_file_name(title, str(Path.cwd()), pattern)
+            if path:
+                selected.append(path)
+                dialog.accept()
+
+        folder_button = QtWidgets.QPushButton("Choose folder…")
+        folder_button.clicked.connect(lambda: choose(True))
+        file_button = QtWidgets.QPushButton("Choose measurement file…" if measurements else "Choose Pulseq file…")
+        file_button.clicked.connect(lambda: choose(False))
+        cancel = QtWidgets.QPushButton("Cancel")
+        cancel.clicked.connect(dialog.reject)
+        for button in (folder_button, file_button, cancel):
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        if self._exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
+            return ""
+        return selected[0] if selected else ""
+
+    def _show_import_options_dialog(self, root: Path, vendor: str, *, summary=None):
+        summary = _detect_bruker_import_summary(root) if summary is None and vendor == "Bruker" else summary or []
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("Import Study")
         dialog.resize(960, 620)
@@ -2381,8 +2435,9 @@ class _MainWindowMixin:
 
         form = QtWidgets.QFormLayout()
         vendor_combo = QtWidgets.QComboBox()
-        vendor_combo.addItems(["Bruker"])
-        vendor_combo.setCurrentText(vendor if vendor == "Bruker" else "Bruker")
+        vendor_combo.addItems(["Bruker", "Pulseq"])
+        vendor_combo.setCurrentText(vendor)
+        vendor_combo.setEnabled(False)
         form.addRow("Vendor", vendor_combo)
 
         field_spin = QtWidgets.QDoubleSpinBox()
@@ -2395,9 +2450,10 @@ class _MainWindowMixin:
         form.addRow("Field strength MHz", field_spin)
 
         pdata_edit = QtWidgets.QLineEdit("1")
-        form.addRow("pdata index", pdata_edit)
+        if vendor == "Bruker":
+            form.addRow("pdata index", pdata_edit)
         raw_kspace_check = QtWidgets.QCheckBox()
-        raw_kspace_check.setChecked(False)
+        raw_kspace_check.setChecked(vendor == "Pulseq")
         form.addRow("Load/reconstruct raw k-space now", raw_kspace_check)
         layout.addLayout(form)
 
@@ -2423,10 +2479,18 @@ class _MainWindowMixin:
                 detected_type,
             ]
             for col, value in enumerate(values):
-                table.setItem(row_idx, col, QtWidgets.QTableWidgetItem(value))
+                item = QtWidgets.QTableWidgetItem(value)
+                if col == 0 and vendor == "Pulseq":
+                    item.setCheckState(QtCore.Qt.Checked)
+                table.setItem(row_idx, col, item)
             type_combo = QtWidgets.QComboBox()
             type_combo.setEditable(True)
-            type_combo.addItems(_known_exp_types(detected_type))
+            if vendor == "Pulseq":
+                from mrax.library.default_experiments import DEFAULT_EXPERIMENTS
+
+                type_combo.addItems(list(dict.fromkeys([detected_type, *DEFAULT_EXPERIMENTS])))
+            else:
+                type_combo.addItems(_known_exp_types(detected_type))
             type_combo.setCurrentText(detected_type)
             table.setCellWidget(row_idx, 5, type_combo)
             type_widgets[scan] = type_combo
@@ -2435,12 +2499,15 @@ class _MainWindowMixin:
             for key, label in model_keys:
                 model_combo.addItem(label, key)
             for idx in range(model_combo.count()):
-                if model_combo.itemData(idx) == detected_model:
+                if vendor == "Bruker" and model_combo.itemData(idx) == detected_model:
                     model_combo.setCurrentIndex(idx)
                     break
-            type_combo.currentTextChanged.connect(
-                lambda text, combo=model_combo: _set_model_combo_from_type(combo, text)
-            )
+            if vendor == "Pulseq":
+                type_combo.currentTextChanged.connect(lambda _text, combo=model_combo: combo.setCurrentIndex(0))
+            else:
+                type_combo.currentTextChanged.connect(
+                    lambda text, combo=model_combo: _set_model_combo_from_type(combo, text)
+                )
             table.setCellWidget(row_idx, 6, model_combo)
             model_widgets[scan] = model_combo
         table.resizeColumnsToContents()
@@ -2459,10 +2526,13 @@ class _MainWindowMixin:
             "field_strength_mhz": None if field_value <= 0 else field_value,
             "pdata_index": pdata_edit.text().strip() or "1",
             "load_raw_kspace": raw_kspace_check.isChecked(),
+            "selected_scans": [str(row.get("scan")) for idx, row in enumerate(summary)
+                if vendor != "Pulseq" or table.item(idx, 0).checkState() == QtCore.Qt.Checked],
             "type_overrides": {
                 scan: widget.currentText().strip()
                 for scan, widget in type_widgets.items()
-                if widget.currentText().strip()
+                if widget.currentText().strip() and (vendor == "Bruker" or widget.currentText().strip() !=
+                    next(row['detected_type'] for row in summary if str(row['scan']) == scan))
             },
             "model_overrides_by_name": {
                 scan: str(widget.currentData())
@@ -2470,6 +2540,15 @@ class _MainWindowMixin:
                 if widget.currentData()
             },
         }
+
+    def _load_pulseq(self, plan, options, progress=None):
+        session = GuiSession()
+        session.import_pulseq_study(plan, options=options, progress_callback=progress)
+        self._replace_or_add_loaded_workspace(session, self._workspace_label_for_session(session, plan.root.name))
+        return plan.root
+
+    def on_pulseq_import_finished(self, path: Path):
+        self._on_study_import_finished(path, "Pulseq")
 
     def _load_bruker(
         self,
@@ -2493,6 +2572,9 @@ class _MainWindowMixin:
         return path
 
     def on_bruker_import_finished(self, path: Path):
+        self._on_study_import_finished(path, "Bruker")
+
+    def _on_study_import_finished(self, path: Path, vendor: str):
         self._fit_results_by_experiment.clear()
         self._preview_results_by_experiment.clear()
         self.registration_results.clear()
@@ -2501,19 +2583,19 @@ class _MainWindowMixin:
         self.last_fit_result = None
         self.last_preview_fit_result = None
         self.populate_from_session()
-        self.mark_dirty("imported Bruker study")
+        self.mark_dirty(f"imported {vendor} study")
         issue_count = len((self.session.import_metadata or {}).get("import_issues") or [])
         issue_text = f" {issue_count} scan(s) were skipped; see summary." if issue_count else ""
         if issue_count:
             self.record_diagnostic_event(
                 "warning",
-                f"Bruker import skipped {issue_count} scan(s).",
+                f"{vendor} import skipped {issue_count} scan(s).",
                 detail=json.dumps((self.session.import_metadata or {}).get("import_issues") or [], indent=2),
-                context={"source": str(path), "operation": "Bruker import"},
+                context={"source": str(path), "operation": f"{vendor} import"},
                 update_status=False,
             )
         self.statusBar().showMessage(
-            f"Imported Bruker study from {path}. Source files were not modified.{issue_text}"
+            f"Imported {vendor} study from {path}. Source files were not modified.{issue_text}"
         )
 
     def _load_dicom(
@@ -11407,6 +11489,9 @@ def _snap_polygon_points_to_gradient(points: Any, image: Any, *, radius: int = 4
 def _detect_import_vendor(root: Path) -> str:
     if _looks_like_bruker_study(root):
         return "Bruker"
+    if root.is_file() and root.suffix.lower() == '.seq' or root.is_dir() and any(
+            p.is_file() and p.suffix.lower() == '.seq' for p in root.rglob('*')):
+        return "Pulseq"
     if _looks_like_dicom_study(root):
         return "DICOM"
     return "Unknown"
@@ -12774,7 +12859,7 @@ def _button_status_tip(button) -> str:
     tips = {
         "Load...": "Load a .mrax bundle, editable package, manifest, GUI state, ROI set, or mask.",
         "Save...": "Save the current study, GUI state, ROIs, and fit outputs as a .mrax bundle or folder.",
-        "Import...": "Import Bruker or recursive DICOM folder data without changing source files.",
+        "Import...": "Import Bruker, Pulseq or recursive DICOM data without changing source files.",
         "Export...": "Export images, k-space, maps, and ROIs as analysis-friendly NumPy or NIfTI files.",
         "Shape...": "Create an editable rotated rectangle, square, circle, ellipse, or regular-polygon ROI.",
         "Lasso": "Draw a freehand ROI by dragging; support count, spline type, and gentle edge snap are configurable.",
