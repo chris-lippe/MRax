@@ -74,25 +74,34 @@ def measurement_entries(path: str | Path, *, format=None):
     return [{'format': format, 'reader_options': entry} for entry in entries]
 
 
-def _read_nifti(path, *, frame_selection=None):
+def _read_nifti(path, *, frame_selection=None, spatial_ndim=None, spatial_unit=None, frame_order=None):
     import nibabel as nib
 
     from mrax.io.nifti import nifti_spatial_geometry, nifti_to_mrax_volume
 
     image = nib.load(path)
-    spatial_ndim = min(len(image.shape), 3)
+    if spatial_ndim is None:
+        spatial_ndim = min(len(image.shape), 3)
+    if spatial_ndim not in (2, 3) or spatial_ndim > len(image.shape):
+        raise ValueError("NIfTI spatial_ndim must be 2 or 3 and fit the image shape")
     frame_shape = image.shape[spatial_ndim:]
     frame_count = int(np.prod(frame_shape))
     selected = np.arange(frame_count) if frame_selection is None else np.atleast_1d(np.arange(frame_count)[frame_selection])
     if not len(selected):
         raise ValueError("Frame selection is empty")
-    if frame_selection is None:
+    if frame_order is not None:
+        order = np.asarray(frame_order)
+        if (order.shape != (frame_count,) or not np.issubdtype(order.dtype, np.integer)
+                or not np.array_equal(np.sort(order), np.arange(frame_count))):
+            raise ValueError("NIfTI frame_order must be a permutation of all source frames")
+        selected = order[selected]
+    if frame_selection is None and frame_order is None:
         array = np.asanyarray(image.dataobj)
         leading = tuple(range(spatial_ndim, array.ndim))
         native = np.transpose(array, leading + tuple(reversed(range(spatial_ndim))))
         if spatial_ndim == 3 and image.shape[2] == 1:
             native = np.squeeze(native, axis=len(leading))
-        shape = tuple(reversed(image.shape[:2] if len(image.shape) >= 3 and image.shape[2] == 1 else image.shape[:spatial_ndim]))
+        shape = tuple(reversed(image.shape[:2] if spatial_ndim == 3 and image.shape[2] == 1 else image.shape[:spatial_ndim]))
         native = native.reshape((-1,) + shape)
     else:
         # Proxy indexing reads selected volumes, including compressed NIfTI input.
@@ -102,11 +111,15 @@ def _read_nifti(path, *, frame_selection=None):
             volumes.append(nifti_to_mrax_volume(np.asanyarray(image.dataobj[index])))
         native = np.stack(volumes)
         shape = native.shape[1:]
-    spatial_unit, time_unit = image.header.get_xyzt_units()
+    header_unit, time_unit = image.header.get_xyzt_units()
+    spatial_unit = spatial_unit or header_unit
+    if spatial_unit not in ('unknown', 'mm', 'meter', 'micron'):
+        raise ValueError("Unsupported NIfTI spatial_unit")
     affine = image.affine.copy()
     affine[:3] *= {'meter': 1000., 'micron': .001}.get(spatial_unit, 1.)
     geometry = nifti_spatial_geometry(affine, spatial_shape=shape)
-    metadata: dict[str, object] = {"format": "nifti", "path": str(path), "spatial_unit": spatial_unit, "time_unit": time_unit}
+    metadata: dict[str, object] = {"format": "nifti", "path": str(path), "spatial_unit": spatial_unit,
+        "time_unit": time_unit, "source_frame_indices": selected}
     normalized = NormalizedMetadata(frame_count=len(native))
     if len(image.shape) >= 4 and time_unit in ('sec', 'msec', 'usec'):
         factor = {'sec': 1., 'msec': 1e-3, 'usec': 1e-6}[time_unit]
@@ -286,7 +299,8 @@ def build_measurement_experiment(measurement: MeasurementData, *, image_data=Non
         coordinates = {key: np.asarray(value)[groups[:, 0]] for key, value in coordinates.items()}
         meta = _output_metadata(meta, acquisition, groups)
     meta = _frame_metadata(meta, coordinates, len(data))
-    exp_type = override_type or detect_experiment_type(meta)
+    derived_image = measurement.metadata.get('image_component') in ('phase', 'parameter_map')
+    exp_type = override_type or ('anatomical' if derived_image else detect_experiment_type(meta))
     data, acquisition, geometry, meta, coordinates = _sort_contrasts(data, acquisition, geometry, meta, coordinates, exp_type)
     observables, rectangular = _axis_observables(extract_observables_from_metadata(exp_type, meta, len(data)), exp_type, len(data))
     dims = None if rectangular else {"frame": len(data), **dict(zip(("x", "y", "z")[:len(shape)], shape))}
@@ -304,7 +318,7 @@ def build_measurement_experiment(measurement: MeasurementData, *, image_data=Non
     model = candidate() if callable(candidate) else candidate
     model = model if model is not None else default_model_for_type(exp_type, scale=image_signal_scale(data),
         observables=experiment.observables, image_data=dataset.data)
-    if str(model.name).lower() == 'identity':
+    if str(model.name).lower() == 'identity' and not derived_image:
         message = "No quantitative model was inferred. Supply override_type and required observables before quantitative fitting"
         experiment._mrax_default_identity_fit_warning = message
         model._mrax_default_identity_fit_warning = message

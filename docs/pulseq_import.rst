@@ -66,13 +66,19 @@ For DICOM preparation sweeps, ``import_pulseq_study`` accepts
 ``sequence_map={"dicom:" + series_uid: "preparation.seq"}`` and
 ``metadata_overrides`` with the same keys. DICOM ``.IMA`` files are discovered
 alongside ``.dcm`` files. Preparation offsets must follow decoded volume order;
-pair sequences explicitly and verify their acquisition parameters. A single TE
-does not define a multi-echo timing vector: supply the measured echo times.
+pair sequences explicitly and verify their acquisition parameters. Separate MRD
+echo contrasts use executed ADC timing; a declared echo spacing and train length
+are used only when they match the contrast counters.
 
 A JSON sidecar alongside the measurement can provide ``sequence_path``,
 ``reader_options`` and ``normalized_metadata``. Alongside a sequence,
 ``sequence_definitions`` can declare missing matrix, FOV or unit conventions
 without editing the sequence file. Unknown normalized fields raise an error.
+Compact 2D NIfTI echo stacks use matching MRD counters and raw-data energies to
+verify frame order. Ambiguous stacks require ``reader_options`` with
+``spatial_ndim=2`` and ``frame_order`` (source indices in acquisition order).
+``spatial_unit`` can declare missing NIfTI units. Phase images and parameter maps
+remain viewable without automatically selecting a magnitude-fitting model.
 
 Prepared samples
 ----------------
@@ -89,7 +95,12 @@ MRD trajectory units can be selected explicitly with
 ``reader_options={"trajectory_units": "cycles/fov"}``; other choices are
 ``cycles/pixel``, ``cycles/m`` and ``radians/pixel``. Automatic interpretation
 warns when assuming cycles/FOV. Use ``density_column`` for a declared quadrature
-column, or supply ``density`` explicitly. The default sampled preview estimates
+column. Matching executed Pulseq coordinates establish physical trajectory units
+and gradient-channel order. Cartesian counters are used only after every stored
+coordinate passes the grid check; fractional samples retain their trajectories.
+Missing patient orientation remains marked as partial geometry. Supply
+``density`` explicitly to override sampled quadrature.
+The default sampled preview estimates
 quadrature on a sampling mesh; these weights do not alter an iterative solver's
 statistical data term. ``frame_selection`` limits raw/image loading. FFT
 reconstruction automatically batches large recordings before device placement;
@@ -119,8 +130,8 @@ amplitudes in noise units; use ``covariance_scale`` for differing calibration ba
 FFT gives a zero-filled preview for undersampled Cartesian data. For a complete
 centred calibration block, ``estimate_cartesian_sensitivities(acquisition)``
 provides smooth normalized receiver maps for iterative unfolding. External maps
-can also be supplied. Non-Cartesian iterative methods require the optional NUFFT
-backend. Reconstruction plans remain editable; see :doc:`acquisition_reconstruction`.
+can also be supplied. Non-Cartesian iterative methods use the built-in JAX NUFFT.
+Reconstruction plans remain editable; see :doc:`acquisition_reconstruction`.
 
 Scanner planes supply image affines when the mapping to sequence axes is known.
 For a nonstandard Siemens ``OrientationMapping``, provide ``gradient_directions``

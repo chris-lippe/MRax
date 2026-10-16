@@ -795,7 +795,6 @@ def test_model_based_honors_statistical_weights_and_rejects_soft_sampling_masks(
 
 
 def test_sampled_model_based_keeps_missing_support_out_of_the_objective():
-    pytest.importorskip("jax_finufft")
     with jax.default_device(jax.devices("cpu")[0]):
         _check_sampled_model_based_support()
 

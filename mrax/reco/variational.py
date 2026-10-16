@@ -7,6 +7,7 @@ that reuse the project's Optax/proximal tooling.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any, Callable, Literal, Sequence
 
 import jax
@@ -31,6 +32,7 @@ from mrax.core.loss_builder import (
     _prepare_frame_mask,
     _prepare_mask_arrays,
     _reduce_mask_to_field,
+    _rescale_previous_signal,
     _resolve_globals,
     _sanitize_observables,
     make_model_callable,
@@ -42,11 +44,7 @@ from mrax.data_struct.model import Model
 from mrax.data_struct.quantity import Quantity, attach_units, require_quantity_dict
 from mrax.devices import DeviceLike, bind_device, device_function, jit_on_device
 from mrax.opt.optimizers import make_optimizer
-
-try:  # Runtime dependency; keep this lazy so import-time errors stay localized.
-    import jax_finufft
-except Exception:  # pragma: no cover - exercised via skipif tests
-    jax_finufft = None  # type: ignore[assignment]
+from mrax.reco.nufft import NUFFTPlan, prepare_nufft
 
 Array = jnp.ndarray
 
@@ -649,6 +647,12 @@ class MRIEncodingOperator:
     readout_coordinates: Array | None = None
     readout_polarity: Array | None = None
     readout_phase: Array | None = None
+    nufft_plan: NUFFTPlan | None = dataclass_field(default=None, init=False, repr=False)
+
+    def __post_init__(self):
+        if self.trajectory is not None:
+            object.__setattr__(self, "nufft_plan", prepare_nufft(
+                self.spatial_shape, self.trajectory, eps=self.nufft_eps))
 
     @property
     def is_non_cartesian(self) -> bool:
@@ -706,21 +710,8 @@ class MRIEncodingOperator:
                 hybrid = fftnc(coils, axes=self.axes[:-1]) if len(self.axes) > 1 else coils
                 return self._apply_mask(self._readout_transform(hybrid))
             return self._apply_mask(fftnc(coils, axes=self.axes))
-        if jax_finufft is None:
-            raise ImportError("Non-Cartesian encoding requires jax-finufft")
-        trajectory = jnp.asarray(self.trajectory)
-        if trajectory.ndim != 2 or trajectory.shape[1] != ndim:
-            raise ValueError("Trajectory columns must match encoding axes")
-        complex_dtype = jnp.result_type(coils.dtype, jnp.complex64)
-        real_dtype = jnp.real(jnp.asarray(0, complex_dtype)).dtype
-        omega = (2 * jnp.pi) * trajectory.astype(real_dtype)
-        batch_shape = coils.shape[:-ndim - 1]
-        batch = int(np.prod(batch_shape)) if batch_shape else 1
-        receivers = coils.shape[-ndim - 1]
-        source = coils.reshape((batch, receivers) + self.spatial_shape).astype(complex_dtype)
-        points = tuple(jnp.broadcast_to(omega[None, :, i], (batch, len(trajectory))) for i in range(ndim))
-        result = jax_finufft.nufft2(source, *points, iflag=-1, eps=float(self.nufft_eps))
-        return result.reshape(batch_shape + (receivers, len(trajectory))) / np.sqrt(np.prod(self.spatial_shape))
+        assert self.nufft_plan is not None
+        return self.nufft_plan.forward(coils)
 
     def adjoint(
         self, kspace: Array, *, kspace_has_coils: bool | None = None,
@@ -739,8 +730,6 @@ class MRIEncodingOperator:
             else:
                 images = ifftnc(self._apply_mask(coils, adjoint=True), axes=self.axes)
         else:
-            if jax_finufft is None:
-                raise ImportError("Non-Cartesian encoding requires jax-finufft")
             trajectory = jnp.asarray(self.trajectory)
             if trajectory.ndim != 2 or trajectory.shape[1] != ndim:
                 raise ValueError("Trajectory columns must match encoding axes")
@@ -759,13 +748,8 @@ class MRIEncodingOperator:
             real_dtype = jnp.real(jnp.asarray(0, complex_dtype)).dtype
             if density_compensation and self.density is not None:
                 coils = coils * jnp.asarray(self.density, dtype=real_dtype)
-            batch_shape = coils.shape[:-2]
-            batch = int(np.prod(batch_shape)) if batch_shape else 1
-            source = coils.reshape((batch, coils.shape[-2], coils.shape[-1])).astype(complex_dtype)
-            omega = (2 * jnp.pi) * trajectory.astype(real_dtype)
-            points = tuple(jnp.broadcast_to(omega[None, :, i], (batch, len(trajectory))) for i in range(ndim))
-            images = jax_finufft.nufft1(self.spatial_shape, source, *points, iflag=1, eps=float(self.nufft_eps))
-            images = images.reshape(batch_shape + (coils.shape[-2],) + self.spatial_shape) / np.sqrt(np.prod(self.spatial_shape))
+            assert self.nufft_plan is not None
+            images = self.nufft_plan.adjoint(coils.astype(complex_dtype))
             if original_ndim == 1 or (original_ndim == 2 and (self.sensitivities is not None or kspace_has_coils is True)):
                 images = images[0]
         if self.independent_coils:
@@ -1147,6 +1131,72 @@ def _align_kspace_global_phase_by_frame(
     return (aligned, rot) if return_rotation else aligned
 
 
+def _model_encoding_loss(op, *, samples, weights, denominator, scale, frame_weights,
+                         batch_size, full_op=None, completion=None, completion_weights=None,
+                         completion_denominator=None, completion_weight=0.):
+    """Sum exact frame losses with a bounded, rematerialized encoding workspace."""
+    from dataclasses import replace
+
+    frames = samples.shape[0]
+    if batch_size is not None:
+        from operator import index
+        batch_size = index(batch_size)
+        if batch_size < 1:
+            raise ValueError("encoding_batch_size must be positive or None")
+    batch_size = frames if batch_size is None else min(batch_size, frames)
+
+    def select(value, start, size, *, rank=None, minimum_rank=None):
+        if value is None:
+            return None
+        if ((rank is None or value.ndim == rank) and (minimum_rank is None or value.ndim >= minimum_rank)
+                and value.ndim > 0 and value.shape[0] == frames):
+            return jax.lax.dynamic_slice_in_dim(value, start, size, axis=0)
+        return value
+
+    def sliced_operator(operator, start, size):
+        return replace(operator,
+            sensitivities=select(operator.sensitivities, start, size, rank=len(op.spatial_shape) + 2),
+            mask=select(operator.mask, start, size, rank=samples.ndim),
+            readout_polarity=select(operator.readout_polarity, start, size, rank=samples.ndim),
+            readout_phase=select(operator.readout_phase, start, size, minimum_rank=2))
+
+    def loss(images):
+        images = jnp.broadcast_to(images, (frames,) + op.spatial_shape)
+        def piece(start, size):
+            image = jax.lax.dynamic_slice_in_dim(images, start, size, axis=0)
+            local_op = sliced_operator(op, start, size)
+            target = jax.lax.dynamic_slice_in_dim(samples, start, size, axis=0)
+            pred_full = sliced_operator(full_op, start, size).forward(image) if full_op is not None else None
+            prediction = local_op.forward(image) if pred_full is None else local_op._apply_mask(pred_full)
+            difference = (prediction - target) * scale
+            local_frames = select(frame_weights, start, size, rank=samples.ndim)
+            if local_frames is not None:
+                difference = jnp.where(local_frames > 0, difference, 0.)
+            local_weights = select(weights, start, size, rank=samples.ndim)
+            value = jnp.sum(jnp.abs(difference)**2 * local_weights) / denominator
+            if pred_full is not None:
+                assert completion is not None and completion_weights is not None and completion_denominator is not None
+                target_missing = jax.lax.dynamic_slice_in_dim(completion, start, size, axis=0)
+                difference_missing = (pred_full - target_missing) * scale
+                if local_frames is not None:
+                    difference_missing = jnp.where(local_frames > 0, difference_missing, 0.)
+                missing_weights = select(completion_weights, start, size, rank=samples.ndim)
+                value = value + completion_weight * jnp.sum(jnp.abs(difference_missing)**2 * missing_weights) / completion_denominator
+            return value
+
+        if batch_size == frames:
+            return piece(0, frames)
+        count, remainder = divmod(frames, batch_size)
+        # Rematerialization retains the full model/time regularizers, without
+        # saving every frame's coil-space intermediates during reverse AD.
+        parts = jax.lax.map(jax.checkpoint(lambda batch: piece(batch * batch_size, batch_size)),
+                            jnp.arange(count))
+        total = jnp.sum(parts)
+        return total + piece(count * batch_size, remainder) if remainder else total
+
+    return loss
+
+
 @device_function
 def solve_model_based(
     kspace: Array | np.ndarray,
@@ -1164,6 +1214,7 @@ def solve_model_based(
     optimizer_name: str | None = None,
     step_size: float = 0.02,
     num_steps: int = 200,
+    encoding_batch_size: int | None = 32,
     regularizer_weight=0.0,
     regularizer_prox=None,
     optimizer_base_factory=None,
@@ -1205,7 +1256,9 @@ def solve_model_based(
 ):
     """Directly reconstruct parameter maps from k-space via a chained model+encoding operator.
 
-    Minimizes: :math:`\\tfrac12 \\|\\|A(M(\\theta)) - y\\|\\|_2^2 + R(\\theta)`
+    Minimizes RMS-normalized mean squared encoding error plus field regularizers.
+    ``encoding_batch_size`` bounds frame-wise encoding workspace (default 32);
+    ``None`` uses all frames at once. Temporal model/regularizer axes remain intact.
 
     Notes
     -----
@@ -1542,21 +1595,65 @@ def solve_model_based(
     z_prev_base = observable_arrays.get("z_prev")
     z_ref_image = observable_arrays.get("z_reference_image")
     adjust_z_prev = z_prev_base is not None and z_ref_image is not None
+
+    def normalized_previous(reference):
+        return _rescale_previous_signal(z_prev_base, z_ref_image, reference)
+
     observable_arrays_fixed = observable_arrays
     if adjust_z_prev and reference_kspace is None and ref_fixed is not None:
-        ref_safe = ref_fixed.reshape((1,) + ref_fixed.shape) + 1e-6
-        z_prev_adj = jnp.asarray(z_prev_base) * z_ref_image.reshape((1,) + z_ref_image.shape) / ref_safe
         observable_arrays_fixed = dict(observable_arrays)
-        observable_arrays_fixed["z_prev"] = z_prev_adj
+        observable_arrays_fixed["z_prev"] = normalized_previous(ref_fixed)
 
-    def model_apply(fields: dict, ref_for_zprev: Array | None) -> Array:
+    def model_apply(fields: dict, ref_for_zprev: Array | None, offsets=None, observables=None) -> Array:
         obs = observable_arrays_fixed
         if adjust_z_prev and reference_kspace is not None and ref_for_zprev is not None:
-            ref_safe = ref_for_zprev.reshape((1,) + ref_for_zprev.shape) + 1e-6
-            z_prev_adj = jnp.asarray(z_prev_base) * z_ref_image.reshape((1,) + z_ref_image.shape) / ref_safe
             obs = dict(observable_arrays)
-            obs["z_prev"] = z_prev_adj
-        return jnp.asarray(model_fn(fields, offsets_array, obs))
+            obs["z_prev"] = normalized_previous(ref_for_zprev)
+        if observables:
+            obs = {**obs, **observables}
+        return jnp.asarray(model_fn(fields, offsets_array if offsets is None else offsets, obs))
+
+    def signal_image(fields, reference, offsets=None, observables=None):
+        prediction = _align_predicted(model_apply(fields, reference, offsets, observables), experiment)
+        if support_mask is not None:
+            prediction = jnp.where(support_mask, prediction, 0)
+        if reference is not None:
+            prediction = prediction * reference
+        if phase_image is not None:
+            prediction = prediction * phase_image
+        if support_mask is not None:
+            prediction = jnp.where(support_mask, prediction, 0)
+        return prediction
+
+    # Sampling and statistical weights are fixed for the entire optimization.
+    # Hoist their reductions out of each compiled loss/Hessian evaluation.
+    w_frame = None if frame_weights is None else frame_weights.reshape(
+        (frame_count,) + (1,) * (y_coils.ndim - 1))
+    weights = data_finite if measured_support is None else measured_support * data_finite
+    if w_frame is not None:
+        weights = weights * w_frame
+    if likelihood_weights is not None:
+        weights = weights * likelihood_weights
+    denominator = (jnp.sum(weights) + 1e-8).astype(jnp.float32)
+    weight_missing = denominator_missing = None
+    if use_completion:
+        assert op.mask is not None and completion_finite is not None
+        weight_missing = 1.0 - op.mask.astype(jnp.float32)
+        if w_frame is not None:
+            weight_missing = weight_missing * w_frame
+        weight_missing = weight_missing * completion_finite
+        denominator_missing = (jnp.sum(weight_missing) + 1e-8).astype(jnp.float32)
+    weights_ref = denominator_ref = None
+    if reference_kspace is not None:
+        assert op_ref is not None and ref_finite is not None
+        weights_ref = ref_finite if op_ref.is_non_cartesian or op_ref.mask is None else op_ref.mask * ref_finite
+        denominator_ref = (jnp.sum(weights_ref) + 1e-8).astype(jnp.float32)
+
+    encoding_loss = _model_encoding_loss(op, samples=y_coils, weights=weights, denominator=denominator,
+        scale=scale, frame_weights=w_frame, batch_size=encoding_batch_size,
+        full_op=op_full if use_completion else None,
+        completion=y_completion_coils, completion_weights=weight_missing,
+        completion_denominator=denominator_missing, completion_weight=completion_w)
 
     def smooth_loss(p):
         if reference_kspace is None:
@@ -1567,60 +1664,10 @@ def solve_model_based(
             ref = p["reference_image"]
 
         fields = unpack(p_model)
-        pred_img = model_apply(fields, ref)
-        pred_img = _align_predicted(jnp.asarray(pred_img), experiment)
-        if support_mask is not None:
-            pred_img = jnp.where(support_mask, pred_img, jnp.zeros((), dtype=pred_img.dtype))
-        if ref is not None:
-            pred_img = pred_img * ref
-        if phase_image is not None:
-            pred_img = pred_img * phase_image
-        if support_mask is not None:
-            pred_img = jnp.where(support_mask, pred_img, jnp.zeros((), dtype=pred_img.dtype))
+        pred_img = signal_image(fields, ref)
         if image_to_encoding is not None:
             pred_img = image_to_encoding(pred_img)
-        if use_completion:
-            assert op_full is not None and y_completion_coils is not None
-            pred_full = op_full.forward(pred_img)
-            pred_k = op._apply_mask(pred_full)
-            diff = (pred_k - y_coils) * scale
-        else:
-            pred_k = op.forward(pred_img)
-            diff = (pred_k - y_coils) * scale
-
-        w_frame = None
-        if frame_weights is not None:
-            w_frame = frame_weights.reshape((int(diff.shape[0]),) + (1,) * (diff.ndim - 1))
-            diff = jnp.where(w_frame > 0, diff, 0.0)
-
-        weights = measured_support
-        if w_frame is not None:
-            weights = w_frame if weights is None else (weights * w_frame)
-        weights = data_finite if weights is None else (weights * data_finite)
-        if likelihood_weights is not None:
-            weights = weights * likelihood_weights
-
-        if weights is not None:
-            num = jnp.sum(jnp.abs(diff) ** 2 * weights)
-            denom = (jnp.sum(weights) + 1e-8).astype(jnp.float32)
-            misfit = 0.5 * num / denom
-        else:
-            misfit = 0.5 * jnp.mean(jnp.abs(diff) ** 2)
-
-        if use_completion:
-            assert op.mask is not None and op_full is not None and y_completion_coils is not None
-            inv_mask = (1.0 - op.mask.astype(jnp.float32)).reshape(op.mask.shape)
-            diff_missing = (pred_full - y_completion_coils) * scale
-            if w_frame is not None:
-                diff_missing = jnp.where(w_frame > 0, diff_missing, 0.0)
-                weight_missing = inv_mask * w_frame
-            else:
-                weight_missing = inv_mask
-            if completion_finite is not None:
-                weight_missing = weight_missing * completion_finite
-            num_missing = jnp.sum(jnp.abs(diff_missing) ** 2 * weight_missing)
-            denom_missing = (jnp.sum(weight_missing) + 1e-8).astype(jnp.float32)
-            misfit = misfit + completion_w * (0.5 * num_missing / denom_missing)
+        misfit = encoding_loss(pred_img)
 
         reg_term: Array = jnp.array(0.0, dtype=jnp.float32)
         for key, field in fields.items():
@@ -1635,17 +1682,8 @@ def solve_model_based(
             assert op_ref is not None and y_ref_coils is not None and scale_ref is not None
             pred_ref_k = op_ref.forward(ref)
             diff_ref = (pred_ref_k - y_ref_coils) * scale_ref
-            weights_ref = None
-            if not op_ref.is_non_cartesian and op_ref.mask is not None:
-                weights_ref = op_ref.mask
-            if ref_finite is not None:
-                weights_ref = ref_finite if weights_ref is None else (weights_ref * ref_finite)
-            if weights_ref is not None:
-                num_ref = jnp.sum(jnp.abs(diff_ref) ** 2 * weights_ref)
-                denom_ref = (jnp.sum(weights_ref) + 1e-8).astype(jnp.float32)
-                misfit_ref = 0.5 * num_ref / denom_ref
-            else:
-                misfit_ref = 0.5 * jnp.mean(jnp.abs(diff_ref) ** 2)
+            assert weights_ref is not None and denominator_ref is not None
+            misfit_ref = jnp.sum(jnp.abs(diff_ref) ** 2 * weights_ref) / denominator_ref
             total = total + ref_weight * misfit_ref
         return total
 
@@ -1712,13 +1750,7 @@ def solve_model_based(
     reconstruction_image = None
     if return_reconstruction_image:
         reference = ref_fixed if reference_kspace is None else params_all["reference_image"]
-        reconstruction_image = _align_predicted(model_apply(fitted_fields_raw, reference), experiment)
-        if reference is not None:
-            reconstruction_image = reconstruction_image * reference
-        if phase_image is not None:
-            reconstruction_image = reconstruction_image * phase_image
-        if support_mask is not None:
-            reconstruction_image = jnp.where(support_mask, reconstruction_image, 0)
+        reconstruction_image = signal_image(fitted_fields_raw, reference)
     if reference_kspace is not None:
         fitted_fields_raw = dict(fitted_fields_raw)
         fitted_fields_raw["reference_image"] = params_all["reference_image"]
@@ -1733,7 +1765,15 @@ def solve_model_based(
         return fitted_fields
 
     if return_model_callable:
-        model_callable = bind_device(make_model_callable(experiment, model, study_globals=inferred_globals), device)
+        def predict(fields, offsets=None, observables=None):
+            reference = ref_fixed
+            if reference_kspace is not None:
+                reference = fields["reference_image"]
+                if isinstance(reference, Quantity):
+                    reference = reference.values
+            return signal_image({key: fields[key] for key in field_keys}, reference, offsets, observables)
+
+        model_callable = bind_device(predict, device)
         if return_reconstruction_image:
             return fitted_fields, losses, model_callable, reconstruction_image
         return fitted_fields, losses, model_callable

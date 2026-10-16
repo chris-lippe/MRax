@@ -71,6 +71,15 @@ def plan_pulseq_import(source, measurement_source=None):
 
     def add(path, sequence, format, reader_options=None, series_uid=None, frequency=None, frame_count=''):
         info = infos[sequence]
+        from mrax.io.pulseq_companions import (
+            acquisition_frequency,
+            image_product_role,
+            measurement_overview,
+        )
+
+        normalized = info.normalized_metadata
+        if format in ('nifti', 'ismrmrd'):
+            normalized, frame_count = measurement_overview(path, info, format, reader_options or {})
         relative = path.relative_to(root).as_posix() if path.is_relative_to(root) else path.name
         suffix = series_uid or '/'.join(str(v) for v in (reader_options or {}).values())
         base = re.sub(r'[^\w.-]+', '_', relative + ('_' + suffix if suffix else ''))[:100].strip('._') or 'measurement'
@@ -79,17 +88,17 @@ def plan_pulseq_import(source, measurement_source=None):
         while any(entry['summary']['scan'] == key for entry in entries):
             key = f'{base}_{number}'
             number += 1
-        kind = detect_experiment_type(info.normalized_metadata)
+        kind = detect_experiment_type(normalized)
+        if format == 'nifti' and image_product_role(path) in ('phase', 'parameter_map'):
+            kind = 'anatomical'
         name = info.normalized_metadata.method_name
+        if frequency is None:
+            frequency = acquisition_frequency(sequence, info)
         if frequency is None:
             frequency = next((info.definitions[k] for k in ('FREQ', 'freq', 'FieldStrengthMHz') if k in info.definitions), None)
         if frequency is None:
             tesla = next((info.definitions[k] for k in ('B0', 'b0') if k in info.definitions), None)
             frequency = float(tesla) * 42.57747892 if tesla is not None else None
-        if format == 'nifti':
-            import nibabel as nib
-
-            frame_count = int(np.prod(nib.load(path).shape[3:]))
         entries.append({'path': path, 'sequence': sequence, 'format': format,
             'reader_options': dict(reader_options or {}), 'series_uid': series_uid,
             'summary': {'scan': key, 'method': name, 'protocol': path.name,

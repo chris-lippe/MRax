@@ -34,6 +34,7 @@ class PulseqSequenceInfo:
     sequence_type: str = "standard"
     spatial_shape: tuple[int, ...] | None = None
     normalized_metadata: NormalizedMetadata = field(default_factory=NormalizedMetadata)
+    adc_echo_times_ms: np.ndarray | None = None
 
 
 def _parse_scalar(token: str) -> object:
@@ -149,7 +150,7 @@ def _definition_count_hint(definitions: Mapping[str, object], *keys: str) -> int
 
 
 def _infer_spatial_shape(definitions: Mapping[str, object], adc_counts: Sequence[int]) -> tuple[int, int] | None:
-    matrix = _definition_list(definitions, "Matrix", "matrix", "ReconMatrix", "recon_matrix")
+    matrix = _definition_list(definitions, "Matrix", "matrix", "ReconMatrix", "recon_matrix", "encoding_dim")
     if len(matrix) >= 2:
         return (int(round(matrix[1])), int(round(matrix[0])))
     if len(adc_counts) > 1 and len(set(int(v) for v in adc_counts)) == 1:
@@ -160,7 +161,7 @@ def _infer_spatial_shape(definitions: Mapping[str, object], adc_counts: Sequence
 
 
 def _infer_trajectory_shape(definitions, adc_counts, physical):
-    matrix = _definition_list(definitions, "Matrix", "matrix", "ReconMatrix", "recon_matrix")
+    matrix = _definition_list(definitions, "Matrix", "matrix", "ReconMatrix", "recon_matrix", "encoding_dim")
     if len(matrix) >= 2:
         return tuple(int(round(v)) for v in reversed(matrix[:3] if len(matrix) > 2 and matrix[2] > 1 else matrix[:2]))
     fov = _definition_list(definitions, "FOV", "fov")
@@ -492,6 +493,7 @@ def read_pulseq(
     definitions, adc_counts = _parse_pulseq_text(path)
     trajectory_physical: np.ndarray | None = None
     adc_times: np.ndarray | None = None
+    adc_echo_times_ms = None
     try:
         if calculate_trajectory:
             from pypulseq import Sequence  # type: ignore
@@ -509,6 +511,14 @@ def read_pulseq(
             adc_times_arr = np.asarray(t_adc, dtype=np.float64)
             if adc_times_arr.size:
                 adc_times = adc_times_arr.reshape(-1)
+                if _t_excitation is not None and len(_t_excitation) and sum(adc_counts) == len(adc_times):
+                    starts = np.r_[0, np.cumsum(adc_counts)]
+                    centres = np.asarray([a + np.argmin(np.linalg.norm(k_adc_arr[:, a:b], axis=0))
+                        for a, b in zip(starts[:-1], starts[1:])])
+                    excitation = np.asarray(_t_excitation)
+                    previous = np.searchsorted(excitation, adc_times[centres], side='right') - 1
+                    if np.all(previous >= 0):
+                        adc_echo_times_ms = (adc_times[centres] - excitation[previous]) * 1000.
     except ImportError:
         warnings.warn(
             "pypulseq is not installed; returning Pulseq definitions without calculated trajectory.",
@@ -553,6 +563,7 @@ def read_pulseq(
         trajectory_physical=trajectory_physical,
         adc_times=adc_times,
         adc_counts=tuple(int(v) for v in adc_counts),
+        adc_echo_times_ms=adc_echo_times_ms,
         sequence_kind=kind,
         sequence_type=sequence_type,
         spatial_shape=spatial_shape,

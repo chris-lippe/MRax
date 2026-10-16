@@ -79,6 +79,16 @@ weight across segmentation labels; ``mask_dims`` specifies their axis order.
 Shared parameters remain visible wherever any included observation supports them.
 A fit with no usable observations raises ``ValueError``.
 
+``reference_image=reference`` in ``run_fit``, ``build_loss`` or
+``make_model_callable`` fits signal intensities as
+:math:`S_{\mathrm{ref}} M(\theta)` without dividing the measurements. Supply a
+finite spatial reference; returned predictions include its scale. The reference
+is fixed, so its measurement uncertainty remains. Uniform signal-domain weights
+and uniform Z-spectrum weights generally give different fits.
+
+For double precision, set ``JAX_ENABLE_X64=true`` before starting Python and use
+float64 data, observables and initial parameters.
+
 Regularization
 ~~~~~~~~~~~~~~
 

@@ -742,10 +742,10 @@ def test_file_overrides_apply_to_each_mrd_image_series(tmp_path):
         image.contrast = index
         file.append_image(f'image_{index}', image)
     file.close()
-    with pytest.warns(RuntimeWarning):
-        study, metadata = import_pulseq_study(path, type_overrides={'series.h5': 'mse'},
-            metadata_overrides={'series.h5': {'echo_times': [20.]}})
+    study, metadata = import_pulseq_study(path, type_overrides={'series.h5': 'mse'},
+        metadata_overrides={'series.h5': {'echo_times': [20.]}})
     assert len(study.experiments) == 2 and not metadata['import_issues']
+    assert float(study.study_globals['field_strength_mhz'].values) == 128.
     for experiment in study.experiments:
         assert experiment.exp_type == 'mse'
         np.testing.assert_allclose(experiment.observables['TE'].values, 20.)

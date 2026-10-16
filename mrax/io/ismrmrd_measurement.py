@@ -327,6 +327,12 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
                     else:
                         warnings.warn(f"Variable-length {name} records are not attached", RuntimeWarning, stacklevel=2)
         has_trajectory = bool(np.any(heads['trajectory_dimensions'][indices]))
+        trajectory_axes, physical_trajectory, cartesian_grid = None, False, False
+        if has_trajectory and trajectory_mode != 'cartesian':
+            from mrax.io.ismrmrd_trajectory import sequence_trajectory_encoding
+
+            trajectory_units, trajectory_axes, physical_trajectory, cartesian_grid = sequence_trajectory_encoding(
+                records, heads, indices, sequence_info, enc, encoded_xyz, ndim, trajectory_units)
         if trajectory_mode == 'sampled' and not has_trajectory:
             raise ValueError("Sampled trajectory_mode requires stored trajectories")
         if trajectory_mode == 'cartesian':
@@ -335,10 +341,12 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
             if has_trajectory:
                 warnings.warn("Using explicit Cartesian counters instead of stored MRD trajectories",
                               RuntimeWarning, stacklevel=2)
-        is_sampled = has_trajectory and trajectory_mode != 'cartesian'
+        is_sampled = has_trajectory and trajectory_mode != 'cartesian' and not (cartesian_grid and trajectory_mode == 'auto')
         if is_sampled:
+            if np.any(heads['trajectory_dimensions'][indices] < ndim):
+                raise ValueError("Every sampled imaging record requires spatial trajectory coordinates")
             samples, acquired, trajectory, recorded_density = _sampled(records, heads, indices, frame_inverse,
-                frames, coils, encoded_xyz, enc, ndim, trajectory_units, density_column)
+                frames, coils, encoded_xyz, enc, ndim, trajectory_units, density_column, trajectory_axes)
             shape = tuple(reversed(encoded_xyz[:ndim]))
             if recorded_density is not None:
                 resolved_density = recorded_density
@@ -410,6 +418,17 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
             fov[2] /= slice_count
         frame_heads = [heads[indices[np.flatnonzero(frame_inverse == i)[0]]] for i in range(frames)]
         frame_heads = np.asarray(frame_heads)
+        sequence_directions = False
+        if (physical_trajectory and header.measurementInformation is None
+                and trajectory_axes is not None and trajectory_axes != list(range(ndim))):
+            directions = np.stack([np.column_stack([h[k] for k in ('read_dir', 'phase_dir', 'slice_dir')]) for h in frame_heads])
+            if np.allclose(directions, np.eye(3), atol=1e-6):
+                # Placeholder MRD directions cannot establish patient posture.
+                # The matched sequence still establishes scanner gradient axes.
+                order = list(trajectory_axes) + list(range(ndim, 3))
+                for i, key in enumerate(('read_dir', 'phase_dir', 'slice_dir')):
+                    frame_heads[key] = np.eye(3)[:, order[i]]
+                sequence_directions = True
         output_shape = tuple(reversed(recon_xyz[:ndim]))
         if ndim == 2:
             stack = slice_stack_layout(coordinates, frame_heads['position'], frame_heads['slice_dir'])
@@ -425,17 +444,32 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
         geometry = _geometry(frame_heads, output_shape, fov, source='ismrmrd')
         if missing_planes:
             geometry = replace(geometry, status='partial')
+        if sequence_directions:
+            geometry = replace(geometry, status='partial', source='ismrmrd-sequence')
         acquisition = replace(acquisition, geometry=geometry)
         meta = _metadata(header, coordinates, frames)
+        executed_echo_times = None
+        if (sequence_info is not None and sequence_info.adc_echo_times_ms is not None
+                and len(sequence_info.adc_echo_times_ms) == len(heads)):
+            values = np.asarray(sequence_info.adc_echo_times_ms)[indices]
+            grouped = [values[frame_inverse == i] for i in range(frames)]
+            if all(np.allclose(v, v[0], atol=.01, rtol=1e-5) for v in grouped):
+                executed_echo_times = [float(np.median(v)) for v in grouped]
         return MeasurementData(acquisition=acquisition, spatial_geometry=geometry, normalized_metadata=meta,
             metadata={'format': 'ismrmrd', 'path': str(path), 'group': group,
                       'field_strength_mhz': float(header.experimentalConditions.H1resonanceFrequency_Hz) / 1e6,
                       'encoding_ref': encoding_ref, 'frame_coordinates': coordinates,
+                      'trajectory_units': trajectory_units, 'trajectory_axes': trajectory_axes,
+                      'sequence_trajectory_matched': physical_trajectory,
+                      'cartesian_trajectory_validated': cartesian_grid,
+                      'executed_echo_times_ms': executed_echo_times,
                       'metadata_template_used': metadata_template is not None,
                       'sequence_parameters_available': header.sequenceParameters is not None})
 
 
-def _sampled(records, heads, indices, frame_inverse, frames, coils, xyz, encoding, ndim, units, density_column):
+def _sampled(records, heads, indices, frame_inverse, frames, coils, xyz, encoding, ndim, units, density_column, axes=None):
+    from mrax.io.ismrmrd_trajectory import convert_coordinates
+
     if units is None:
         largest = 0.
         for j in indices:
@@ -471,17 +505,7 @@ def _sampled(records, heads, indices, frame_inverse, frames, coils, xyz, encodin
         coords = row['traj'].reshape(-1, int(head['trajectory_dimensions']))[pre:end]
         if coords.shape[-1] < ndim:
             raise ValueError("ISMRMRD trajectory has too few spatial coordinates")
-        coords = coords[:, :ndim].copy()
-        if units == 'cycles/fov':
-            coords /= np.asarray(xyz[:ndim])
-        elif units == 'cycles/m':
-            coords *= np.asarray([getattr(encoding.encodedSpace.fieldOfView_mm, k) / 1000 for k in 'xyz'[:ndim]]) / np.asarray(xyz[:ndim])
-        elif units == 'radians/pixel':
-            coords /= 2 * np.pi
-        elif units not in (None, 'cycles/pixel'):
-            raise ValueError("Unsupported ISMRMRD trajectory_units")
-        if np.max(np.abs(coords)) > .75:
-            raise ValueError("Trajectory exceeds cycles/pixel bounds; specify its physical trajectory_units explicitly")
+        coords = convert_coordinates(coords, units, xyz, encoding, ndim, axes)
         coords = coords[:, ::-1]
         if np.isfinite(trajectory[target]).all() and not np.allclose(trajectory[target], coords, atol=2e-6, rtol=1e-5):
             raise ValueError("Trajectory changes between frames; import individual frames explicitly")

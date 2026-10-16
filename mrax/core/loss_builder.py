@@ -44,6 +44,33 @@ def _resolve_globals(experiment, model, explicit):
     return current if current is not None else getattr(model, "_mrax_study_globals", None)
 
 
+def _prepare_reference_image(reference_image, experiment):
+    """Validate a fixed spatial reference without dividing observations by it."""
+    if reference_image is None:
+        return None
+    shape, _ = _extract_spatial_metadata(experiment)
+    value = reference_image.values if isinstance(reference_image, Quantity) else reference_image
+    reference = jnp.asarray(value)
+    while reference.ndim > len(shape) and reference.shape[0] == 1:
+        reference = reference[0]
+    if tuple(reference.shape) != tuple(shape):
+        raise ValueError("reference_image must match the experiment spatial shape")
+    if not np.isfinite(np.asarray(reference)).all():
+        raise ValueError("reference_image must be finite")
+    return reference
+
+
+def _rescale_previous_signal(previous, previous_reference, reference):
+    """Keep a measured previous signal fixed when changing its normalization."""
+    values = jnp.asarray(previous)
+    if values.ndim == 1:
+        values = values.reshape((-1,) + (1,) * reference.ndim)
+    denominator = reference.reshape((1,) + reference.shape)
+    nonzero = jnp.abs(denominator) > 0
+    safe = jnp.where(nonzero, denominator, 1)
+    return jnp.where(nonzero, values * jnp.asarray(previous_reference) / safe, 0)
+
+
 def _prepare_mask_arrays(
     mask: object | None,
     mask_dims: tuple[str, ...] | None,
@@ -645,6 +672,7 @@ def build_loss(
     balance_parameters: bool = True,
     data_normalization: str = "roi",
     device: DeviceLike = "cpu",
+    reference_image: object | None = None,
 ) -> Tuple[Callable[[dict], jnp.ndarray], dict, Callable[[dict], dict]]:
     """Build loss(params) combining data misfit and model regularization.
 
@@ -655,6 +683,9 @@ def build_loss(
     squared residuals. Consequently, multiplying every variance by the same
     constant does not change the loss, and ``None`` is equivalent to uniform
     variance.
+
+    ``reference_image`` multiplies relative model predictions by a fixed spatial
+    reference. Supply measured signal intensities as the data in this mode.
 
     ``data_normalization="roi"`` computes RMS over observations retained by
     finite-data, observable, ROI and frame masks. ``"full"`` retains the previous
@@ -725,6 +756,7 @@ def build_loss(
         model,
         inferred_globals,
         allow_raw_observables=True,
+        reference_image=reference_image,
     )
 
     if obs_data_mask is not None:
@@ -841,8 +873,10 @@ def make_model_callable(
     study_globals: dict[str, Quantity] | None = None,
     *,
     allow_raw_observables: bool = False,
+    reference_image: object | None = None,
 ):
-    """Return a callable(fields, offsets=None, observables=None) that merges study globals."""
+    """Build predictions, optionally multiplying a relative model by a fixed reference."""
+    reference = _prepare_reference_image(reference_image, experiment)
     globals_map = require_quantity_dict(
         _resolve_globals(experiment, model, study_globals) or {},
         "Study global",
@@ -877,7 +911,20 @@ def make_model_callable(
             if isinstance(offs, Quantity):
                 offs = offs.values
         fields_for_model = _expand_fields_to_frames(fields, experiment, extra_dim_names)
-        return base_apply(fields_for_model, offs, merged)
+        if reference is not None and "z_prev" in merged and "z_reference_image" in merged:
+            previous, previous_reference = merged["z_prev"], merged["z_reference_image"]
+            previous_values = previous.values if isinstance(previous, Quantity) else previous
+            reference_values = previous_reference.values if isinstance(previous_reference, Quantity) else previous_reference
+            adjusted = _rescale_previous_signal(previous_values, reference_values, reference)
+            merged["z_prev"] = previous.with_values(adjusted) if isinstance(previous, Quantity) else adjusted
+        # A leading frame axis in dynamic fields is not another spatial axis.
+        merged["_mrax_spatial_ndim"] = len(experiment.spatial_shape)
+        prediction = base_apply(fields_for_model, offs, merged)
+        if extra_dim_names or reference is not None:
+            prediction = _align_predicted(jnp.asarray(prediction), experiment)
+        if reference is not None:
+            prediction = prediction * reference
+        return prediction
 
     return model_fn
 
@@ -925,6 +972,7 @@ def run_fit(
     bregman_inner_steps: int = 5,
     data_normalization: str = "roi",
     device: DeviceLike = "cpu",
+    reference_image: object | None = None,
 ):
     """Fit the model to data for a given experiment.
 
@@ -938,6 +986,8 @@ def run_fit(
     scaling. Pass ``"auto"`` to estimate robust per-frame variances before
     optimization; ``None`` (the default) gives every included sample uniform
     variance.
+    ``reference_image`` fits measured signal intensities by multiplying relative
+    model predictions by a fixed spatial reference, without dividing the data.
     ``variance_estimation_mask`` optionally identifies a background/noise-only
     region for automatic estimation and is independent of the fitting ``mask``.
     ``mask_fill_value`` controls how masked output fields are filled (use ``None`` to skip masking).
@@ -975,6 +1025,7 @@ def run_fit(
         auto_mask_nan_observables=auto_mask_nan_observables,
         data_normalization=data_normalization,
         device=device,
+        reference_image=reference_image,
     )
     loss_fn, default_params, unpack = build_loss(experiment, model, dataset, **loss_kwargs)
     has_tv = any(hasattr(fn, "tv_order") for entries in unpack._mrax_reg_terms.values() for _, fn in entries)
@@ -994,7 +1045,7 @@ def run_fit(
             if optimizer_base_factory is not optax.sgd:
                 raise ValueError("True TV FISTA and split Bregman use objective-aware gradient steps, not an Adam base")
         loss_fn, default_params, unpack = build_loss(
-            experiment, model, dataset, parameter_space="physical", balance_parameters=num_steps != 0,
+            experiment, model, dataset, parameter_space="physical", balance_parameters=False,
             physical_scales=getattr(initial_state, "parameter_scales", None), **loss_kwargs)
         parameter_space, regularization_mode = "physical", "proximal_tv"
     elif has_tv:
@@ -1003,7 +1054,6 @@ def run_fit(
         loss_fn, default_params, unpack = build_loss(experiment, model, dataset, smoothed_tv=True, **loss_kwargs)
         regularization_mode = "smoothed_tv"
     state_optimizer = "custom" if custom_optimizer else selected
-    coordinate_scales = dict(unpack._mrax_physical_scales) if true_tv else None
     constant_param_axes = getattr(unpack, "_mrax_constant_param_axes", {})
     full_spatial_shape = getattr(unpack, "_mrax_full_spatial_shape", None)
     if full_spatial_shape is None:
@@ -1047,6 +1097,12 @@ def run_fit(
         initial_params = _collapse_params_for_constant_dims(initial_params, constant_param_axes)
         initial_params = unpack._mrax_from_raw(initial_params)
     params = _validate_init(default_params, initial_params)
+
+    if true_tv and initial_state is None:
+        from .physical_parameters import balance_physical_coordinates
+        params = balance_physical_coordinates(unpack._mrax_smooth_loss, params, unpack,
+            unpack._mrax_tv_operators, balance=num_steps != 0)
+    coordinate_scales = dict(unpack._mrax_physical_scales) if true_tv else None
 
     step_function = convergence_check = None
     if true_tv:
@@ -1136,7 +1192,8 @@ def run_fit(
                     fitted_fields[key] = Quantity(value, unit) if unit else value
 
     if return_model_callable:
-        model_fn = bind_device(make_model_callable(experiment, model, study_globals=study_globals), device)
+        model_fn = bind_device(make_model_callable(experiment, model, study_globals=study_globals,
+                                                  reference_image=reference_image), device)
         if return_fit_info:
             return fitted_fields, losses, model_fn, fit_info
         return fitted_fields, losses, model_fn

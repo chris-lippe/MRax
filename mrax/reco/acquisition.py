@@ -158,16 +158,9 @@ def format_coil_images(coils, recipe: ReconstructionRecipe, *, spatial_ndim: int
         prefix = tuple(range(array.ndim - spatial_ndim))
         array = jnp.transpose(array, prefix + tuple(array.ndim - spatial_ndim + i for i in recipe.output_permutation))
     if recipe.frame_permutations:
-        if len(recipe.frame_permutations) != array.shape[0]:
-            raise ValueError("Per-frame output layout must match frame count")
-        frames = []
-        for frame, permutation in zip(array, recipe.frame_permutations):
-            if sorted(permutation) != list(range(spatial_ndim)):
-                raise ValueError("Invalid per-frame spatial permutation")
-            frames.append(jnp.transpose(frame, (0,) + tuple(i + 1 for i in permutation)))
-        if len({frame.shape for frame in frames}) != 1:
-            raise ValueError("Mixed frame permutations cannot form a rectangular image stack")
-        array = jnp.stack(frames)
+        from .layout import _apply_frame_permutations
+
+        array = _apply_frame_permutations(array, recipe.frame_permutations)
     if recipe.stack_slices > 1:
         if recipe.output_frame_indices:
             array = array[jnp.asarray(recipe.output_frame_indices)]
@@ -237,7 +230,8 @@ def reconstruct_acquisition(
     if recipe.frame_image_shifts:
         samples = apply_image_shift(samples, recipe.frame_image_shifts, spatial_ndim=ndim, **shift_options)
     preview, preview_mask = samples, mask
-    if acquisition.readout_coordinates is not None and recipe.readout_regrid:
+    if (acquisition.readout_coordinates is not None and recipe.readout_regrid
+            and (name != "model_based" or recipe.epi_phase_correction != "none")):
         from .epi import regrid_readouts
 
         preview, preview_mask = regrid_readouts(samples, acquisition.readout_coordinates,
@@ -266,42 +260,46 @@ def reconstruct_acquisition(
             corrected.append(values)
             diagnostics.append({"stage": "epi_phase", "frame": frame, **report})
         preview = jnp.stack(corrected)
+        del corrected, values
         readout_phase = jnp.asarray([report["coefficients_radians"] for report in diagnostics if report["stage"] == "epi_phase"])
-    prepared = preview
-    if recipe.kspace_window and acquisition.kind == "cartesian":
-        from .windows import spectral_window
+    if name != "model_based":
+        prepared = preview
+        if recipe.kspace_window and acquisition.kind == "cartesian":
+            from .windows import spectral_window
 
-        prepared = preview * spectral_window(acquisition.encoding_shape, recipe.kspace_window, recipe.window_parameters, recipe.window_powers)
-    if acquisition.kind == "cartesian":
-        if recipe.partial_fourier != "none":
-            prepared = complete_partial_fourier(prepared, preview_mask, spatial_ndim=ndim,
-                method=recipe.partial_fourier, iterations=recipe.partial_fourier_iterations,
-                phase_window=recipe.phase_window, weighting=recipe.homodyne_weighting,
-                tolerance=recipe.partial_fourier_tolerance)
-        from .variational import build_operator
-        coils = build_operator(spatial_shape=acquisition.encoding_shape,
-            independent_coils=True).adjoint(prepared, kspace_has_coils=True)
-    else:
-        from .gridding import grid_kaiser_bessel
-        gridding_samples, trajectory, density = samples, acquisition.trajectory, acquisition.density
-        if recipe.profile_inversion:
-            from .density import radial_profile_density
-            from .readout import invert_readout_profiles
+            prepared = preview * spectral_window(acquisition.encoding_shape, recipe.kspace_window, recipe.window_parameters, recipe.window_powers)
+        if acquisition.kind == "cartesian":
+            if recipe.partial_fourier != "none":
+                prepared = complete_partial_fourier(prepared, preview_mask, spatial_ndim=ndim,
+                    method=recipe.partial_fourier, iterations=recipe.partial_fourier_iterations,
+                    phase_window=recipe.phase_window, weighting=recipe.homodyne_weighting,
+                    tolerance=recipe.partial_fourier_tolerance)
+            from .variational import build_operator
+            coils = build_operator(spatial_shape=acquisition.encoding_shape,
+                independent_coils=True).adjoint(prepared, kspace_has_coils=True)
+        else:
+            from .gridding import grid_kaiser_bessel
+            gridding_samples, trajectory, density = samples, acquisition.trajectory, acquisition.density
+            if recipe.profile_inversion:
+                from .density import radial_profile_density
+                from .readout import invert_readout_profiles
 
-            assert acquisition.readout_model is not None
-            gridding_samples, report = invert_readout_profiles(unshifted_samples, acquisition.readout_model)
-            trajectory = acquisition.readout_model.target_trajectory
-            if recipe.image_shift:
-                gridding_samples = apply_image_shift(gridding_samples, recipe.image_shift, spatial_ndim=ndim, trajectory=trajectory)
-            if recipe.frame_image_shifts:
-                gridding_samples = apply_image_shift(gridding_samples, recipe.frame_image_shifts, spatial_ndim=ndim, trajectory=trajectory)
-            density = radial_profile_density(trajectory,
-                points_per_readout=acquisition.readout_model.target_points, center_out=False)
-            diagnostics.append(report)
-        gridded = grid_kaiser_bessel(gridding_samples, trajectory,
-            recipe.gridding_shape or acquisition.encoding_shape, density=density,
-            kernel_width=recipe.gridding_kernel_width, shape_parameter=recipe.gridding_shape_parameter)
-        coils = ifftnc(gridded, axes=axes)
+                assert acquisition.readout_model is not None
+                gridding_samples, report = invert_readout_profiles(unshifted_samples, acquisition.readout_model)
+                trajectory = acquisition.readout_model.target_trajectory
+                if recipe.image_shift:
+                    gridding_samples = apply_image_shift(gridding_samples, recipe.image_shift, spatial_ndim=ndim, trajectory=trajectory)
+                if recipe.frame_image_shifts:
+                    gridding_samples = apply_image_shift(gridding_samples, recipe.frame_image_shifts, spatial_ndim=ndim, trajectory=trajectory)
+                density = radial_profile_density(trajectory,
+                    points_per_readout=acquisition.readout_model.target_points, center_out=False)
+                diagnostics.append(report)
+            gridded = grid_kaiser_bessel(gridding_samples, trajectory,
+                recipe.gridding_shape or acquisition.encoding_shape, density=density,
+                kernel_width=recipe.gridding_kernel_width, shape_parameter=recipe.gridding_shape_parameter)
+            coils = ifftnc(gridded, axes=axes)
+    if name == "model_based":
+        del preview, preview_mask, unshifted_samples
     history = ()
     parameters = None
     if name == "variational":

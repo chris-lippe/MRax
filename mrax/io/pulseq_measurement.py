@@ -6,6 +6,8 @@ from dataclasses import fields, replace
 from pathlib import Path
 from typing import Mapping
 
+import numpy as np
+
 from mrax.data_struct import Study
 from mrax.devices import device_function
 from mrax.io.import_definitions import (
@@ -50,8 +52,20 @@ def discover_pulseq_measurements(root: str | Path, *, recursive=True):
     """
     root = Path(root)
     paths = [root] if root.is_file() else (root.rglob('*') if recursive else root.iterdir())
-    return sorted(p for p in paths if p.is_file() and
+    candidates = sorted(p for p in paths if p.is_file() and
         any(p.name.lower().endswith(s) for s in ('.h5', '.hdf5', '.mrd', '.dat', '.nii', '.nii.gz')))
+    result = []
+    for path in candidates:
+        if path.suffix.lower() in ('.h5', '.hdf5'):
+            try:
+                _inspect_mrd(path)
+            except ValueError:
+                # Extracted consoles also contain auxiliary, non-MRD HDF5 files.
+                continue
+            except OSError:
+                pass  # Corrupted candidate files are reported during import.
+        result.append(path)
+    return result
 
 
 def _resolve_sequence(path, sequence_path, sidecar):
@@ -90,14 +104,50 @@ def read_pulseq_measurement(path: str | Path, *, sequence_path=None, format=None
             and options.get('image_series') is None) if sequence_path is not None else None
     if info is not None and (format in ('siemens', 'ismrmrd') or path.suffix.lower() in ('.dat', '.h5', '.hdf5', '.mrd')):
         options['sequence_info'] = info
+    coordinates = {}
+    echo_times = None
+    if info is not None and (format == 'nifti' or path.name.lower().endswith(('.nii', '.nii.gz'))):
+        from mrax.io.pulseq_companions import nifti_options
+
+        if info.definitions.get('echo_train_length', 1) > 1 and info.adc_counts:
+            info = read_pulseq(sequence_path, definition_paths=definition_paths,
+                definition_overrides=sidecar.get('sequence_definitions'))
+        options, coordinates, echo_times = nifti_options(path, info, options)
     result = read_measurement(path, format=format, **options)
+    if result.metadata.get('format') == 'nifti':
+        from mrax.io.pulseq_companions import image_product_role
+
+        result = replace(result, metadata={**result.metadata,
+            'image_component': sidecar.get('image_component', image_product_role(path))})
     combined = {f.name: getattr(result.normalized_metadata, f.name) for f in fields(NormalizedMetadata)}
     if info is not None:
+        from mrax.io.pulseq_companions import acquisition_frequency, sequence_frame_metadata
+
+        coordinates = coordinates or result.metadata.get('frame_coordinates', {})
+        if coordinates and options.get('frame_selection') is not None and result.acquisition is None:
+            coordinates = {key: np.atleast_1d(value[options['frame_selection']]) for key, value in coordinates.items()}
+            if echo_times is not None:
+                echo_times = np.atleast_1d(np.asarray(echo_times)[options['frame_selection']])
+        normalized = sequence_frame_metadata(info, coordinates, result.normalized_metadata.frame_count,
+            echo_times=echo_times if echo_times is not None else result.metadata.get('executed_echo_times_ms'))
+        if (np.size(normalized.echo_times) == 1 and result.normalized_metadata.echo_times is not None
+                and np.size(result.normalized_metadata.echo_times) > 1):
+            normalized = replace(normalized, echo_times=result.normalized_metadata.echo_times)
         # Executed sequence parameters take precedence over scanner placeholders.
         for f in fields(NormalizedMetadata):
-            value = getattr(info.normalized_metadata, f.name)
+            value = getattr(normalized, f.name)
             if f.name != 'frame_count' and value is not None and not (isinstance(value, (str, tuple)) and not value):
                 combined[f.name] = value
+        frequency = acquisition_frequency(sequence_path, info)
+        extra = dict(result.metadata)
+        if frequency is not None:
+            recorded = extra.get('field_strength_mhz')
+            if recorded and not np.isclose(recorded, frequency, rtol=1e-4):
+                warnings.warn("MRD resonance frequency disagrees with paired acquisition metadata; using the acquisition frequency in Hz", RuntimeWarning, stacklevel=2)
+            extra['field_strength_mhz'] = frequency
+        if coordinates:
+            extra['frame_coordinates'] = coordinates
+        result = replace(result, metadata=extra)
     overrides = {**dict(sidecar.get('normalized_metadata', {})), **dict(metadata_overrides or {})}
     unknown = set(overrides) - set(combined)
     if unknown:
@@ -145,6 +195,10 @@ def import_pulseq_study(root: str | Path, *, sequence_map=None, image_data=None,
                 measurement = read_pulseq_measurement(path, sequence_path=sequence,
                     reader_options=options, metadata_overrides={**(metadata_overrides or {}).get(source_key, {}),
                         **(metadata_overrides or {}).get(key, {})}, definition_paths=definition_paths)
+                if measurement.metadata.get('field_strength_mhz') is not None:
+                    from mrax.data_struct import Quantity
+
+                    combined_globals.setdefault('field_strength_mhz', Quantity(measurement.metadata['field_strength_mhz'], 'MHz'))
                 pixels = (image_data or {}).get(key, (image_data or {}).get(source_key, measurement.image_data))
                 if pixels is None:
                     raw[key] = measurement

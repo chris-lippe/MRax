@@ -145,8 +145,10 @@ def _require_observable(
     return _arr(candidate).reshape((-1,) + (1,) * field_ndim)
 
 
-def _field_ndim(fields):
-    """Observable vectors broadcast over every parameter-map axis."""
+def _field_ndim(fields, observables=None):
+    """Count spatial axes, excluding fields' already-expanded frame axis."""
+    if observables is not None and "_mrax_spatial_ndim" in observables:
+        return int(observables["_mrax_spatial_ndim"])
     return max((_arr(value).ndim for value in fields.values()), default=0)
 
 
@@ -563,7 +565,7 @@ def _make_relaxometry_model(
     obs_units = _unit_map(obs_keys, "ms")
 
     def model_apply(fields, freq_offsets, observables=None):
-        times = _require_observable(freq_offsets, observables, observable_keys, name, field_ndim=_field_ndim(fields))
+        times = _require_observable(freq_offsets, observables, observable_keys, name, field_ndim=_field_ndim(fields, observables))
         return signal_fn(times, fields)
 
     return Model(
@@ -653,7 +655,7 @@ def _make_sat_trans_model(
 
     def model_apply(fields, freq_offsets, observables=None):
         freqs, field_strength, sat_time_s, sat_b1_uT = _extract_sat_observables(
-            freq_offsets, observables, name, require_sat_time, require_sat_b1, _field_ndim(fields)
+            freq_offsets, observables, name, require_sat_time, require_sat_b1, _field_ndim(fields, observables)
         )
         return signal_fn(fields, freqs, observables or {}, field_strength, sat_time_s, sat_b1_uT)
 
@@ -716,8 +718,8 @@ def make_fair_asl_model(
     units = _units_from_specs("fair_asl", param_specs)
 
     def model_apply(fields, freq_offsets, observables=None):
-        ti = _require_observable(freq_offsets, observables, ("TI",), "fair_asl", field_ndim=_field_ndim(fields))
-        labels = _require_observable(None, observables, ("fair_label", "fair_labels"), "fair_asl", field_ndim=_field_ndim(fields))
+        ti = _require_observable(freq_offsets, observables, ("TI",), "fair_asl", field_ndim=_field_ndim(fields, observables))
+        labels = _require_observable(None, observables, ("fair_label", "fair_labels"), "fair_asl", field_ndim=_field_ndim(fields, observables))
         non_mask = labels >= 0.5
         a_sel = fields["amplitude_sel"][None, ...]
         a_non = fields["amplitude_non"][None, ...]
@@ -809,13 +811,13 @@ def make_t1_vfa_model(
     units = _units_from_specs("t1_vfa", param_specs)
 
     def model_apply(fields, freq_offsets, observables=None):
-        tr = _require_observable(None, observables, ("TR",), "t1_vfa", field_ndim=_field_ndim(fields))
+        tr = _require_observable(None, observables, ("TR",), "t1_vfa", field_ndim=_field_ndim(fields, observables))
         flip = _require_observable(
             freq_offsets,
             observables,
             ("flip_angle", "flip_angles", "FA", "alpha"),
             "t1_vfa",
-            field_ndim=_field_ndim(fields),
+            field_ndim=_field_ndim(fields, observables),
         )
         alpha = jnp.deg2rad(flip)
         t1 = fields["t1"][None, ...]
@@ -1331,7 +1333,7 @@ def make_AB_MT_n_model(
             raise ValueError("sat_b1 observable is required for the AB-MT+n model")
 
         t_delay_ppm = fields["t_delay"][None, ...] * 1e-3 * field_strength_mhz
-        rep_time_ms = _require_observable(None, observables, ("TR", "tr"), name, field_ndim=_field_ndim(fields))
+        rep_time_ms = _require_observable(None, observables, ("TR", "tr"), name, field_ndim=_field_ndim(fields, observables))
         if rep_time_ms.shape[0] != freqs.shape[0]:
             rep_len = int(rep_time_ms.shape[0])
             freq_len = int(freqs.shape[0])
@@ -1361,7 +1363,7 @@ def make_AB_MT_n_model(
                 observables,
                 ("water_offset_time", "b0_drift_time", "t_seconds"),
                 name,
-                field_ndim=_field_ndim(fields),
+                field_ndim=_field_ndim(fields, observables),
             )
             drift_time_min = drift_time_s / 60.0
             freqs_ppm = freqs_ppm - fields["dw_water_drift"][None, ...] * drift_time_min
@@ -1429,7 +1431,7 @@ def make_AB_MT_n_model(
         if z_prev_obs is not None:
             z_prev_arr = _arr(z_prev_obs)
             if z_prev_arr.ndim == 1:
-                z_prev = z_prev_arr.reshape((-1,) + (1,) * _field_ndim(fields))
+                z_prev = z_prev_arr.reshape((-1,) + (1,) * _field_ndim(fields, observables))
             else:
                 z_prev = z_prev_arr
         else:

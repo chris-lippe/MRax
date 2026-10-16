@@ -2340,7 +2340,7 @@ class _MainWindowMixin:
     def import_study_dialog(self):
         if self.is_busy:
             return
-        directory = self._get_import_source("Choose study folder or Pulseq file")
+        directory = self._get_existing_directory("Choose study folder", str(Path.cwd()))
         if not directory:
             return
         root = Path(directory)
@@ -2359,12 +2359,7 @@ class _MainWindowMixin:
             try:
                 plan = plan_pulseq_import(root)
                 if not plan.entries:
-                    measurement = self._get_import_source("Choose images or raw data for the Pulseq sequence", measurements=True)
-                    if not measurement:
-                        return
-                    plan = plan_pulseq_import(root, measurement_source=measurement)
-                if not plan.entries:
-                    raise ValueError("No measurements could be paired. Select one sequence file and its measurement folder or file.")
+                    raise ValueError("No measurements could be paired in the selected folder. Keep each Pulseq sequence and its images or raw data together.")
             except (OSError, ValueError, ImportError) as exc:
                 self.show_error("Could not prepare Pulseq import", str(exc))
                 return
@@ -2381,7 +2376,7 @@ class _MainWindowMixin:
         if vendor != "Bruker":
             self.show_error(
                 "Unsupported import folder",
-                "Select a Bruker study, a Pulseq sequence file/folder, or a DICOM folder.",
+                "Select a Bruker study folder, a folder containing Pulseq sequences and measurements, or a DICOM folder.",
             )
             return
         options = self._show_import_options_dialog(root, vendor)
@@ -2393,38 +2388,6 @@ class _MainWindowMixin:
             "Importing Bruker study into MRax structures...",
             error_title="Could not import Bruker study",
         )
-
-    def _get_import_source(self, title: str, *, measurements: bool = False):
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle(title)
-        layout = QtWidgets.QVBoxLayout(dialog)
-        layout.addWidget(QtWidgets.QLabel("Choose a folder or measurement file." if measurements else
-            "Import a Bruker, Pulseq or DICOM folder, or select a Pulseq sequence file."))
-        buttons = QtWidgets.QHBoxLayout()
-        selected = []
-
-        def choose(folder):
-            if folder:
-                path = self._get_existing_directory(title, str(Path.cwd()))
-            else:
-                pattern = "Measurements (*.mrd *.h5 *.hdf5 *.dat *.nii *.nii.gz *.dcm *.dicom *.ima *.IMA);;All files (*)" if measurements else "Pulseq sequence (*.seq);;All files (*)"
-                path, _ = self._get_open_file_name(title, str(Path.cwd()), pattern)
-            if path:
-                selected.append(path)
-                dialog.accept()
-
-        folder_button = QtWidgets.QPushButton("Choose folder…")
-        folder_button.clicked.connect(lambda: choose(True))
-        file_button = QtWidgets.QPushButton("Choose measurement file…" if measurements else "Choose Pulseq file…")
-        file_button.clicked.connect(lambda: choose(False))
-        cancel = QtWidgets.QPushButton("Cancel")
-        cancel.clicked.connect(dialog.reject)
-        for button in (folder_button, file_button, cancel):
-            buttons.addWidget(button)
-        layout.addLayout(buttons)
-        if self._exec_dialog(dialog) != QtWidgets.QDialog.Accepted:
-            return ""
-        return selected[0] if selected else ""
 
     def _show_import_options_dialog(self, root: Path, vendor: str, *, summary=None):
         summary = _detect_bruker_import_summary(root) if summary is None and vendor == "Bruker" else summary or []

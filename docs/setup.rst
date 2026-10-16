@@ -213,7 +213,7 @@ GUI, registration, reconstruction, denoising, and importer workflows may have
 platform-specific requirements. WSL 2 plus Docker is the documented Windows
 development path for those workflows.
 
-The optional ``mrax[nufft]`` extra is not supported by a Windows wheel from
-``jax-finufft``. Use WSL 2 or the development container for that backend. The optional
+Non-Cartesian reconstruction uses JAX on CPU or supported GPUs. Native Windows
+supports CPU; NVIDIA GPU execution requires WSL 2 or Linux. The optional
 ``mrax[denoise-external]`` extra installs upstream BM3D/BM4D packages whose licenses
 permit non-commercial use only.

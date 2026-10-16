@@ -5,10 +5,42 @@ import optax
 import pytest
 
 from mrax.core import build_loss, run_fit
+from mrax.core.fit_execution import execute_optimizer
 from mrax.core.fit_sanity import debug_fit_prototype
+from mrax.core.tv_fit import make_tv_steps
 from mrax.data_struct import DataSet, Experiment, Model
 from mrax.opt.optimizers import make_optimizer
 from mrax.opt.tv import TVOperator, tv_prox
+
+
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
+@pytest.mark.parametrize("name", ["fista", "split_bregman"])
+@pytest.mark.parametrize("use_tv", [False, True])
+def test_proximal_fitting_preserves_mixed_parameter_dtypes(backend, name, use_tv):
+    enable = getattr(jax, "enable_x64", None)
+    if enable is None:
+        from jax.experimental import enable_x64
+
+        enable = enable_x64
+    device = _device(backend)
+    with enable(), jax.default_device(device):
+        params = {"single": jnp.zeros((3, 4), jnp.float32),
+                  "double": jnp.zeros((3, 4), jnp.float64)}
+
+        def loss(fields):
+            return (.5 * jnp.sum((fields["single"] - 1.)**2)
+                    + .5 * jnp.sum((fields["double"] - 2.)**2))
+
+        operators = {key: (TVOperator.create(value.shape, weight=.001, dtype=value.dtype),)
+                     if use_tv else () for key, value in params.items()}
+        optimizer, step, convergence = make_tv_steps(loss, loss,
+            {key: (np.float64(-10), np.float64(10)) for key in params},
+            operators, name, .1, device=device)
+        fitted, _, _ = execute_optimizer(loss, params, optimizer, num_steps=40,
+            step_function=step, convergence_check=convergence, device=device)
+        for key, target in [("single", 1.), ("double", 2.)]:
+            assert fitted[key].dtype == params[key].dtype
+            np.testing.assert_allclose(fitted[key], target, atol=3e-4)
 
 
 def _device(backend):

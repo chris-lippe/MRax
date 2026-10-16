@@ -58,10 +58,9 @@ study manifest is loaded first, then saved view settings, ROIs, fitted maps, fra
 selections, and fit controls are restored. Warnings and handled errors are shown on
 the Diagnostics page and can be saved with ``Save Diagnostic Report``.
 
-``Import...`` accepts a Bruker ParaVision study folder, a Pulseq ``.seq`` file or
-folder, or a DICOM folder. Pulseq imports find measurements alongside the sequence;
-if none are found, select their folder or file in the next prompt. The study
-overview shows ``Pulseq`` as vendor and lets you select measurements, experiment
+``Import...`` opens one folder picker and automatically detects Bruker ParaVision,
+Pulseq or DICOM data. Pulseq folders must contain sequences and their measurements.
+The study overview shows the detected vendor and lets you select measurements, experiment
 types and models. Raw-only inputs use the shared reconstruction pipeline.
 Sequence pairing must be unambiguous; reader options and metadata sidecars follow
 :doc:`pulseq_import`.

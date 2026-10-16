@@ -108,10 +108,9 @@ Reconstruction and optimization
    transforms using min-max interpolation. *IEEE Transactions on Signal
    Processing* 51(2), 560-574 (2003). https://doi.org/10.1109/TSP.2002.807005.
 
-.. [Barnett2019] Barnett, A. H., Magland, J. and Klinteberg, L. af. A parallel
-   nonuniform fast Fourier transform library based on an "exponential of
-   semicircle" kernel. *SIAM Journal on Scientific Computing* 41(5), C479-C504
-   (2019). https://doi.org/10.1137/18M120885X.
+.. [Beatty2005] Beatty, P. J., Nishimura, D. G. and Pauly, J. M. Rapid gridding
+   reconstruction with a minimal oversampling ratio. *IEEE Transactions on
+   Medical Imaging* 24(6), 799-808 (2005). https://doi.org/10.1109/TMI.2005.848376.
 
 .. [Haacke1991] Haacke, E. M., Lindskog, E. D. and Lin, W. A fast, iterative,
    partial-Fourier technique capable of local phase recovery. *Journal of

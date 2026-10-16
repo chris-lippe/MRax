@@ -10,6 +10,7 @@ from .components import (
 )
 from .density import radial_cell_density, radial_profile_density
 from .noise import apply_receiver_transform, estimate_noise_whitener, prewhiten_acquisition
+from .nufft import NUFFTPlan, prepare_nufft
 from .observables import infer_ab_mt_observables_from_kspace, prepare_ab_mt_experiment
 from .phase import unwrap_phase_image
 from .pipeline import ReconstructionPipeline, ReconstructionStage
@@ -56,6 +57,8 @@ __all__ = [
     "RAW_RECONSTRUCTION_COMPLEX_KEY",
     "RAW_RECONSTRUCTION_KEY",
     "MRIEncodingOperator",
+    "NUFFTPlan",
+    "prepare_nufft",
     "RegridApodizationCorrection",
     "apply_channel_scale_phase",
     "apply_image_support_mask",

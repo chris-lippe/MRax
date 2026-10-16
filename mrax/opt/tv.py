@@ -151,11 +151,11 @@ def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_s
             if np.any(np.isfinite(lower)) or np.any(np.isfinite(upper)):
                 raise ValueError("Complex TV fields require unbounded box constraints")
             return array
-        return jnp.clip(array, lower, upper)
+        return jnp.clip(array, lower, upper).astype(array.dtype)
 
     active = tuple(op for op in operators if op.axes)
     if not active:
-        return project(value), (), jnp.asarray(0.0), jnp.asarray(0)
+        return project(value), (), jnp.asarray(0.0, dtype=jnp.real(value).dtype), jnp.asarray(0)
     duals = (tuple(jnp.zeros_like(op.gradient(value)) for op in active)
              if duals is None else tuple(op.project_dual(p, rate) for op, p in zip(active, duals, strict=True)))
     norm_bound = sum(op.norm_bound_squared for op in active)

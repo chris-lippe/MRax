@@ -6,6 +6,26 @@ Version 0.3.0
 
 Unreleased.
 
+- Pulseq quantitative imports reconcile echo axes, timing and compact-image
+  frame order with MRD acquisitions; validated physical trajectories use the
+  appropriate Cartesian or sampled reconstruction path. Auxiliary HDF5 products
+  are excluded from scan discovery.
+
+- Conventional fitting accepts ``reference_image`` for signal-domain forward
+  fitting. Dynamic parameter fields no longer expand a second frame axis.
+- Model-based fitting now uses the image-fitting loss prefactor; its regularizer
+  weights previously had twice the relative strength. Proximal warm starts choose
+  optimizer scaling from the supplied parameters.
+- Model-based prediction callables include the reference, phase and support used
+  during optimization.
+- Model-based encoding batches frames and rematerializes gradients to bound
+  coil-space workspace, while keeping temporal regularization intact. Shared
+  frame layouts use one transpose instead of tracing every frame separately.
+
+- Non-Cartesian iterative reconstruction uses a built-in CPU/GPU JAX NUFFT;
+  the ``jax-finufft`` dependency and ``nufft`` installation extra are removed.
+- NUFFT preparation and gradients bound trajectory workspace. Single-precision
+  NUFFT and proximal optimizers retain their dtype when JAX x64 is enabled.
 - Study saves default to portable ``.mrax`` bundles; Python saves omit GUI context.
   GUI saves show progress. NIfTI export splits frames, and DICOM export is available.
 - Plot axes follow the sliders with units; DCE uses elapsed time in seconds.
@@ -18,8 +38,8 @@ Unreleased.
   templates and receiver-noise whitening support externally converted raw data.
 - Image-based inversion-recovery imports initialize T1 from the recovery curve.
 - Built-in relaxometry and saturation-transfer models support volumetric maps.
-- GUI import accepts Pulseq files/folders, discovers nearby measurements and
-  shares the study overview with Bruker imports.
+- GUI import uses one folder picker, automatically detects Bruker or Pulseq data,
+  and opens the shared study overview.
 - Bruker study import accepts standalone exports and skips incomplete or
   unsupported scans with a warning.
 - Fitting defaults to CPU; select a device with ``device``. TV regularization

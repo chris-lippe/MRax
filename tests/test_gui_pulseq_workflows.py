@@ -27,7 +27,7 @@ def _controller(source):
     controller = object.__new__(_MainWindowMixin)
     controller._task_running = False
     controller._busy_message = None
-    controller._get_import_source = Mock(return_value=str(source))
+    controller._get_existing_directory = Mock(return_value=str(source))
     controller._show_import_options_dialog = Mock(return_value={})
     controller.run_guarded_task = Mock()
     controller.show_error = Mock()
@@ -62,27 +62,24 @@ def test_pulseq_neighbours_import_to_gui_and_fit(tmp_path, choose_file):
     np.testing.assert_array_equal(reopened.image_array, session.image_array)
 
 
-def test_pulseq_missing_measurements_prompts_and_cancellation_is_safe(tmp_path):
-    sequence = _sequence(tmp_path / 'relaxation.seq')
-    data = tmp_path / 'measurements'
-    data.mkdir()
-    _images(data / 'images.nii')
-    controller = _controller(sequence)
-    controller._get_import_source.side_effect = [str(sequence), str(data)]
+def test_pulseq_missing_measurements_reports_error_without_second_picker(tmp_path):
+    _sequence(tmp_path / 'relaxation.seq')
+    controller = _controller(tmp_path)
     controller.import_study_dialog()
-    assert controller._get_import_source.call_count == 2
-    assert controller._get_import_source.call_args.kwargs['measurements']
-    args, kwargs = controller._show_import_options_dialog.call_args
-    assert args == (sequence, 'Pulseq')
-    assert len(kwargs['summary']) == 1
-    controller.run_guarded_task.assert_called_once()
+    controller._get_existing_directory.assert_called_once()
+    controller.show_error.assert_called_once()
+    assert 'selected folder' in controller.show_error.call_args.args[1]
+    controller.run_guarded_task.assert_not_called()
+    controller._show_import_options_dialog.assert_not_called()
+
+
+def test_import_folder_picker_cancellation_is_safe():
+    controller = _controller('')
+    controller.import_study_dialog()
+    controller._get_existing_directory.assert_called_once()
+    controller.run_guarded_task.assert_not_called()
+    controller._show_import_options_dialog.assert_not_called()
     controller.show_error.assert_not_called()
-    for answers in ([str(sequence), ''], ['']):
-        controller = _controller(sequence)
-        controller._get_import_source.side_effect = answers
-        controller.import_study_dialog()
-        controller.run_guarded_task.assert_not_called()
-        controller._show_import_options_dialog.assert_not_called()
 
 
 def test_pulseq_external_file_selection_uses_portable_experiment_names(tmp_path):
@@ -101,9 +98,9 @@ def test_pulseq_external_file_selection_uses_portable_experiment_names(tmp_path)
 def test_pulseq_overview_cancellation_and_existing_bruker_routing(tmp_path):
     from test_import_workflows import _write_minimal_bruker_scan
 
-    sequence = _sequence(tmp_path / 'relaxation.seq')
+    _sequence(tmp_path / 'relaxation.seq')
     _images(tmp_path / 'images.nii')
-    controller = _controller(sequence)
+    controller = _controller(tmp_path)
     controller._show_import_options_dialog.return_value = None
     controller.import_study_dialog()
     controller.run_guarded_task.assert_not_called()
@@ -115,9 +112,19 @@ def test_pulseq_overview_cancellation_and_existing_bruker_routing(tmp_path):
     assert _detect_import_vendor(bruker) == 'Bruker'
     controller = _controller(bruker)
     controller.import_study_dialog()
+    controller._get_existing_directory.assert_called_once()
     controller._show_import_options_dialog.assert_called_once_with(bruker, 'Bruker')
     assert controller.run_guarded_task.call_args.args[1] == controller.on_bruker_import_finished
     controller.show_error.assert_not_called()
+
+
+def test_unknown_import_folder_reports_error_without_another_prompt(tmp_path):
+    controller = _controller(tmp_path)
+    controller.import_study_dialog()
+    controller._get_existing_directory.assert_called_once()
+    controller.show_error.assert_called_once()
+    controller._show_import_options_dialog.assert_not_called()
+    controller.run_guarded_task.assert_not_called()
 
 
 def test_pulseq_multiple_sequences_require_unambiguous_pairs(tmp_path):
@@ -133,12 +140,12 @@ def test_pulseq_multiple_sequences_require_unambiguous_pairs(tmp_path):
 
 
 def test_pulseq_auto_discovery_uses_overview_without_second_picker(tmp_path):
-    sequence = _sequence(tmp_path / 'relaxation.seq')
+    _sequence(tmp_path / 'relaxation.seq')
     _images(tmp_path / 'images.nii')
-    controller = _controller(sequence)
+    controller = _controller(tmp_path)
     controller.import_study_dialog()
-    controller._get_import_source.assert_called_once()
-    assert controller._show_import_options_dialog.call_args.args == (sequence, 'Pulseq')
+    controller._get_existing_directory.assert_called_once_with('Choose study folder', str(Path.cwd()))
+    assert controller._show_import_options_dialog.call_args.args == (tmp_path, 'Pulseq')
     assert controller.run_guarded_task.call_args.args[1] == controller.on_pulseq_import_finished
 
 
@@ -227,16 +234,15 @@ def test_import_overview_shows_vendor_and_corresponding_options(tmp_path, monkey
         assert not options['type_overrides']
     else:
         assert options['type_overrides'] == {'images': 'ir'}
-    window._get_existing_directory = Mock(return_value=str(tmp_path))
-    window._get_open_file_name = Mock(return_value=(str(tmp_path / 'sequence.seq'), ''))
 
-    def choose_source(dialog):
-        text = 'Choose folder…' if vendor == 'Bruker' else 'Choose Pulseq file…'
-        next(button for button in dialog.findChildren(QtWidgets.QPushButton) if button.text() == text).click()
+    def choose_folder(dialog):
+        assert isinstance(dialog, QtWidgets.QFileDialog)
+        assert dialog.fileMode() == QtWidgets.QFileDialog.Directory
+        assert dialog.testOption(QtWidgets.QFileDialog.ShowDirsOnly)
+        dialog.selectFile(str(tmp_path))
         return QtWidgets.QDialog.Accepted
 
-    window._exec_dialog = choose_source
-    selected = window._get_import_source('Import')
-    assert selected == str(tmp_path if vendor == 'Bruker' else tmp_path / 'sequence.seq')
+    window._exec_dialog = choose_folder
+    assert window._get_existing_directory('Import', str(tmp_path)) == str(tmp_path)
     window.close()
     qt_app.processEvents()

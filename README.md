@@ -20,17 +20,16 @@ Install the release package from PyPI:
 pip install mrax
 ```
 
-The default install includes fitting, Cartesian reconstruction, import, built-in
-denoising, registration, analysis, storage, and desktop GUI support. Optional
-non-Cartesian and external denoising backends are installed explicitly:
+The default install includes fitting, Cartesian and non-Cartesian reconstruction,
+import, built-in denoising, registration, analysis, storage, and desktop GUI support.
+External denoising backends are installed explicitly:
 
 ```bash
-pip install "mrax[nufft]"
 pip install "mrax[denoise-external]"
 ```
 
-`jax-finufft` does not publish Windows wheels. The upstream `bm3d` and `bm4d`
-packages are licensed for non-commercial use; review their licenses before installing
+The upstream `bm3d` and `bm4d` packages are licensed for non-commercial use;
+review their licenses before installing
 the `denoise-external` extra. Development, documentation, and notebook authoring tools
 remain outside the base runtime package.
 

@@ -7,6 +7,25 @@ import numpy as np
 from mrax.data_struct.acquisition import AcquisitionData
 
 
+def _apply_frame_permutations(array, permutations, *, inverse=False):
+    """Apply shared layouts in one operation, avoiding a traced branch per frame."""
+    if len(permutations) != array.shape[0]:
+        raise ValueError("Per-frame output layout must match frame count")
+    ndim = array.ndim - 2
+    if any(sorted(permutation) != list(range(ndim)) for permutation in permutations):
+        raise ValueError("Invalid per-frame spatial permutation")
+    if not permutations:
+        return array
+    if all(permutation == permutations[0] for permutation in permutations):
+        permutation = np.argsort(permutations[0]) if inverse else permutations[0]
+        return jnp.transpose(array, (0, 1) + tuple(i + 2 for i in permutation))
+    frames = [jnp.transpose(frame, (0,) + tuple(i + 1 for i in (np.argsort(permutation) if inverse else permutation)))
+              for frame, permutation in zip(array, permutations, strict=True)]
+    if len({frame.shape for frame in frames}) != 1:
+        raise ValueError("Mixed frame permutations cannot form a rectangular image stack")
+    return jnp.stack(frames)
+
+
 def encoding_frame_map(acquisition: AcquisitionData):
     """Map native acquisition frames to reconstructed signal-model frames."""
     recipe = acquisition.recipe
@@ -50,8 +69,7 @@ def image_to_encoding(image, acquisition: AcquisitionData):
     if recipe.output_frame_indices:
         array = jnp.zeros_like(array).at[jnp.asarray(recipe.output_frame_indices)].set(array)
     if recipe.frame_permutations:
-        array = jnp.stack([jnp.transpose(frame, (0,) + tuple(i + 1 for i in np.argsort(permutation)))
-            for frame, permutation in zip(array, recipe.frame_permutations, strict=True)])
+        array = _apply_frame_permutations(array, recipe.frame_permutations, inverse=True)
     if recipe.output_permutation:
         array = jnp.transpose(array, (0, 1) + tuple(i + 2 for i in np.argsort(recipe.output_permutation)))
     target = acquisition.encoding_shape

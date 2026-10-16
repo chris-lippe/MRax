@@ -42,11 +42,11 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
                     raise ValueError("Complex fields require unbounded box constraints")
                 result[key] = value
             else:
-                result[key] = jnp.clip(value, *bounds[key])
+                result[key] = jnp.clip(value, *bounds[key]).astype(value.dtype)
         return result
 
-    def rate_at(count):
-        rate = jnp.asarray(step_size(count) if callable(step_size) else step_size)
+    def rate_at(count, dtype):
+        rate = jnp.asarray(step_size(count) if callable(step_size) else step_size, dtype=dtype)
         return jnp.where(jnp.isfinite(rate) & (rate > 0), rate, jnp.nan)
 
     def next_rate(state, scheduled):
@@ -56,10 +56,12 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
         maximum = jnp.finfo(state["rate"].dtype).max / 16
         return jnp.minimum(state["rate"], maximum / jnp.maximum(multiplier, 1.)) * multiplier
 
-    def roundoff(value):
+    def roundoff(value, point):
         # Preserve objective scaling, including weak raw MR signal amplitudes.
         info = jnp.finfo(value.dtype)
-        return 8 * info.eps * jnp.maximum(jnp.abs(value), info.tiny)
+        epsilon = max([info.eps] + [jnp.finfo(jnp.real(field).dtype).eps
+                                   for field in jax.tree.leaves(point)])
+        return 8 * epsilon * jnp.maximum(jnp.abs(value), info.tiny)
 
     def initial_duals(params):
         return {key: tuple(jnp.zeros_like(op.gradient(value)) for op in operators[key])
@@ -67,8 +69,8 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
 
     def init(params):
         leaves = jax.tree.leaves(params)
-        dtype = jnp.real(leaves[0]).dtype if leaves else jnp.float32
-        state = {"rate": rate_at(0), "schedule_rate": rate_at(0), "count": jnp.asarray(0, jnp.int32),
+        dtype = jnp.result_type(*(jnp.real(value).dtype for value in leaves), jnp.float32)
+        state = {"rate": rate_at(0, dtype), "schedule_rate": rate_at(0, dtype), "count": jnp.asarray(0, jnp.int32),
                  "stationarity": jnp.asarray(0., dtype=dtype)}
         if name == "fista":
             return {**state, "x": params, "y": params, "t": jnp.asarray(1., state["rate"].dtype),
@@ -81,7 +83,7 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
     def proximal(value, rate, duals):
         params, new_duals, gaps, valid = {}, {}, [], jnp.asarray(True)
         for key, field in value.items():
-            result, ps, gap, _ = tv_prox(field, operators[key], rate, bounds[key], duals[key],
+            result, ps, gap, _ = tv_prox(field, operators[key], rate.astype(jnp.real(field).dtype), bounds[key], duals[key],
                                        tolerance=tolerance, max_steps=max_prox_steps)
             params[key], new_duals[key] = result, ps
             gaps.append(gap)
@@ -95,18 +97,18 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
         grad = jax.tree.map(jnp.conj, grad)
         if grad_clip_norm is not None:
             multiplier = jnp.minimum(1., grad_clip_norm / jnp.maximum(optax.global_norm(grad), 1e-12))
-            grad = jax.tree.map(lambda g: g * multiplier, grad)
+            grad = jax.tree.map(lambda g: g * multiplier.astype(jnp.real(g).dtype), grad)
         empty = (initial_rate, point, duals, jnp.asarray(jnp.inf, value.dtype),
                  jnp.asarray(False), jnp.asarray(0))
 
         def trial(state):
             rate, _, _, _, _, count = state
-            forward = jax.tree.map(lambda x, g: x - rate * g, point, grad)
+            forward = jax.tree.map(lambda x, g: x - rate.astype(jnp.real(x).dtype) * g, point, grad)
             proposal, ps, gap, prox_valid = proximal(forward, rate, duals)
             candidate_value = smooth_loss(proposal)
             delta = subtract(proposal, point)
             majorant = value + dot(grad, delta) + dot(delta, delta) / (2 * rate)
-            allowance = roundoff(value)
+            allowance = roundoff(value, point)
             accepted = prox_valid & _tree_finite((proposal, ps, grad)) & jnp.isfinite(candidate_value)
             accepted = accepted & (candidate_value <= majorant + allowance)
             return rate, proposal, ps, gap, accepted, count + 1
@@ -121,10 +123,10 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
 
     def fista_step(params, state):
         old_loss = loss(params)
-        scheduled = rate_at(state["count"])
+        scheduled = rate_at(state["count"], state["rate"].dtype)
         rate = next_rate(state, scheduled)
         rate, proposal, ps, gap, accepted, _ = forward_backward(state["y"], state["duals"], rate)
-        allowance = roundoff(old_loss)
+        allowance = roundoff(old_loss, params)
         restart = (~accepted) | (loss(proposal) > old_loss + allowance)
         retried = restart
 
@@ -137,7 +139,7 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
         restart = restart | (dot(subtract(state["y"], proposal), delta) > 0)
         t = jnp.where(restart, 1., .5 * (1 + jnp.sqrt(1 + 4 * state["t"]**2)))
         momentum = jnp.where(restart, 0., (state["t"] - 1) / t)
-        y = project(jax.tree.map(lambda x, d: x + momentum * d, proposal, delta))
+        y = project(jax.tree.map(lambda x, d: x + momentum.astype(jnp.real(x).dtype) * d, proposal, delta))
         point = jax.tree.map(lambda x, y: jnp.where(retried, x, y), params, state["y"])
         gradient_map = subtract(proposal, point)
         stationarity = jnp.sqrt(dot(gradient_map, gradient_map)) / jnp.maximum(rate, 1e-12)
@@ -148,7 +150,7 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
 
     def bregman_step(params, state):
         old_loss = loss(params)
-        scheduled = rate_at(state["count"])
+        scheduled = rate_at(state["count"], state["rate"].dtype)
 
         def augmented(point):
             total = smooth_loss(point)
@@ -164,15 +166,15 @@ def make_tv_steps(loss, smooth_loss, bounds, operators, name, step_size, *,
             grad = jax.tree.map(jnp.conj, grad)
             if grad_clip_norm is not None:
                 multiplier = jnp.minimum(1., grad_clip_norm / jnp.maximum(optax.global_norm(grad), 1e-12))
-                grad = jax.tree.map(lambda g: g * multiplier, grad)
+                grad = jax.tree.map(lambda g: g * multiplier.astype(jnp.real(g).dtype), grad)
 
             def trial(current):
                 rate, _, _, count = current
-                proposal = project(jax.tree.map(lambda x, g: x - rate * g, point, grad))
+                proposal = project(jax.tree.map(lambda x, g: x - rate.astype(jnp.real(x).dtype) * g, point, grad))
                 delta = subtract(proposal, point)
                 upper = value + dot(grad, delta) + dot(delta, delta) / (2 * rate)
                 candidate = augmented(proposal)
-                epsilon = roundoff(value)
+                epsilon = roundoff(value, point)
                 accepted = _tree_finite((proposal, grad)) & jnp.isfinite(candidate) & (candidate <= upper + epsilon)
                 return rate, proposal, accepted, count + 1
 
