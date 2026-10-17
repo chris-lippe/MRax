@@ -102,7 +102,7 @@ def save_nifti(
     arr = mrax_to_nifti_volume(data)
     if dtype is not None:
         arr = arr.astype(dtype)
-    img = nib.Nifti1Image(arr, affine)
+    img = nib.Nifti1Image(arr, affine, dtype=dtype)
     img.set_qform(affine, code=1)
     img.set_sform(None)
     try:

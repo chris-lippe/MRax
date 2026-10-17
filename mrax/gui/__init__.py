@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from . import _runtime as _runtime
 from .masks import MaskRecord, import_mask, load_roi_set, save_roi_set
 from .session import FitSettings, FrameMask, GuiSession
 

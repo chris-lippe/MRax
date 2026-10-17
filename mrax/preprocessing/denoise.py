@@ -9,6 +9,7 @@ import jax.scipy.signal as jsignal
 import numpy as np
 import optax
 
+from mrax.devices import DeviceLike, device_function
 from mrax.opt.optimizers import make_optimizer
 from mrax.opt.regularizers import make_regularizer_fn
 
@@ -194,6 +195,7 @@ def denoise_filter(
     return _apply_complex_mode(arr, func, complex_mode=complex_mode)
 
 
+@device_function
 def _regularized_denoise_real(
     data: ArrayLike,
     *,
@@ -206,6 +208,7 @@ def _regularized_denoise_real(
     mask: ArrayLike | None,
     init: ArrayLike | None,
     return_history: bool,
+    device: DeviceLike = "cpu",
 ) -> tuple[jnp.ndarray, list[float] | None]:
     arr = jnp.asarray(data, dtype=float)
     init_arr = arr if init is None else jnp.asarray(init, dtype=float)
@@ -239,7 +242,7 @@ def _regularized_denoise_real(
         fidelity = 0.5 * jnp.mean((x - target) ** 2)
         return fidelity + weight * reg_value(x)
 
-    opt = make_optimizer(optimizer_name, step_size=step_size)
+    opt = make_optimizer(optimizer_name, step_size=step_size, device=device)
     state = opt.init(params)
 
     history: list[float] | None = [] if return_history else None
@@ -258,6 +261,7 @@ def _regularized_denoise_real(
     return params, history
 
 
+@device_function
 def regularized_denoise(
     data: ArrayLike,
     *,
@@ -271,6 +275,7 @@ def regularized_denoise(
     init: ArrayLike | None = None,
     complex_mode: str = "real_imag",
     return_history: bool = False,
+    device: DeviceLike = "cpu",
 ) -> jnp.ndarray | tuple[jnp.ndarray, list[float] | dict[str, list[float]]]:
     """Denoise using a regularizer optimized with the project optimizers."""
 
@@ -289,6 +294,7 @@ def regularized_denoise(
                 mask=mask,
                 init=None if init is None else jnp.real(init),
                 return_history=return_history,
+                device=device,
             )
             imag, imag_hist = _regularized_denoise_real(
                 jnp.imag(arr),
@@ -301,6 +307,7 @@ def regularized_denoise(
                 mask=mask,
                 init=None if init is None else jnp.imag(init),
                 return_history=return_history,
+                device=device,
             )
             combined = real + 1j * imag
             if return_history:
@@ -322,6 +329,7 @@ def regularized_denoise(
                 mask=mask,
                 init=None if init is None else jnp.abs(init),
                 return_history=return_history,
+                device=device,
             )
             return (mag, history) if return_history else mag
         raise ValueError("complex_mode must be 'real_imag' or 'magnitude'")
@@ -337,6 +345,7 @@ def regularized_denoise(
         mask=mask,
         init=init,
         return_history=return_history,
+        device=device,
     )
     return (out, history) if return_history else out
 

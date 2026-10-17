@@ -9,6 +9,7 @@ import numpy as np
 from mrax.data_struct import DataSet, Experiment, Model, Quantity
 from mrax.data_struct.dimensions import frame_count_from_dims, non_spatial_names
 from mrax.data_struct.quantity import require_quantity_dict
+from mrax.devices import DeviceLike, device_function, place_optimizer
 
 
 @dataclass
@@ -322,12 +323,13 @@ def check_fit_sanity(
     return report
 
 
+@device_function
 def debug_fit_prototype(
     experiment: Experiment,
     model: Model,
     dataset: DataSet,
     *,
-    optimizer_name: str = "adam",
+    optimizer_name: str | None = None,
     step_size: float = 0.02,
     regularizer_weight=0.0,
     regularizer_prox=None,
@@ -348,10 +350,9 @@ def debug_fit_prototype(
     variance_estimation_mask: object | None = None,
     variance_estimation_mask_dims: tuple[str, ...] | None = None,
     auto_mask_nan_observables: bool = True,
+    device: DeviceLike = "cpu",
 ) -> FitDebugReport:
-    """Run a single non-jitted prototype optimization step and summarize the fit state."""
-
-    import optax
+    """Run one production optimizer step and summarize its actual fit state."""
 
     from mrax.core.loss_builder import (
         _align_predicted,
@@ -359,6 +360,7 @@ def debug_fit_prototype(
         _flatten_to_frames,
         build_loss,
         make_model_callable,
+        run_fit,
     )
     from mrax.data_struct.dimensions import expand_observables_to_frames
     from mrax.opt.optimizers import make_optimizer
@@ -369,7 +371,7 @@ def debug_fit_prototype(
         experiment_name=experiment.exp_type or "experiment",
         model_name=model.name,
         dataset_shape=tuple(dataset.data.shape),
-        optimizer_name=optimizer_name,
+        optimizer_name=optimizer_name or "auto",
         step_size=float(step_size),
         sanity=sanity,
         field_shape=field_shape,
@@ -414,6 +416,7 @@ def debug_fit_prototype(
             variance_estimation_mask=variance_estimation_mask,
             variance_estimation_mask_dims=variance_estimation_mask_dims,
             auto_mask_nan_observables=auto_mask_nan_observables,
+            device=device,
         )
         params = _validate_initial_params(default_params, initial_params)
         fields_before = unpack(params)
@@ -436,25 +439,58 @@ def debug_fit_prototype(
         )
         report.predicted_before_summary = _summarize_array(predicted_before)
 
-        if optimizer is not None:
-            opt = optimizer
-        elif optimizer_factory is not None:
-            opt = optimizer_factory(step_size)
+        _, _, info = run_fit(
+            experiment, model, dataset, optimizer_name=optimizer_name, step_size=step_size,
+            num_steps=1, return_fit_info=True, regularizer_weight=regularizer_weight,
+            regularizer_prox=regularizer_prox, optimizer_base_factory=optimizer_base_factory,
+            box_constraints=box_constraints, initial_params=initial_params,
+            regularizer_configs=regularizer_configs, regularizer_type=regularizer_type,
+            regularizer_weights=regularizer_weights, optimizer_factory=optimizer_factory,
+            device=device,
+            optimizer=optimizer, mask=mask, mask_dims=mask_dims, mask_fill_value=mask_fill_value,
+            study_globals=dict(global_obs), frame_mask=frame_mask, data_variance=data_variance,
+            variance_estimation_mask=variance_estimation_mask,
+            variance_estimation_mask_dims=variance_estimation_mask_dims,
+            auto_mask_nan_observables=auto_mask_nan_observables,
+        )
+        raw_before = params
+        loss_fn, _, unpack = build_loss(
+            experiment, model, dataset, regularizer_configs=regularizer_configs,
+            regularizer_type=regularizer_type, regularizer_weights=regularizer_weights,
+            mask=mask, mask_dims=mask_dims, mask_fill_value=mask_fill_value,
+            study_globals=dict(global_obs), frame_mask=frame_mask, data_variance=data_variance,
+            variance_estimation_mask=variance_estimation_mask,
+            variance_estimation_mask_dims=variance_estimation_mask_dims,
+            auto_mask_nan_observables=auto_mask_nan_observables,
+            parameter_space=info.parameter_space, physical_scales=info.state.parameter_scales,
+            smoothed_tv=info.regularization_mode == "smoothed_tv",
+            device=device,
+        )
+        report.optimizer_name = info.optimizer_name
+        if info.parameter_space == "physical":
+            from mrax.core.tv_fit import make_tv_steps
+            params = unpack._mrax_from_raw(raw_before)
+            opt, _, _ = make_tv_steps(loss_fn, unpack._mrax_smooth_loss, unpack._mrax_physical_bounds,
+                                       unpack._mrax_tv_operators, info.optimizer_name, step_size, device=device)
+            gradient_loss = unpack._mrax_smooth_loss
+            report.notes.append("TV is applied proximally; gradient summaries describe the smooth objective")
         else:
-            opt = make_optimizer(
-                optimizer_name,
-                step_size,
-                regularizer_weight=regularizer_weight,
-                regularizer_prox=regularizer_prox,
-                base_optimizer_factory=optimizer_base_factory,
-                box_constraints=box_constraints,
-            )
+            params = raw_before
+            opt = optimizer or (optimizer_factory(step_size) if optimizer_factory is not None else make_optimizer(
+                info.optimizer_name, step_size, regularizer_weight=regularizer_weight,
+                regularizer_prox=regularizer_prox, base_optimizer_factory=optimizer_base_factory,
+                device=device,
+                box_constraints=box_constraints))
+            gradient_loss = loss_fn
+        report.initial_param_summaries = _summarize_array_map(params)
+        opt = place_optimizer(opt, device)
         opt_state_init = opt.init(params)
         report.optimizer_state_init_summary = _summarize_tree_state(opt_state_init)
-
-        loss_before, grads = jax.value_and_grad(loss_fn)(params)
-        updates, opt_state_after = opt.update(grads, opt_state_init, params)
-        params_after = optax.apply_updates(params, updates)
+        loss_before = loss_fn(params)
+        grads = jax.grad(gradient_loss)(params)
+        params_after = info.state.params
+        updates = jax.tree.map(lambda new, old: new - old, params_after, params)
+        opt_state_after = info.state.optimizer_state
         loss_after = loss_fn(params_after)
         fields_after = unpack(params_after)
         predicted_after = _align_predicted(

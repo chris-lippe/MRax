@@ -1,0 +1,28 @@
+{
+  "name": "MRax development (NVIDIA GPU)",
+  "build": {
+    "dockerfile": "../../docker/Dockerfile.dev",
+    "context": "../.."
+  },
+  "remoteUser": "dev",
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "runArgs": ["--gpus=all"],
+  "postCreateCommand": "python -m pip install -e '.[all,dev,docs,notebooks]' 'jax[cuda12]>=0.4.35,<0.11'",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests"],
+        "isort.importStrategy": "fromEnvironment"
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  }
+}

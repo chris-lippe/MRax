@@ -83,48 +83,12 @@ def spatial_smoothness_penalty(
 
 
 def total_variation_penalty(
-    field: jnp.ndarray, axes: tuple[int, ...] | None = None, mask: jnp.ndarray | None = None
+    field: jnp.ndarray, axes: tuple[int, ...] | None = None, mask: jnp.ndarray | None = None,
+    *, smoothed: bool = False,
 ) -> jnp.ndarray:
-    """Isotropic TV penalty across selected axes."""
-    axes = _normalize_axes(field, axes)
-    axes = tuple(ax for ax in axes if field.shape[ax] > 1)
-    if not axes:
-        return jnp.array(0.0, dtype=field.dtype)
-
-    weight_mask = None
-    if mask is not None:
-        weight_mask = jnp.asarray(mask)
-        weight_mask = jnp.broadcast_to(weight_mask, field.shape)
-
-    grads = []
-    weights = []
-    for axis in axes:
-        grad = _forward_diff_with_pad(field, axis)
-        grads.append(grad)
-        if weight_mask is not None:
-            slicer0 = [slice(None)] * weight_mask.ndim
-            slicer0[axis] = slice(0, -1)
-            slicer1 = [slice(None)] * weight_mask.ndim
-            slicer1[axis] = slice(1, None)
-            w = weight_mask[tuple(slicer0)] * weight_mask[tuple(slicer1)]
-            weights.append(_pad_weight_for_grad(w, axis))
-
-    if len(grads) == 1:
-        grad = jnp.abs(grads[0])
-        if weight_mask is None:
-            return jnp.mean(grad)
-        denom = jnp.sum(weights[0]) + 1e-8
-        return jnp.sum(weights[0] * grad) / denom
-
-    stacked = jnp.stack(grads, axis=-1)
-    norm = _euclidean_norm_zero_at_origin(stacked)
-    if weight_mask is None:
-        return jnp.mean(norm)
-
-    weight_stack = jnp.stack(weights, axis=-1)
-    weight_mean = jnp.mean(weight_stack, axis=-1)
-    denom = jnp.sum(weight_mean) + 1e-8
-    return jnp.sum(weight_mean * norm) / denom
+    """Masked isotropic TV; smoothing is an explicit gradient-only option."""
+    from .tv import TVOperator
+    return TVOperator.create(field.shape, axes, mask=mask, dtype=jnp.real(field).dtype).value(field, smoothed)
 
 
 def higher_order_total_variation_penalty(
@@ -132,52 +96,14 @@ def higher_order_total_variation_penalty(
     order: int = 2,
     axes: tuple[int, ...] | None = None,
     mask: jnp.ndarray | None = None,
+    *, smoothed: bool = False,
 ) -> jnp.ndarray:
-    """Higher-order TV using repeated forward differences."""
-    if order < 1:
-        raise ValueError("order must be >= 1 for higher-order TV")
-    axes = _normalize_axes(field, axes)
-    axes = tuple(ax for ax in axes if field.shape[ax] > 1)
-    if not axes:
-        return jnp.array(0.0, dtype=field.dtype)
-
-    def repeated_diff(arr: jnp.ndarray, axis: int) -> jnp.ndarray:
-        out = arr
-        for _ in range(order):
-            out = _forward_diff_with_pad(out, axis)
-        return out
-
-    grads = [repeated_diff(field, axis) for axis in axes]
-    if mask is None:
-        if len(grads) == 1:
-            return jnp.mean(jnp.abs(grads[0]))
-        stacked = jnp.stack(grads, axis=-1)
-        return jnp.mean(_euclidean_norm_zero_at_origin(stacked))
-
-    weight_mask = jnp.broadcast_to(jnp.asarray(mask), field.shape)
-    weights = []
-    for axis in axes:
-        slicer0 = [slice(None)] * weight_mask.ndim
-        slicer0[axis] = slice(0, -1)
-        slicer1 = [slice(None)] * weight_mask.ndim
-        slicer1[axis] = slice(1, None)
-        w = weight_mask[tuple(slicer0)] * weight_mask[tuple(slicer1)]
-        weights.append(_pad_weight_for_grad(w, axis))
-
-    if len(grads) == 1:
-        grad = jnp.abs(grads[0])
-        denom = jnp.sum(weights[0]) + 1e-8
-        return jnp.sum(weights[0] * grad) / denom
-
-    stacked = jnp.stack(grads, axis=-1)
-    norm = _euclidean_norm_zero_at_origin(stacked)
-    weight_stack = jnp.stack(weights, axis=-1)
-    weight_mean = jnp.mean(weight_stack, axis=-1)
-    denom = jnp.sum(weight_mean) + 1e-8
-    return jnp.sum(weight_mean * norm) / denom
+    """Masked higher-order TV with the complete finite-difference stencil."""
+    from .tv import TVOperator
+    return TVOperator.create(field.shape, axes, order, mask, dtype=jnp.real(field).dtype).value(field, smoothed)
 
 
-def make_regularizer_fn(reg_type: str, axes: tuple[int, ...] | None = None):
+def make_regularizer_fn(reg_type: str, axes: tuple[int, ...] | None = None, *, smoothed_tv=False):
     reg_type = reg_type.lower()
     if reg_type.startswith("tv"):
         suffix = reg_type[2:]
@@ -186,14 +112,11 @@ def make_regularizer_fn(reg_type: str, axes: tuple[int, ...] | None = None):
             if not suffix.isdigit():
                 raise ValueError(f"Unknown regularizer type '{reg_type}'")
             order = int(suffix)
-        if order == 1:
-            return lambda field, mask=None: total_variation_penalty(field, axes=axes, mask=mask)
-        return lambda field, mask=None: higher_order_total_variation_penalty(
-            field,
-            order=order,
-            axes=axes,
-            mask=mask,
-        )
+        def tv(field, mask=None):
+            return higher_order_total_variation_penalty(field, order, axes, mask, smoothed=smoothed_tv)
+        tv.tv_axes = axes
+        tv.tv_order = order
+        return tv
     if reg_type == "smoothness":
         return lambda field, mask=None: spatial_smoothness_penalty(field, axes=axes, mask=mask)
     if reg_type == "none":

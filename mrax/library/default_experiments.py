@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, Mapping, Optional
 
+import numpy as np
+
 from mrax.data_struct import Experiment, Model
 from mrax.data_struct.dimensions import build_experiment_dims, dim_observable_map
 from mrax.library.default_models import (
@@ -17,7 +19,7 @@ from mrax.library.default_models import (
     make_t2star_se_model,
 )
 
-ModelFactory = Callable[[], Model]
+ModelFactory = Callable[..., Model]
 
 
 @dataclass(frozen=True)
@@ -42,34 +44,34 @@ DEFAULT_EXPERIMENTS: Dict[str, DefaultExperiment] = {
     ),
     "ir": DefaultExperiment(
         name="ir",
-        model_factory=lambda: make_t1_ir_model(scale=DEFAULT_SCALE),
+        model_factory=lambda scale=DEFAULT_SCALE: make_t1_ir_model(scale=scale),
         allowed_observables=frozenset({"TI"}),
     ),
     "fair_asl": DefaultExperiment(
         name="fair_asl",
-        model_factory=lambda: make_fair_asl_model(scale=DEFAULT_SCALE),
+        model_factory=lambda scale=DEFAULT_SCALE: make_fair_asl_model(scale=scale),
         allowed_observables=frozenset(
             {"TI", "fair_label", "t1_blood", "t1_blood_ms", "partition_coeff", "partition_coefficient", "lambda"}
         ),
     ),
     "vtr": DefaultExperiment(
         name="vtr",
-        model_factory=lambda: make_t1_vtr_model(scale=DEFAULT_SCALE),
+        model_factory=lambda scale=DEFAULT_SCALE: make_t1_vtr_model(scale=scale),
         allowed_observables=frozenset({"TR"}),
     ),
     "vfa": DefaultExperiment(
         name="vfa",
-        model_factory=lambda: make_t1_vfa_model(scale=DEFAULT_SCALE),
+        model_factory=lambda scale=DEFAULT_SCALE: make_t1_vfa_model(scale=scale),
         allowed_observables=frozenset({"TR", "flip_angle"}),
     ),
     "mse": DefaultExperiment(
         name="mse",
-        model_factory=lambda: make_t2_se_model(scale=DEFAULT_SCALE),
+        model_factory=lambda scale=DEFAULT_SCALE: make_t2_se_model(scale=scale),
         allowed_observables=frozenset({"TE"}),
     ),
     "mge": DefaultExperiment(
         name="mge",
-        model_factory=lambda: make_t2star_se_model(scale=DEFAULT_SCALE),
+        model_factory=lambda scale=DEFAULT_SCALE: make_t2star_se_model(scale=scale),
         allowed_observables=frozenset({"TE", "flip_angle", "TR"}),
     ),
     "sat_trans": DefaultExperiment(
@@ -80,6 +82,8 @@ DEFAULT_EXPERIMENTS: Dict[str, DefaultExperiment] = {
                 "freq_offsets",
                 "sat_b1",
                 "sat_time",
+                "spin_lock",
+                "SpinLock",
                 "TR",
                 "r1_map",
                 "t1_map",
@@ -109,12 +113,56 @@ def get_default_experiment(exp_type: str) -> DefaultExperiment | None:
     return DEFAULT_EXPERIMENTS.get(exp_type)
 
 
-def default_model_for_type(exp_type: str) -> Model:
+def default_model_for_type(exp_type: str, *, scale: float | None = None,
+                           observables=None, image_data=None) -> Model:
     """Build the default model for an experiment type."""
     spec = get_default_experiment(exp_type)
     if spec is None:
         return make_identity_model()
-    return spec.model_factory()
+    if scale is not None:
+        from inspect import signature
+
+        if "scale" in signature(spec.model_factory).parameters:
+            model = spec.model_factory(scale=scale)
+        else:
+            model = spec.model_factory()
+    else:
+        model = spec.model_factory()
+    if exp_type == 'ir' and image_data is not None and observables is not None and 'TI' in observables:
+        seed = _inversion_recovery_seed(model, observables['TI'], image_data)
+        if seed is not None:
+            model = make_t1_ir_model(scale=DEFAULT_SCALE if scale is None else scale,
+                param_overrides={'t1': {'init': seed}})
+    return model
+
+
+def _inversion_recovery_seed(model, times, image_data):
+    """Profile the ideal IR amplitude to avoid starting beyond the wrong null."""
+    if getattr(times, 'si_unit', 'ms').strip().lower() != 'ms':
+        return None
+    times = np.asarray(getattr(times, 'values', times), float).reshape(-1)
+    data = np.asarray(image_data)
+    if len(np.unique(times)) < 3 or data.ndim < 2 or data.shape[0] != len(times) or not np.isfinite(times).all() or np.any(times < 0):
+        return None
+    values = data.reshape((len(times), -1))
+    dtype = np.complex128 if np.iscomplexobj(values) else np.float64
+    values = np.abs(values[:, ::max(1, int(np.ceil(values.shape[1] / 262144)))].astype(dtype))
+    peak = np.max(values, where=np.isfinite(values), initial=0.)
+    if peak <= 0:
+        return None
+    valid = np.isfinite(values)
+    present = np.any(valid, axis=1)
+    if np.count_nonzero(present) < 3:
+        return None
+    curve = np.sqrt(np.sum(np.where(valid, values / peak, 0.)**2, axis=1) /
+                    np.maximum(np.sum(valid, axis=1), 1))
+    times, curve = times[present], curve[present]
+    bounds = model.parametrization_factory.parameter_specs['t1']['bounds']
+    candidates = np.geomspace(*bounds, 256)
+    basis = np.abs(1. - 2. * np.exp(-times[None] / candidates[:, None]))
+    amplitudes = (basis @ curve) / np.maximum(np.sum(basis**2, axis=1), 1e-20)
+    errors = np.sum((amplitudes[:, None] * basis - curve)**2, axis=1)
+    return float(candidates[np.argmin(errors)])
 
 
 def filter_observables_for_type(exp_type: str, observables: Mapping[str, object] | None) -> dict[str, object]:

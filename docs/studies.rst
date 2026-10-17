@@ -11,8 +11,7 @@ Dimension handling
 
 Experiments use named dimensions to describe how non-spatial axes map to observables.
 Spatial axes are always ``x/y/z``. Non-spatial axes are inferred from observable
-lengths when importing data. Temporal repeats use ``t`` only when another observable
-axis explains part of the frame grid. If the observable layout cannot be inferred,
+lengths when importing data. If the observable layout cannot be inferred,
 importers fall back to a single ``frame`` axis.
 
 You can inspect the current layout via ``experiment.describe_dims()`` and reshape arrays
@@ -108,7 +107,7 @@ Defining a Study
    study = Study.from_examples(examples, study_globals=study_globals)
 
 Synthetic builders (:func:`mrax.core.synthetic.make_synthetic_study`) and importers
-(:func:`mrax.io.bruker_import.load_bruker_study`) both emit ``Study`` objects,
+(:func:`mrax.io.bruker_import.import_bruker_study`) both emit ``Study`` objects,
 so the downstream fitting and storage flows are identical regardless of the data source.
 Study-wide globals, such as scanner or protocol constants, belong in ``study_globals`` and are
 merged into every experiment when fitting.

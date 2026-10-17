@@ -23,13 +23,37 @@ from mrax.versioning import versioned_payload
 def test_global_mrax_version_is_the_packaging_and_file_tag_source():
     project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
 
-    assert MRAX_VERSION == __version__ == "0.2.1"
+    assert MRAX_VERSION == __version__ == "0.3.0"
     assert MRAX_VERSION_TAG == "mrax_version"
     assert project["project"]["dynamic"] == ["version"]
     assert project["tool"]["setuptools"]["dynamic"]["version"] == {
         "attr": "mrax._version.MRAX_VERSION"
     }
     assert versioned_payload({}) == {MRAX_VERSION_TAG: MRAX_VERSION}
+
+
+def test_release_citation_and_distribution_exclusions_are_current():
+    root = Path(__file__).parents[1]
+    citation = (root / 'CITATION.cff').read_text()
+    assert '\ndoi: 10.5281/zenodo.21723327\n' in citation
+    assert not any(
+        line.startswith(('version:', 'date-released:')) for line in citation.splitlines()
+    )
+    assert 'version-specific DOI' in citation
+    manifest = (root / 'MANIFEST.in').read_text()
+    assert 'prune data\n' in manifest
+    assert 'prune local_testing\n' in manifest
+    exclusions = (root / '.dockerignore').read_text().splitlines()
+    assert 'data/' in exclusions and 'local_testing/' in exclusions
+
+
+def test_gui_state_accepts_only_the_current_spatial_schema():
+    from mrax.gui import GuiSession
+    from mrax.gui.app import _restore_gui_state
+
+    payload = versioned_payload({'format': 'mrax.gui.state', 'version': 2})
+    with pytest.raises(ValueError, match='not supported'):
+        _restore_gui_state(GuiSession(), payload, {})
 
 
 def test_constant_data_fit_uses_bounded_rms_scaling():

@@ -1,0 +1,38 @@
+schema_version = 1
+
+[observables.echo_times]
+aliases = ["EchoTimes", "TE", "EchoTime"]
+scale = 1000.0
+
+[observables.repetition_times]
+aliases = ["TR", "RepetitionTime"]
+scale = 1000.0
+
+[observables.inversion_times]
+aliases = ["TI", "InversionTime"]
+scale = 1000.0
+
+[observables.flip_angles]
+aliases = ["FlipAngle", "Flipangle", "FA"]
+scale = 1.0
+
+[observables.diffusion_bvals]
+aliases = ["bvalues", "bValues", "bvals", "BValues"]
+scale = 1.0
+
+[observables.diffusion_bvecs]
+aliases = ["bvecs", "bVectors", "DiffusionDirections"]
+scale = 1.0
+components = 3
+
+[observables.freq_offsets_ppm]
+aliases = ["offsets_ppm", "freq_offsets_ppm"]
+scale = 1.0
+
+[observables.sat_b1_uT]
+aliases = ["B1pa", "B1rms", "b1pa", "B1", "sat_b1_uT"]
+scale = 1.0
+
+[observables.sat_time_ms]
+aliases = ["Tsat", "tsat", "SaturationTime"]
+scale = 1000.0

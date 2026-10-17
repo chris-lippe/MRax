@@ -7,6 +7,7 @@ from functools import wraps
 from typing import Callable, Dict, List, Mapping, Sequence, Tuple
 
 import jax.numpy as jnp
+import numpy as np
 
 from mrax.opt.regularizers import make_regularizer_fn
 
@@ -37,6 +38,7 @@ class Model:
     observable_units: Dict[str, str] | None = None
     required_observables: Sequence[str] | None = None
     provided_observables: Sequence[str] | None = None
+    parameter_specs: dict[str, dict[str, object]] | None = None
 
     def __post_init__(self):
         if self.parameter_units is None or not self.parameter_units:
@@ -157,6 +159,7 @@ class Model:
         regularizer_configs: dict[str, List[dict]] | None = None,
         regularizer_type: str | dict[str, str] | None = None,
         reg_weights: dict[str, float] | None = None,
+        smoothed_tv: bool = False,
     ):
         reg_terms: dict[str, list[tuple[float, Callable[[jnp.ndarray], jnp.ndarray]]]] = {}
         configs_to_use = regularizer_configs if regularizer_configs is not None else self.regularizer_configs
@@ -168,11 +171,13 @@ class Model:
                 entries = []
                 for cfg in configs:
                     weight = cfg.get("weight", 0.0)
+                    if not np.isfinite(weight) or weight < 0:
+                        raise ValueError("Regularizer weights must be finite and nonnegative")
                     if weight == 0.0:
                         continue
                     reg_type = cfg.get("type", "smoothness")
                     axes = cfg.get("axes")
-                    fn = make_regularizer_fn(reg_type, axes)
+                    fn = make_regularizer_fn(reg_type, axes, smoothed_tv=smoothed_tv)
                     if fn is None:
                         continue
                     entries.append((weight, fn))
@@ -184,24 +189,15 @@ class Model:
                     return reg_type_to_use.get(param, "smoothness")
                 return reg_type_to_use
 
-            candidate_keys = [
-                "amplitude",
-                "center",
-                "gamma",
-                "amplitude1",
-                "center1",
-                "gamma1",
-                "amplitude2",
-                "center2",
-                "gamma2",
-                "tau",
-            ]
+            candidate_keys = list(weights_to_use or {})
             for key in candidate_keys:
                 weight = weights_to_use.get(key, 0.0) if weights_to_use else 0.0
+                if not np.isfinite(weight) or weight < 0:
+                    raise ValueError("Regularizer weights must be finite and nonnegative")
                 if weight == 0.0:
                     continue
                 reg_type = resolve_type(key)
-                fn = make_regularizer_fn(reg_type, None)
+                fn = make_regularizer_fn(reg_type, None, smoothed_tv=smoothed_tv)
                 if fn is None:
                     continue
                 reg_terms.setdefault(key, []).append((weight, fn))

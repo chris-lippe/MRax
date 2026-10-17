@@ -8,24 +8,16 @@ from typing import Callable, Mapping, Sequence
 
 import numpy as np
 
-from mrax.data_struct import DataSet, Experiment, Model
+from mrax.data_struct import AcquisitionData, DataSet, Experiment, Model
+from mrax.devices import device_function
 from mrax.io.import_definitions import (
-    ImportDefinition,
-    KSpaceImportDefinition,
     NormalizedMetadata,
-    build_cartesian_kspace_definition,
-    build_epi_kspace_definition,
-    build_imported_experiment_dataset,
-    build_non_cartesian_kspace_definition,
-    build_rare_kspace_definition,
     detect_experiment_type,
-    extract_observables_from_metadata,
     needs_manual_type_override,
     normalize_sequence_type,
+    reshape_epi_samples,
+    reshape_rare_samples,
 )
-from mrax.library.default_experiments import default_model_for_type
-from mrax.reco.pipeline import cartesian_ifft
-from mrax.reco.variational import reconstruct_regrid
 
 
 @dataclass(frozen=True)
@@ -40,8 +32,9 @@ class PulseqSequenceInfo:
     adc_counts: tuple[int, ...] = ()
     sequence_kind: str = "unknown"
     sequence_type: str = "standard"
-    spatial_shape: tuple[int, int] | None = None
+    spatial_shape: tuple[int, ...] | None = None
     normalized_metadata: NormalizedMetadata = field(default_factory=NormalizedMetadata)
+    adc_echo_times_ms: np.ndarray | None = None
 
 
 def _parse_scalar(token: str) -> object:
@@ -157,7 +150,7 @@ def _definition_count_hint(definitions: Mapping[str, object], *keys: str) -> int
 
 
 def _infer_spatial_shape(definitions: Mapping[str, object], adc_counts: Sequence[int]) -> tuple[int, int] | None:
-    matrix = _definition_list(definitions, "Matrix", "matrix", "ReconMatrix", "recon_matrix")
+    matrix = _definition_list(definitions, "Matrix", "matrix", "ReconMatrix", "recon_matrix", "encoding_dim")
     if len(matrix) >= 2:
         return (int(round(matrix[1])), int(round(matrix[0])))
     if len(adc_counts) > 1 and len(set(int(v) for v in adc_counts)) == 1:
@@ -165,6 +158,26 @@ def _infer_spatial_shape(definitions: Mapping[str, object], adc_counts: Sequence
     if len(adc_counts) == 1:
         return (1, int(adc_counts[0]))
     return None
+
+
+def _infer_trajectory_shape(definitions, adc_counts, physical):
+    matrix = _definition_list(definitions, "Matrix", "matrix", "ReconMatrix", "recon_matrix", "encoding_dim")
+    if len(matrix) >= 2:
+        return tuple(int(round(v)) for v in reversed(matrix[:3] if len(matrix) > 2 and matrix[2] > 1 else matrix[:2]))
+    fov = _definition_list(definitions, "FOV", "fov")
+    if physical is not None and len(fov) >= physical.shape[1]:
+        extent = np.max(np.abs(physical), axis=0) * np.asarray(fov[:physical.shape[1]]) * 2
+        if adc_counts and len(set(adc_counts)) == 1 and int(adc_counts[0]) > 1:
+            profiles = physical.reshape((-1, int(adc_counts[0]), physical.shape[1]))
+            spread = np.ptp(profiles, axis=1)
+            read = int(np.argmax(np.median(spread, axis=0)))
+            other = [i for i in range(physical.shape[1]) if i != read]
+            if np.max(spread[:, other], initial=0.) < 1e-2:
+                step = np.median(np.abs(np.diff(profiles[..., read], axis=-1)))
+                extent[read] = (np.median(spread[:, read]) + step) * fov[read]
+        if np.all(extent > 1):
+            return tuple(int(round(v)) for v in extent[::-1])
+    return _infer_spatial_shape(definitions, adc_counts)
 
 
 def _infer_pulseq_frame_count_hint(
@@ -341,50 +354,24 @@ def detect_pulseq_kspace_kind(trajectory: np.ndarray | None, adc_counts: Sequenc
 def _normalize_trajectory(
     trajectory_physical: np.ndarray,
     *,
-    spatial_shape: tuple[int, int] | None,
+    spatial_shape: tuple[int, ...] | None,
     definitions: Mapping[str, object],
     normalize: bool,
 ) -> np.ndarray:
     traj = np.asarray(trajectory_physical, dtype=np.float32)
     if not normalize:
         return traj
-    centered = traj.copy()
-    for axis in range(centered.shape[1]):
-        vals = centered[:, axis]
-        finite = vals[np.isfinite(vals)]
-        if finite.size:
-            centered[:, axis] = vals - 0.5 * (float(finite.min()) + float(finite.max()))
-
     fov = _definition_list(definitions, "FOV", "fov")
-    if spatial_shape is not None and len(fov) >= 2:
-        ny, nx = spatial_shape
-        scale = np.asarray([float(fov[0]) / max(nx, 1), float(fov[1]) / max(ny, 1)], dtype=np.float32)
-        return centered[:, :2] * scale[None, :]
-
-    out = centered[:, :2]
-    for axis in range(out.shape[1]):
-        max_abs = float(np.nanmax(np.abs(out[:, axis]))) if out.shape[0] else 0.0
-        if max_abs > 0.0 and np.isfinite(max_abs):
-            out[:, axis] = 0.5 * out[:, axis] / max_abs
-    return out.astype(np.float32)
+    if spatial_shape is not None and len(fov) >= traj.shape[1]:
+        scale = np.asarray(fov[:traj.shape[1]]) / np.asarray(spatial_shape[::-1])
+        return (traj * scale[None, :]).astype(np.float32)
+    raise ValueError("Pulseq trajectory normalization requires FOV and an encoding matrix")
 
 
-def _metadata_from_pulseq(definitions: Mapping[str, object], frame_count: int, path: Path) -> NormalizedMetadata:
-    name = str(definitions.get("Name") or definitions.get("SequenceName") or path.stem)
-    tr = _definition_list(definitions, "TR", "RepetitionTime")
-    te = _definition_list(definitions, "TE", "EchoTime")
-    ti = _definition_list(definitions, "TI", "InversionTime")
-    flip = _definition_list(definitions, "FlipAngle", "FA")
-    return NormalizedMetadata(
-        method_name=name,
-        sequence_name=name,
-        protocol_name=name,
-        frame_count=frame_count,
-        echo_times=te if te else None,
-        repetition_times=tr if tr else None,
-        inversion_times=ti if ti else None,
-        flip_angles=flip if flip else None,
-    )
+def _metadata_from_pulseq(definitions: Mapping[str, object], frame_count: int, path: Path, *, definition_paths=()) -> NormalizedMetadata:
+    from mrax.io.pulseq_metadata import sequence_metadata
+
+    return sequence_metadata(definitions, frame_count, path, definition_paths=definition_paths)
 
 
 def _detect_pulseq_sequence_type(definitions: Mapping[str, object], path: Path) -> str:
@@ -496,6 +483,9 @@ def read_pulseq(
     seq_path: str | Path,
     *,
     normalize_trajectory: bool = True,
+    definition_paths=(),
+    definition_overrides: Mapping | None = None,
+    calculate_trajectory: bool = True,
 ) -> PulseqSequenceInfo:
     """Read a Pulseq ``.seq`` file and return definitions plus ADC trajectory."""
 
@@ -503,19 +493,32 @@ def read_pulseq(
     definitions, adc_counts = _parse_pulseq_text(path)
     trajectory_physical: np.ndarray | None = None
     adc_times: np.ndarray | None = None
+    adc_echo_times_ms = None
     try:
-        from pypulseq import Sequence  # type: ignore
+        if calculate_trajectory:
+            from pypulseq import Sequence  # type: ignore
 
-        sequence = Sequence()
-        sequence.read(str(path))
-        definitions = {**definitions, **_numpy_definitions(getattr(sequence, "definitions", {}))}
-        k_adc, _k_full, _t_excitation, _t_refocusing, t_adc = sequence.calculate_kspace()
-        k_adc_arr = np.asarray(k_adc, dtype=np.float32)
-        if k_adc_arr.ndim == 2 and k_adc_arr.shape[0] >= 2 and k_adc_arr.shape[1] > 0:
-            trajectory_physical = k_adc_arr[:2].T
-        adc_times_arr = np.asarray(t_adc, dtype=np.float32)
-        if adc_times_arr.size:
-            adc_times = adc_times_arr.reshape(-1)
+            sequence = Sequence()
+            from mrax.io.pulseq_compat import read_sequence
+
+            read_sequence(sequence, path)
+            definitions = {**definitions, **_numpy_definitions(getattr(sequence, "definitions", {}))}
+            k_adc, _k_full, _t_excitation, _t_refocusing, t_adc = sequence.calculate_kspace()
+            k_adc_arr = np.asarray(k_adc, dtype=np.float32)
+            if k_adc_arr.ndim == 2 and k_adc_arr.shape[0] >= 2 and k_adc_arr.shape[1] > 0:
+                active_dims = 3 if np.ptp(k_adc_arr[2]) > 1e-3 else 2
+                trajectory_physical = k_adc_arr[:active_dims].T
+            adc_times_arr = np.asarray(t_adc, dtype=np.float64)
+            if adc_times_arr.size:
+                adc_times = adc_times_arr.reshape(-1)
+                if _t_excitation is not None and len(_t_excitation) and sum(adc_counts) == len(adc_times):
+                    starts = np.r_[0, np.cumsum(adc_counts)]
+                    centres = np.asarray([a + np.argmin(np.linalg.norm(k_adc_arr[:, a:b], axis=0))
+                        for a, b in zip(starts[:-1], starts[1:])])
+                    excitation = np.asarray(_t_excitation)
+                    previous = np.searchsorted(excitation, adc_times[centres], side='right') - 1
+                    if np.all(previous >= 0):
+                        adc_echo_times_ms = (adc_times[centres] - excitation[previous]) * 1000.
     except ImportError:
         warnings.warn(
             "pypulseq is not installed; returning Pulseq definitions without calculated trajectory.",
@@ -529,7 +532,17 @@ def read_pulseq(
             stacklevel=2,
         )
 
-    spatial_shape = _infer_spatial_shape(definitions, adc_counts)
+    sidecar = read_pulseq_sidecar_metadata(path)
+    definitions = {**definitions, **dict(sidecar.get("sequence_definitions", {})), **dict(definition_overrides or {})}
+    fov = _definition_list(definitions, "FOV", "fov")
+    fov_unit = str(definitions.get("FOVUnit", "")).strip().lower()
+    if fov_unit not in ("", "m", "mm"):
+        raise ValueError("Pulseq FOVUnit must be m or mm")
+    if fov and (fov_unit == "mm" or not fov_unit and max(fov) > 10):
+        if not fov_unit:
+            warnings.warn("Pulseq FOV appears to use millimetres; converting to metres. Declare FOVUnit to make the convention explicit", RuntimeWarning, stacklevel=2)
+        definitions = {**definitions, "FOV": [v / 1000. for v in fov], "FOVUnit": "m"}
+    spatial_shape = _infer_trajectory_shape(definitions, adc_counts, trajectory_physical)
     trajectory = (
         _normalize_trajectory(
             trajectory_physical,
@@ -537,12 +550,12 @@ def read_pulseq(
             definitions=definitions,
             normalize=normalize_trajectory,
         )
-        if trajectory_physical is not None
+        if trajectory_physical is not None and (not normalize_trajectory or spatial_shape is not None and len(_definition_list(definitions, "FOV", "fov")) >= trajectory_physical.shape[1])
         else None
     )
     kind = detect_pulseq_kspace_kind(trajectory, adc_counts)
     sequence_type = normalize_sequence_type(_detect_pulseq_sequence_type(definitions, path))
-    normalized_meta = _metadata_from_pulseq(definitions, frame_count=1, path=path)
+    normalized_meta = _metadata_from_pulseq(definitions, frame_count=1, path=path, definition_paths=definition_paths)
     return PulseqSequenceInfo(
         path=path,
         definitions=definitions,
@@ -550,6 +563,7 @@ def read_pulseq(
         trajectory_physical=trajectory_physical,
         adc_times=adc_times,
         adc_counts=tuple(int(v) for v in adc_counts),
+        adc_echo_times_ms=adc_echo_times_ms,
         sequence_kind=kind,
         sequence_type=sequence_type,
         spatial_shape=spatial_shape,
@@ -557,30 +571,8 @@ def read_pulseq(
     )
 
 
-def _preview_from_cartesian(kspace: np.ndarray) -> np.ndarray:
-    image = np.asarray(cartesian_ifft(kspace, axes=(-2, -1)))
-    if image.ndim >= 4:
-        coil_axis = image.ndim - 3
-        image = np.sqrt(np.sum(np.abs(image) ** 2, axis=coil_axis))
-    return np.real(image).astype(np.float32)
 
 
-def _preview_from_non_cartesian(
-    samples: np.ndarray,
-    trajectory: np.ndarray,
-    *,
-    spatial_shape: tuple[int, int],
-    density: np.ndarray | None,
-) -> np.ndarray:
-    image = np.asarray(
-        reconstruct_regrid(
-            samples,
-            trajectory,
-            spatial_shape=spatial_shape,
-            density=density,
-        )
-    )
-    return np.abs(image).astype(np.float32)
 
 
 def default_interleaved_slice_order(slice_count: int) -> list[int]:
@@ -663,17 +655,18 @@ def _expand_rare_trajectory_for_repetitions(
     return np.concatenate(expanded_lines, axis=0), tuple(expanded_counts)
 
 
-def _make_pulseq_kspace_definition(
+def _prepare_pulseq_acquisition(
     info: PulseqSequenceInfo,
     kspace: np.ndarray,
     *,
-    spatial_shape: tuple[int, int],
+    spatial_shape: tuple[int, ...],
     density: np.ndarray | None,
     sequence_type: str | None,
     rare_slice_order: Sequence[int] | None,
     sidecar_metadata: Mapping[str, object] | None = None,
     sample_axis: int = -1,
-) -> KSpaceImportDefinition:
+    coil_axis: int | None = None,
+) -> tuple[AcquisitionData, dict]:
     resolved_sequence_type = normalize_sequence_type(sequence_type or info.sequence_type)
     kind = info.sequence_kind if info.sequence_kind != "unknown" else "non_cartesian"
     meta = {
@@ -682,6 +675,29 @@ def _make_pulseq_kspace_definition(
         "trajectory_units": "cycles/pixel",
         "sequence_type": resolved_sequence_type,
     }
+    serial = np.asarray(kspace)
+    if not serial.size:
+        raise ValueError("Pulseq samples cannot be empty")
+    if info.trajectory_physical is not None and serial.shape[sample_axis] == len(info.trajectory_physical):
+        from dataclasses import replace
+
+        from mrax.io.pulseq_samples import prepare_pulseq_samples
+
+        if coil_axis is None:
+            frames = np.moveaxis(serial, sample_axis, -1).reshape((-1, 1, serial.shape[sample_axis]))
+        else:
+            if coil_axis % serial.ndim == sample_axis % serial.ndim:
+                raise ValueError("coil_axis and sample_axis must be different")
+            axes = [i for i in range(serial.ndim) if i not in (coil_axis % serial.ndim, sample_axis % serial.ndim)]
+            axes += [coil_axis % serial.ndim, sample_axis % serial.ndim]
+            ordered = serial.transpose(axes)
+            frames = ordered.reshape((-1,) + ordered.shape[-2:])
+        prepared = [prepare_pulseq_samples(info, frame, spatial_shape=spatial_shape, density="auto" if density is None else density) for frame in frames]
+        first = prepared[0]
+        options = {"samples": np.concatenate([a.samples for a in prepared], axis=0)}
+        if first.acquired is not None:
+            options["acquired"] = np.concatenate([np.broadcast_to(a.acquired, (a.frame_count, 1) + a.samples.shape[2:]) for a in prepared], axis=0)
+        return replace(first, **options), meta
     if (
         kind == "cartesian"
         and resolved_sequence_type == "rare"
@@ -709,33 +725,20 @@ def _make_pulseq_kspace_definition(
         meta["trajectory_repetitions"] = int(repetition_count)
         if rare_slice_order is not None:
             meta["slice_order"] = [int(v) for v in rare_slice_order]
-        return build_rare_kspace_definition(
-            serial,
-            trajectory=rare_trajectory,
-            adc_counts=rare_adc_counts,
-            spatial_shape=spatial_shape,
-            frame_order=rare_slice_order,
-            metadata=meta,
-        )
+        values = reshape_rare_samples(serial, trajectory=rare_trajectory,
+            adc_counts=rare_adc_counts, spatial_shape=spatial_shape, frame_order=rare_slice_order)
+        acquired = reshape_rare_samples(np.ones(serial.shape, bool), trajectory=rare_trajectory,
+            adc_counts=rare_adc_counts, spatial_shape=spatial_shape, frame_order=rare_slice_order)
+        return _canonical_acquisition(values, spatial_shape, acquired=acquired), meta
     if kind == "epi" and info.adc_counts and len(set(info.adc_counts)) == 1:
-        return build_epi_kspace_definition(
-            kspace,
-            samples_per_line=int(info.adc_counts[0]),
-            line_count=len(info.adc_counts),
-            spatial_shape=spatial_shape,
-            sequence_type=resolved_sequence_type,
-            metadata=meta,
-        )
+        values = reshape_epi_samples(kspace, samples_per_line=int(info.adc_counts[0]),
+            line_count=len(info.adc_counts), reverse_odd_lines=True)
+        return _canonical_acquisition(values, spatial_shape), meta
     if kind == "cartesian" and info.adc_counts and len(set(info.adc_counts)) == 1:
         grid = np.asarray(kspace)
         if grid.shape[-1] == int(sum(info.adc_counts)):
             grid = grid.reshape(grid.shape[:-1] + (len(info.adc_counts), int(info.adc_counts[0])))
-        return build_cartesian_kspace_definition(
-            grid,
-            spatial_shape=spatial_shape,
-            sequence_type=resolved_sequence_type,
-            metadata=meta,
-        )
+        return _canonical_acquisition(grid, spatial_shape), meta
     if info.trajectory is None:
         raise ValueError("Pulseq non-Cartesian import requires a calculated ADC trajectory")
     matched_samples, matched_trajectory, matched_density, matching_meta = _match_non_cartesian_samples_to_trajectory(
@@ -751,25 +754,25 @@ def _make_pulseq_kspace_definition(
             "trajectory_samples": int(np.asarray(matched_trajectory).shape[0]),
         }
     )
-    return build_non_cartesian_kspace_definition(
-        matched_samples,
-        trajectory=matched_trajectory,
-        density=matched_density,
-        spatial_shape=spatial_shape,
-        sample_axis=-1,
-        sequence_type=resolved_sequence_type,
-        metadata=meta,
-    )
+    return _canonical_acquisition(matched_samples, spatial_shape,
+        trajectory=matched_trajectory[:, ::-1], density=matched_density), meta
 
 
-def load_pulseq_experiment(
+@device_function
+def import_pulseq_experiment(
     seq_path: str | Path,
     *,
+    measurement_path: str | Path | None = None,
+    reader_options: Mapping | None = None,
+    metadata_overrides: Mapping | None = None,
+    device="cpu",
+    definition_paths=(),
     kspace: np.ndarray | None = None,
     image_data: np.ndarray | None = None,
-    spatial_shape: tuple[int, int] | None = None,
+    spatial_shape: tuple[int, ...] | None = None,
     density: np.ndarray | None = None,
     sample_axis: int = -1,
+    coil_axis: int | None = None,
     sequence_type: str | None = None,
     rare_slice_order: Sequence[int] | None = None,
     override_type: str | None = None,
@@ -779,11 +782,22 @@ def load_pulseq_experiment(
     """Build MRax containers from a Pulseq sequence and optional acquired data.
 
     Pulseq files define the sequence and ADC trajectory, but not measured signal
-    samples. Supply either ``kspace`` or ``image_data``; if only ``kspace`` is
-    provided, a quick preview image is reconstructed for ``DataSet.data``.
+    samples. Supply ``image_data`` for the experiment and optionally ``kspace``.
+    Raw-only workflows use ``read_pulseq_acquisition`` and reconstruct separately.
     """
 
-    info = read_pulseq(seq_path)
+    if measurement_path is not None or Path(seq_path).suffix.lower() != ".seq":
+        from mrax.io.measurement import build_measurement_experiment
+        from mrax.io.pulseq_measurement import read_pulseq_measurement
+
+        measurement = read_pulseq_measurement(measurement_path or seq_path,
+            sequence_path=seq_path if measurement_path is not None else None,
+            reader_options=reader_options, metadata_overrides=metadata_overrides, definition_paths=definition_paths)
+        return build_measurement_experiment(measurement, image_data=image_data,
+            override_type=override_type, name=name, model_map_by_type=model_map_by_type, device=device)
+    if reader_options is not None:
+        raise ValueError("reader_options require a measurement file")
+    info = read_pulseq(seq_path, definition_paths=definition_paths)
     sidecar_metadata = read_pulseq_sidecar_metadata(seq_path)
     resolved_shape = spatial_shape or info.spatial_shape
     if resolved_shape is None:
@@ -793,9 +807,10 @@ def load_pulseq_experiment(
         if arr.ndim < 2:
             raise ValueError("image_data must include at least two spatial dimensions")
         resolved_shape = (int(arr.shape[-2]), int(arr.shape[-1]))
-    resolved_shape = (int(resolved_shape[0]), int(resolved_shape[1]))
+    resolved_shape = tuple(int(value) for value in resolved_shape)
 
-    kspace_def: KSpaceImportDefinition | None = None
+    acquisition = None
+    raw_metadata = {}
     if kspace is not None:
         resolved_rare_slice_order = None
         if normalize_sequence_type(sequence_type or info.sequence_type) == "rare":
@@ -809,7 +824,7 @@ def load_pulseq_experiment(
                         explicit=rare_slice_order,
                         sidecar_metadata=sidecar_metadata,
                     )
-        kspace_def = _make_pulseq_kspace_definition(
+        acquisition, raw_metadata = _prepare_pulseq_acquisition(
             info,
             np.asarray(kspace),
             spatial_shape=resolved_shape,
@@ -818,6 +833,7 @@ def load_pulseq_experiment(
             rare_slice_order=resolved_rare_slice_order,
             sidecar_metadata=sidecar_metadata,
             sample_axis=sample_axis,
+            coil_axis=coil_axis,
         )
     else:
         resolved_rare_slice_order = (
@@ -827,45 +843,34 @@ def load_pulseq_experiment(
         )
 
     if image_data is None:
-        if kspace_def is None:
-            raise ValueError("Pulseq import requires image_data when kspace is not supplied")
-        if kspace_def.kind in ("cartesian", "epi"):
-            image_data = _preview_from_cartesian(kspace_def.samples)
-        else:
-            image_data = _preview_from_non_cartesian(
-                kspace_def.samples,
-                np.asarray(kspace_def.trajectory),
-                spatial_shape=resolved_shape,
-                density=kspace_def.density,
-            )
+        raise ValueError("Image data are required for an experiment; prepare raw samples with read_pulseq_acquisition and reconstruct_acquisition first")
+
+    from dataclasses import replace
+
+    from mrax.data_struct import SpatialGeometry
+    from mrax.io.measurement import MeasurementData, build_measurement_experiment
 
     data_arr = np.asarray(image_data)
-    frame_count = int(np.prod(data_arr.shape[:-2])) if data_arr.ndim > 2 else 1
-    normalized_meta = _metadata_from_pulseq(info.definitions, frame_count=frame_count, path=info.path)
+    if acquisition is not None and acquisition.domain == "kspace":
+        resolved_shape = tuple(acquisition.recipe.output_shape or acquisition.encoding_shape)
+    if tuple(data_arr.shape[-len(resolved_shape):]) != resolved_shape:
+        raise ValueError("Image shape does not match the prepared encoding or declared spatial_shape")
+    frame_count = int(np.prod(data_arr.shape[:-len(resolved_shape)])) if data_arr.ndim > len(resolved_shape) else 1
+    normalized_meta = _metadata_from_pulseq(info.definitions, frame_count=frame_count, path=info.path, definition_paths=definition_paths)
+    if metadata_overrides:
+        normalized_meta = replace(normalized_meta, **metadata_overrides)
     exp_type = override_type or detect_experiment_type(normalized_meta)
-    manual_type_override_required = (
-        override_type is None and needs_manual_type_override(normalized_meta, exp_type)
-    )
-    obs = extract_observables_from_metadata(exp_type, normalized_meta, frame_count)
-    experiment, dataset = build_imported_experiment_dataset(
-        ImportDefinition(
-            name=name or info.path.stem,
-            data=data_arr.reshape((frame_count,) + resolved_shape) if data_arr.ndim == 2 else data_arr,
-            frame_count=frame_count,
-            spatial_shape=resolved_shape,
-            exp_type=exp_type,
-            observables=obs,
-            kspace=kspace_def,
-        )
-    )
-
-    model_from_default = False
-    if model_map_by_type and exp_type in model_map_by_type:
-        candidate = model_map_by_type[exp_type]
-        model = candidate() if callable(candidate) else candidate
-    else:
-        model = default_model_for_type(exp_type)
-        model_from_default = True
+    manual_type_override_required = override_type is None and needs_manual_type_override(normalized_meta, exp_type)
+    geometry = acquisition.geometry if acquisition is not None else None
+    if geometry is None:
+        fov = _definition_list(info.definitions, "FOV", "fov")
+        spacing = tuple(np.asarray(fov[:len(resolved_shape)])[::-1] * 1000. / np.asarray(resolved_shape)) if len(fov) >= len(resolved_shape) else None
+        geometry = SpatialGeometry(spatial_shape=resolved_shape, voxel_sizes=spacing, source="pulseq")
+    experiment, dataset, model, _metadata = build_measurement_experiment(MeasurementData(
+        image_data=data_arr, acquisition=acquisition, spatial_geometry=geometry,
+        normalized_metadata=normalized_meta, metadata=raw_metadata), name=name or info.path.stem,
+        override_type=exp_type, model_map_by_type=model_map_by_type, device=device)
+    model_from_default = not model_map_by_type or exp_type not in model_map_by_type
 
     default_identity_model = model_from_default and str(getattr(model, "name", "")).lower() == "identity"
     identity_message = None
@@ -911,8 +916,41 @@ __all__ = [
     "PulseqSequenceInfo",
     "default_interleaved_slice_order",
     "detect_pulseq_kspace_kind",
-    "load_pulseq_experiment",
+    "import_pulseq_experiment",
     "read_pulseq",
+    "read_pulseq_acquisition",
     "read_pulseq_sidecar_metadata",
     "resolve_rare_slice_order",
 ]
+
+
+def _canonical_acquisition(values, shape, *, trajectory=None, density=None, acquired=None):
+    """Give prepared Pulseq values explicit frame/receiver/encoding axes."""
+    values = np.asarray(values)
+    original_shape = values.shape
+    ndim = 1 if trajectory is not None else len(shape)
+    if values.ndim == ndim:
+        values = values[None, None]
+    elif values.ndim == ndim + 1:
+        values = values[:, None]
+    if values.ndim != ndim + 2:
+        raise ValueError("Pulseq samples require explicit frame and receiver axes")
+    if acquired is not None and np.shape(acquired) == original_shape:
+        acquired = np.asarray(acquired).reshape(values.shape)
+    return AcquisitionData(values.astype(np.result_type(values.dtype, np.complex64), copy=False),
+        tuple(shape), ("partition", "phase", "read")[-len(shape):], kind="sampled" if trajectory is not None else "cartesian",
+        trajectory=trajectory, density=density, acquired=acquired)
+
+
+def read_pulseq_acquisition(seq_path, samples, *, spatial_shape=None, density=None,
+                            sequence_type=None, rare_slice_order=None, sample_axis=-1, coil_axis=None):
+    """Prepare measured samples without creating a reconstructed image."""
+    info = read_pulseq(seq_path)
+    shape = spatial_shape or info.spatial_shape
+    if shape is None:
+        raise ValueError("An encoding shape is required for raw Pulseq samples")
+    sidecar = read_pulseq_sidecar_metadata(seq_path)
+    acquisition, _ = _prepare_pulseq_acquisition(info, np.asarray(samples), spatial_shape=tuple(shape),
+        density=density, sequence_type=sequence_type, rare_slice_order=rare_slice_order,
+        sidecar_metadata=sidecar, sample_axis=sample_axis, coil_axis=coil_axis)
+    return acquisition

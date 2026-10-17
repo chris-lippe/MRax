@@ -12,6 +12,7 @@ import optax
 from mrax.data_struct.dataset import DataSet
 from mrax.data_struct.dimensions import reshape_frames_to_dims
 from mrax.data_struct.experiment import Experiment
+from mrax.devices import DeviceLike, device_function, place_optimizer
 from mrax.opt.optimizers import make_optimizer
 
 ReferenceSelector = str | int | np.ndarray
@@ -594,6 +595,7 @@ def _call_metric(
     return jnp.asarray(metric(fixed, moving, mask=mask))
 
 
+@device_function
 def linear_drift_correct_framestack(
     frames: np.ndarray,
     *,
@@ -612,6 +614,7 @@ def linear_drift_correct_framestack(
     num_steps: int = 200,
     optimizer_factory=None,
     optimizer=None,
+    device: DeviceLike = "cpu",
 ) -> FrameStackLinearDriftResult:
     """Fit and apply a global linear transform-parameter drift to a frame stack.
 
@@ -700,7 +703,9 @@ def linear_drift_correct_framestack(
             optimizer_name,
             step_size,
             box_constraints=bounds,
+            device=device,
         )
+    opt = place_optimizer(opt, device)
     opt_state = opt.init(coefficients)
 
     @jax.jit
@@ -794,6 +799,8 @@ def _clone_dataset(dataset: DataSet, data: np.ndarray) -> DataSet:
         density=dataset.density,
         sampling_mask=dataset.sampling_mask,
         kspace_metadata=dataset.kspace_metadata,
+        spatial_geometry=dataset.spatial_geometry,
+        acquisition=dataset.acquisition,
     )
 
 
@@ -821,6 +828,7 @@ def _normalize_dimensions(
     return tuple(name for name in available if name in selected)
 
 
+@device_function
 def linear_drift_correct_dataset(
     experiment: Experiment,
     dataset: DataSet,
@@ -828,6 +836,7 @@ def linear_drift_correct_dataset(
     dimensions: Iterable[str] | None = None,
     reference: ReferenceSelector = "first",
     times: Iterable[float] | None = None,
+    device: DeviceLike = "cpu",
     **drift_kwargs,
 ) -> LinearDriftCorrectionResult:
     """Fit grouped linear drift corrections and restore MRax dataset dimensions."""
@@ -855,6 +864,7 @@ def linear_drift_correct_dataset(
             grouped[:, group_index, ...],
             reference=reference,
             times=times,
+            device=device,
             **drift_kwargs,
         )
         for group_index in range(group_count)

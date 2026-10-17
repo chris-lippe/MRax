@@ -3,8 +3,8 @@ Roadmap
 
 This is a rough sketch of likely development directions. Priorities may change.
 
-- **GPU support:** improve documentation, examples, and memory handling for running
-  fitting and reconstruction workflows on accelerators.
+- **Data and GUI:** move to a responsive browser-based GUI.
+- **Reference data:** public datasets for examples and benchmarks.
 - **Performance optimization:** add benchmarks, speed up computations.
 - **More importers:** add support for more vendor formats and make custom importer
   development easier for lab-specific data.

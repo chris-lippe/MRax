@@ -1,5 +1,5 @@
 {
-  "name": "MRax development",
+  "name": "MRax development (CPU)",
   "build": {
     "dockerfile": "../docker/Dockerfile.dev",
     "context": ".."
@@ -7,9 +7,6 @@
   "remoteUser": "dev",
   "workspaceFolder": "/workspace",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-  "mounts": [
-    "source=${env:HOME}/.ssh,target=/home/dev/.ssh,type=bind"
-  ],
   "postCreateCommand": "python -m pip install -e '.[all,dev,docs,notebooks]'",
   "customizations": {
     "vscode": {

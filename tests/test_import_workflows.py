@@ -1,24 +1,63 @@
 import warnings
 
+import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
 from pydicom.sequence import Sequence
 from pydicom.tag import Tag
 from pydicom.uid import EnhancedMRImageStorage, ExplicitVRLittleEndian, MRImageStorage, generate_uid
 
+from mrax.core import make_model_callable
 from mrax.data_struct import Quantity
 from mrax.gui import GuiSession
 from mrax.gui.app import _detect_import_vendor, _load_dicom_experiment_from_dialog
 from mrax.io import (
     discover_dicom_series,
-    load_bruker_experiment,
-    load_bruker_study,
+    import_bruker_experiment,
+    import_bruker_study,
+    import_pulseq_experiment,
     load_dicom_series,
     load_dicom_study,
-    load_pulseq_experiment,
 )
-from mrax.io.bruker_import import bruker_spatial_geometry
+from mrax.io.bruker_images import bruker_spatial_geometry
+from mrax.io.bruker_metadata import extract_observables
+from mrax.library.default_models import make_AB_MT_n_model, make_zaiss_full_model
+
+
+def test_bruker_experiment_accepts_string_paths(tmp_path):
+    _write_minimal_bruker_scan(tmp_path)
+    _, dataset, _, _ = import_bruker_experiment(str(tmp_path / "1"))
+    assert dataset.shape == (1, 2, 2)
+
+
+def test_bruker_study_discovers_standalone_exports_and_nonnumeric_experiment_names(tmp_path):
+    _write_minimal_bruker_scan(tmp_path)
+    exported = tmp_path / "exported_scan"
+    (tmp_path / "1").rename(exported)
+    for root in [tmp_path, exported]:
+        study, metadata = import_bruker_study(root, field_strength_mhz=100)
+        assert study.names == ["exported_scan"]
+        assert study.datasets[0].shape == (1, 2, 2)
+        assert not metadata["skipped_experiments"]
+
+
+def test_bruker_study_skips_missing_and_unsupported_acquisitions(tmp_path):
+    import shutil
+
+    _write_minimal_bruker_scan(tmp_path)
+    shutil.copytree(tmp_path / "1", tmp_path / "2")
+    (tmp_path / "2/pdata/1/visu_pars").unlink()
+    shutil.copytree(tmp_path / "1", tmp_path / "3")
+    (tmp_path / "3/acqp").write_text('##$ACQ_dim=2\n##$ACQ_size=( 2 )\n4 2\n##$NI=1\n##$NR=1\n##$GO_raw_data_format=UNSUPPORTED_SCALAR\n')
+    (tmp_path / "3/fid").write_bytes(bytes(16))
+    with pytest.warns(RuntimeWarning, match="skipped Bruker scan"):
+        study, metadata = import_bruker_study(tmp_path, field_strength_mhz=100)
+    assert study.names == ["1"]
+    assert set(metadata["skipped_experiments"]) == {"2", "3"}
+    assert metadata["skipped_experiments"]["2"]["reason"] == "missing_file"
+    assert metadata["skipped_experiments"]["3"]["reason"] == "import_failed"
 
 
 def _base_dicom_dataset(path, *, series_uid, sop_class_uid, instance_number=1):
@@ -387,7 +426,7 @@ def test_synthetic_bruker_study_import_workflow(tmp_path):
     root = tmp_path / "bruker"
     _write_minimal_bruker_scan(root)
 
-    study, metadata = load_bruker_study(
+    study, metadata = import_bruker_study(
         root,
         study_globals={"field_strength_mhz": Quantity(jnp.asarray(400.0), "MHz")},
         load_raw_kspace=False,
@@ -404,35 +443,162 @@ def test_synthetic_bruker_study_import_workflow(tmp_path):
     assert exp_meta["image_scaling"]["applied_to"] == "DataSet.data"
 
 
+@pytest.mark.parametrize("flag, expected", [
+    ("On", True), ("Off", False), ("<On>", True), ("<Off>", False),
+    ("true", True), ("false", False), ("YES", True), ("NO", False),
+    (True, True), (False, False), (1, True), (0, False),
+    (["Off"], False), (["On", "On"], True),
+])
+def test_bruker_spin_lock_metadata_is_preserved(flag, expected):
+    observables = extract_observables("sat_trans", {}, 1, {"SpinLock": flag})
+    spin_lock = observables["spin_lock"]
+    assert spin_lock.si_unit == "1"
+    assert spin_lock.shape == ()
+    assert spin_lock.values.dtype == jnp.bool_
+    assert bool(spin_lock.values) is expected
+
+
+@pytest.mark.parametrize("flag", ["unknown", 2, [], ["On", "Off"]])
+def test_bruker_invalid_spin_lock_metadata_is_rejected(flag):
+    with pytest.raises(ValueError, match="SpinLock.*Boolean"):
+        extract_observables("sat_trans", {}, 1, {"SpinLock": flag})
+
+
+def test_bruker_missing_spin_lock_metadata_keeps_model_default():
+    assert "spin_lock" not in extract_observables("sat_trans", {}, 1, {})
+    assert "spin_lock" not in extract_observables("mse", {}, 1, {"SpinLock": "On"})
+
+
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
+@pytest.mark.parametrize("factory", [make_AB_MT_n_model, make_zaiss_full_model])
+@pytest.mark.parametrize("flag, enabled", [("On", True), ("Off", False)])
+def test_imported_bruker_spin_lock_selects_model_projection(tmp_path, backend, factory, flag, enabled):
+    try:
+        device = jax.devices(backend)[0]
+    except RuntimeError:
+        pytest.skip(f"{backend} backend is unavailable")
+    root = tmp_path / "bruker"
+    _write_minimal_bruker_scan(root)
+    (root / "1" / "method").write_text(
+        f"##TITLE=method\n##$Method=<CEST>\n##$SpinLock=<{flag}>\n##END=\n",
+        encoding="utf-8",
+    )
+    model = factory(pools=[])
+    experiment, _, _, _ = import_bruker_experiment(root / "1", model_map_by_type={"sat_trans": model})
+    assert experiment.exp_type == "sat_trans"
+    assert bool(experiment.observables["spin_lock"].values) is enabled
+    experiment = experiment.insert_observables({
+        "field_strength_mhz": Quantity(400.0, "MHz"),
+        "sat_b1": Quantity(2.0, "uT"),
+        "sat_time": Quantity(0.0, "ms"),
+        "TR": Quantity(1000.0, "ms"),
+        "r1_map": Quantity(jnp.ones(experiment.spatial_shape), "1/s"),
+    })
+    params, unpack = model.parametrization_factory(experiment.spatial_shape)
+    fields = unpack(params)
+    if model.name == "ab_mt_n":
+        fields["t_delay"] = jnp.zeros(experiment.spatial_shape)
+        fields["sin_a_eff"] = jnp.full(experiment.spatial_shape, np.sqrt(0.5))
+    model_fn = jax.jit(make_model_callable(experiment, model))
+    fields = jax.device_put(fields, device)
+    for offset in (0.0, 1.0):
+        offsets = jax.device_put(jnp.asarray([offset]), device)
+        result = model_fn(fields, offsets)
+        assert result.device == device
+        omega1 = 2.0 * np.pi * 42.58 * 2.0 / 400.0
+        expected = 1.0 if enabled else (2.0 * np.pi * offset)**2 / (
+            (2.0 * np.pi * offset)**2 + omega1**2 + 1e-8)
+        np.testing.assert_allclose(result, expected, rtol=2e-6, atol=2e-7)
+
+
 def test_bruker_multicycle_slice_stack_sorts_vendor_images_and_raw_kspace(tmp_path):
     scan, expected_images = _write_multicycle_bruker_slice_scan(tmp_path / "bruker")
 
-    experiment, dataset, _, metadata = load_bruker_experiment(scan, load_raw_kspace=True)
+    experiment, dataset, _, metadata = import_bruker_experiment(scan, load_raw_kspace=True)
 
     assert experiment.dims == {"frame": 3, "x": 3, "y": 2, "z": 2}
     np.testing.assert_allclose(np.asarray(dataset.data), expected_images)
-    assert dataset.kspace.shape == (3, 2, 2, 2, 3)
-    assert metadata["raw_reconstruction"]["kspace_layout"] == [
-        "frame",
-        "coil",
-        "z",
-        "ky",
-        "kx",
-    ]
-    assert metadata["raw_reconstruction"]["sample_sorting"]["sample_order"] == (
-        "pv360_repetition_phase_slice_channel_read"
-    )
+    assert dataset.kspace.shape == (6, 2, 2, 3)
+    assert dataset.acquisition.samples.shape == dataset.kspace.shape
+    assert metadata["raw_import"]["reconstruction_status"] == "not_run"
+    assert "raw_reconstruction" not in (dataset.processed or {})
+    from mrax.reco import reconstruct_acquisition
+
+    result = reconstruct_acquisition(dataset.acquisition)
     np.testing.assert_allclose(
-        np.asarray(dataset.processed["raw_reconstruction"]),
+        np.asarray(result.image),
         expected_images,
         rtol=1e-5,
         atol=1e-5,
     )
-    coil_images = np.asarray(dataset.processed["raw_reconstruction_coils"])
+    coil_images = np.asarray(result.coil_images)
     assert coil_images.shape == (3, 2, 3, 2, 2)
     assert np.iscomplexobj(coil_images)
     np.testing.assert_allclose(np.abs(coil_images[:, 0]), expected_images, rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(coil_images[:, 1], 0.0, atol=1e-6)
+
+
+def test_explicit_dicom_contrast_groups_sort_timings_and_reject_misalignment(tmp_path):
+    from pydicom import dcmread
+
+    from mrax.io import import_pulseq_study, load_dicom_study
+
+    uids = [generate_uid() for _ in range(3)]
+    expected = []
+    for echo in range(3):
+        slices = []
+        for plane in range(2):
+            pixels = _write_classic_dicom_slice(tmp_path / f'{2-echo}_{plane}.dcm',
+                series_uid=uids[echo], echo_index=echo, slice_index=plane)
+            slices.append(pixels * 2 + 5)
+        expected.append(np.stack(slices, axis=-1))
+    groups = {'decay': list(reversed(uids))}
+    study, metadata = load_dicom_study(tmp_path, series_groups=groups)
+    name, experiment, _model, dataset = next(study.iter_entries())
+    assert name == 'decay'
+    assert experiment.exp_type == 'mse'
+    assert dataset.spatial_geometry.status == 'known'
+    np.testing.assert_array_equal(experiment.observables['TE'].values, [10., 20., 30.])
+    np.testing.assert_array_equal(dataset.data, expected)
+    assert metadata['source_series_count'] == 3
+    combined, _ = import_pulseq_study(tmp_path, dicom_series_groups=groups)
+    assert len(combined.names) == 1
+    np.testing.assert_array_equal(next(combined.iter_entries())[-1].data, expected)
+    with pytest.raises(ValueError, match='selected more than once'):
+        load_dicom_study(tmp_path, series_groups={'a': uids, 'b': [uids[0]]})
+    changed = tmp_path / '0_0.dcm'
+    header = dcmread(changed)
+    header.ImagePositionPatient = [5., 0., 0.]
+    header.save_as(changed, enforce_file_format=True)
+    with pytest.raises(ValueError, match='geometry'):
+        load_dicom_study(tmp_path, series_groups=groups)
+
+
+def test_dicom_preparation_metadata_and_ima_discovery(tmp_path):
+    from pydicom.uid import generate_uid
+
+    from mrax.io import import_pulseq_study, load_dicom_series
+
+    uid = generate_uid()
+    for frame in range(3):
+        _write_classic_dicom_slice(tmp_path / f'frame_{frame}.IMA', series_uid=uid,
+            echo_index=frame, slice_index=0, description='Synthetic preparation')
+    sequence = tmp_path / 'preparation.seq'
+    sequence.write_text('[DEFINITIONS]\nName saturation\noffsets_ppm -2 0 2\nb1pa 2.5\ntsat 0.004\n')
+    study, metadata = import_pulseq_study(tmp_path,
+        sequence_map={'dicom:' + uid: sequence},
+        type_overrides={'dicom:' + uid: 'sat_trans'},
+        metadata_overrides={'dicom:' + uid: {'sat_b1_uT': [3.]}})
+    assert len(study.names) == 1 and not metadata['import_issues']
+    experiment = study.experiments[0]
+    experiment.validate(study.datasets[0])
+    np.testing.assert_array_equal(experiment.observables['freq_offsets'].values, [-2., 0., 2.])
+    np.testing.assert_array_equal(experiment.observables['sat_b1'].values, [3.])
+    np.testing.assert_array_equal(experiment.observables['sat_time'].values, [4.])
+    with pytest.raises(ValueError, match='Unknown normalized'):
+        load_dicom_series(tmp_path, metadata_overrides={'misspelled_time': [1.]})
+    with pytest.raises(ValueError, match='frame_count'):
+        load_dicom_series(tmp_path, metadata_overrides={'frame_count': 7})
 
 
 def test_standard_dicom_series_import_builds_mrax_experiment(tmp_path):
@@ -462,9 +628,9 @@ def test_standard_dicom_series_import_builds_mrax_experiment(tmp_path):
         np.asarray(metadata["affine"]),
         np.asarray(
             [
-                [-3.0, 0.0, 0.0, 0.0],
-                [0.0, -2.0, 0.0, 0.0],
-                [0.0, 0.0, 2.5, 0.0],
+                [0.0, -3.0, 0.0, 0.0],
+                [0.0, 0.0, -2.0, 0.0],
+                [2.5, 0.0, 0.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ]
         ),
@@ -719,7 +885,7 @@ def test_synthetic_pulseq_import_workflow(tmp_path):
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        experiment, dataset, model, metadata = load_pulseq_experiment(
+        experiment, dataset, model, metadata = import_pulseq_experiment(
             seq,
             image_data=image_data,
             spatial_shape=(2, 2),

@@ -11,7 +11,7 @@ launch the directory containing the downloaded notebook:
 
 .. code-block:: bash
 
-   pip install "mrax[notebooks,nufft,denoise-external]"
+   pip install "mrax[notebooks,denoise-external]"
    jupyter lab
 
 The upstream BM3D/BM4D packages permit non-commercial use only. Method references for

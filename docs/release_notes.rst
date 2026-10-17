@@ -1,10 +1,40 @@
 Release Notes
 =============
 
-Version 0.2.1
+Version 0.3.0
 -------------
 
-Released 2026-08-10.
+Highlights
+~~~~~~~~~~
+
+- Unified Bruker and Pulseq import with editable plans for FFT, variational and
+  model-based reconstruction.
+- Bruker import now includes PV 360 3.x and PV 6.0.1 support.
+- Expanded Pulseq support for MRD, Siemens, NIfTI and DICOM measurements, with
+  improved quantitative timing and frame alignment.
+- Built-in CPU/GPU JAX NUFFT replaces ``jax-finufft`` and the ``nufft`` extra,
+  with bounded workspace memory.
+- Improved FISTA and split Bregman optimizers. TV regularization selects FISTA
+  automatically; explicit Adam uses smoothed TV with a warning.
+- Fitting defaults to CPU and ROI-based normalization, with explicit device
+  selection. See :doc:`models` for regularizer-weight adjustments.
+- Reference-image forward fitting supports conventional and model-based fits,
+  with consistent loss scaling and reduced model-based memory use.
+- Portable ``.mrax`` bundles are the default study format. GUI saves show progress;
+  exports support multi-frame NIfTI and DICOM.
+- GUI import detects Bruker or Pulseq folders automatically. Improved plot axes,
+  elapsed-time display, ROI fitting and drawing, and GPU startup memory use.
+
+API changes: replace ``load_bruker_*`` with ``import_bruker_*``. Pulseq raw import
+uses ``read_pulseq_acquisition``. Reconstruct explicitly with
+``reconstruct_acquisition`` or ``ReconstructionPipeline``; these replace
+``RecoPipeline``/``RecoState`` and the separate FFT/regridding helpers.
+Configure reconstruction and cropping in the plan; import options
+``prefer_raw_image``, ``reco_pipeline`` and ``slice_crop_mode`` are removed.
+Low-level solvers are ``solve_variational`` and ``solve_model_based``.
+
+Version 0.2.1
+-------------
 
 Bug fixes
 ~~~~~~~~~
@@ -16,8 +46,6 @@ Bug fixes
 
 Version 0.2.0
 -------------
-
-Released 2026-08-08.
 
 Highlights
 ~~~~~~~~~~

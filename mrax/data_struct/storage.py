@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import warnings
 from pathlib import Path
 from typing import Any, Dict
@@ -412,7 +413,8 @@ def _nifti_params_from_metadata(
     if "VisuCoreSize" not in visu or "VisuCoreExtent" not in visu:
         return geometry_params
     try:
-        from mrax.io.bruker_import import bruker_affine_from_visu, bruker_word_dtype
+        from mrax.io.bruker_images import bruker_affine_from_visu
+        from mrax.io.bruker_parameters import bruker_word_dtype
     except Exception:
         return geometry_params
 
@@ -487,6 +489,7 @@ def _save_volume_slices(
     file_extension: str,
     group: str,
     subdir: str,
+    progress_callback=None,
 ) -> list[dict[str, object]]:
     """Write per-observable slices to individual ISMRMRD files."""
     dim_names = list(experiment.dims.keys())
@@ -508,6 +511,8 @@ def _save_volume_slices(
 
     slices: list[dict[str, object]] = []
     for obs_idx in np.ndindex(*obs_sizes):
+        if progress_callback:
+            progress_callback(len(slices), max(1, int(np.prod(obs_sizes))), f"Writing image frame {len(slices) + 1}/{int(np.prod(obs_sizes))}")
         # obs_idx empty tuple when there are no observables.
         idx_map: dict[str, int] = {}
         slicespec = [slice(None)] * array.ndim
@@ -699,8 +704,28 @@ def save_study_results(
     file_extension: str = ".mrd",
     experiment_metadata: dict[str, Any] | None = None,
     save_nifti: bool = False,
+    *,
+    bundle: bool = True,
+    progress_callback=None,
 ):
-    """Persist study inputs/outputs to disk with a manifest that links files."""
+    """Save a portable .mrax bundle; use bundle=False for a manifest folder."""
+    if bundle:
+        from mrax.io.bundle import write_bundle
+
+        target = Path(output_dir)
+        if target.suffix.lower() != ".mrax":
+            target = target / f"{Path(study_name).name}.mrax"
+        with tempfile.TemporaryDirectory(prefix="mrax_save_") as temporary:
+            def preparation(current, total, message):
+                if progress_callback:
+                    progress_callback(current, 2 * total, message)
+            save_study_results(study, results, temporary, study_name, targets, file_extension,
+                               experiment_metadata, save_nifti, bundle=False, progress_callback=preparation)
+            def compression(current, total, message):
+                if progress_callback:
+                    progress_callback(total + current, 2 * total, message)
+            write_bundle(target, temporary, progress_callback=compression)
+        return target
 
     if not file_extension.startswith("."):
         raise ValueError("file_extension must start with '.' (e.g., '.mrd' or '.h5')")
@@ -730,7 +755,9 @@ def save_study_results(
     required_names = set(order)
     entry_map = study.entries_by_name()
 
-    for name in order:
+    for position, name in enumerate(order):
+        if progress_callback:
+            progress_callback(position, max(1, len(order)), f"Saving experiment {position + 1}/{len(order)}")
         if name not in required_names or name not in entry_map:
             continue
 
@@ -761,6 +788,7 @@ def save_study_results(
                     file_extension=file_extension,
                     group="image",
                     subdir="mr_images",
+                    progress_callback=(lambda current, total, detail, position=position: progress_callback(1000 * position + int(800 * current / max(1, total)), 1000 * max(1, len(order)), detail)) if progress_callback else None,
                 )
         except Exception as exc:
             _record_skipped_experiment(manifest, str(name), "mr_image", exc)
@@ -769,7 +797,7 @@ def save_study_results(
         nifti_paths: dict[str, object] = {}
         if save_nifti and not is_non_imaging:
             try:
-                from mrax.io.nifti import export_nifti_series, save_nifti
+                from mrax.io.nifti import export_nifti_series
 
                 nifti_root = exp_dir / "nifti"
                 nifti_params = _nifti_params_from_metadata(experiment_to_use, extra_meta, dataset)
@@ -789,16 +817,17 @@ def save_study_results(
                 if affine_map is None:
                     affine_map = np.eye(4, dtype=float)
 
-                nifti_map_paths: Dict[str, str] = {}
+                nifti_map_paths: dict[str, str | list[str]] = {}
                 for field_name, arr in result_map.get(name, {}).get("fields", {}).items():
                     data = arr.values if isinstance(arr, Quantity) else arr
                     data = np.asarray(data)
-                    if data.ndim not in (2, 3):
-                        continue
                     map_path = nifti_root / "fitted_maps" / f"{field_name}.nii"
                     _ensure_parent(map_path)
-                    save_nifti(map_path, data, affine_map)
-                    nifti_map_paths[field_name] = _relative(map_path, base)
+                    from mrax.io.image_export import export_image_files
+                    exported = export_image_files(map_path, data, dims=experiment_to_use.dims,
+                                                  affine=affine_map, geometry=dataset.spatial_geometry)
+                    paths = [_relative(path, base) for path in exported]
+                    nifti_map_paths[field_name] = paths[0] if len(paths) == 1 else paths
                 if nifti_map_paths:
                     nifti_paths["fitted_maps"] = nifti_map_paths
             except Exception as exc:
@@ -806,7 +835,7 @@ def save_study_results(
 
         kspace_slices: list[dict[str, object]] = []
         kspace_save_shape: list[int] | None = None
-        if getattr(dataset, "kspace", None) is not None:
+        if getattr(dataset, "kspace", None) is not None and dataset.acquisition is None:
             try:
                 if is_non_imaging:
                     kspace_save_shape = list(np.asarray(dataset.kspace).shape)
@@ -897,6 +926,8 @@ def save_study_results(
 
         entry_meta = {
             "model": model.name,
+            "model_parameter_specs": _metadata_to_jsonable(getattr(model, "parameter_specs", None) or
+                getattr(model.parametrization_factory, "parameter_specs", {})),
             "exp_type": experiment_to_use.exp_type,
             "dataset_name": dataset.name,
             "dims": experiment.dims,
@@ -913,6 +944,13 @@ def save_study_results(
             "fitted_map_units": fitted_units,
             "plots": {},
         }
+        if dataset.acquisition is not None:
+            from mrax.io.acquisition import save_acquisition
+
+            acquisition_path = exp_dir / "acquisition.npz"
+            save_acquisition(acquisition_path, dataset.acquisition)
+            entry_meta["paths"]["acquisition"] = _relative(acquisition_path, base)
+            entry_meta["shapes"]["raw_kspace"] = list(dataset.acquisition.samples.shape)
         geometry = getattr(dataset, "spatial_geometry", None)
         if geometry is None and experiment_to_use.spatial_shape and not is_non_imaging:
             geometry = SpatialGeometry(
@@ -944,6 +982,8 @@ def save_study_results(
     with open(base / MANIFEST_NAME, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
 
+    if progress_callback:
+        progress_callback(max(1, len(order)), max(1, len(order)), "Study data written")
     return base / MANIFEST_NAME
 
 
@@ -951,6 +991,23 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
     """Load study manifest plus arrays from ISMRMRD files."""
 
     manifest_file = Path(manifest_path)
+    if manifest_file.suffix.lower() == ".mrax":
+        from mrax.io.bundle import extract_bundle
+
+        with tempfile.TemporaryDirectory(prefix="mrax_load_") as temporary:
+            root = extract_bundle(manifest_file, temporary)
+            package = root / "mrax_package.json"
+            if package.is_file():
+                entries = json.loads(package.read_text()).get("entries", {})
+                relative = entries.get("study_manifest")
+                manifest = _resolve_manifest_path(root, relative, label="study") if relative else None
+            else:
+                manifest = root / MANIFEST_NAME
+            if manifest is None or not manifest.is_file():
+                raise ValueError("MRax bundle does not contain a study")
+            return load_study_results(manifest)
+    if manifest_file.is_dir():
+        manifest_file = manifest_file / MANIFEST_NAME
     with open(manifest_file, "r", encoding="utf-8") as f:
         manifest = json.load(f)
 
@@ -1043,6 +1100,13 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
             warn_skipped(f"{name}/raw_kspace: {type(exc).__name__}: {exc}")
             kspace = None
 
+        acquisition = None
+        if paths.get("acquisition"):
+            from mrax.io.acquisition import load_acquisition
+
+            acquisition = load_acquisition(_resolve_manifest_path(base, paths["acquisition"], label="acquisition"))
+            kspace = acquisition.samples
+
         fitted_maps = {}
         fitted_shapes = shapes.get("fitted_maps", {})
         fitted_units = entry.get("fitted_map_units", {})
@@ -1088,9 +1152,11 @@ def load_study_results(manifest_path: str | Path) -> dict[str, Any]:
         experiments[name] = {
             "mr_image": mr_image,
             "raw_kspace": kspace,
+            "acquisition": acquisition,
             "fitted_maps": fitted_maps,
             "processed": processed,
             "model": entry.get("model"),
+            "model_parameter_specs": entry.get("model_parameter_specs", {}),
             "exp_type": entry.get("exp_type"),
             "data_role": (entry.get("extra_metadata") or {}).get("data_role") or entry.get("exp_type"),
             "observable_units": entry.get("observable_units", {}),

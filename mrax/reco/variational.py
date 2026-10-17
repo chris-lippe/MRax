@@ -7,6 +7,7 @@ that reuse the project's Optax/proximal tooling.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any, Callable, Literal, Sequence
 
 import jax
@@ -25,11 +26,14 @@ from mrax.core.loss_builder import (
     _flatten_to_frames,
     _frame_mask_from_observables,
     _mask_fields_for_output,
+    _mask_for_regularized_field,
     _masked_rms,
     _normalize_constant_dims,
     _prepare_frame_mask,
     _prepare_mask_arrays,
     _reduce_mask_to_field,
+    _rescale_previous_signal,
+    _resolve_globals,
     _sanitize_observables,
     make_model_callable,
     warn_if_fit_requires_model_override,
@@ -38,12 +42,9 @@ from mrax.data_struct.dimensions import expand_observables_to_frames
 from mrax.data_struct.experiment import Experiment
 from mrax.data_struct.model import Model
 from mrax.data_struct.quantity import Quantity, attach_units, require_quantity_dict
+from mrax.devices import DeviceLike, bind_device, device_function, jit_on_device
 from mrax.opt.optimizers import make_optimizer
-
-try:  # Runtime dependency; keep this lazy so import-time errors stay localized.
-    import jax_finufft
-except Exception:  # pragma: no cover - exercised via skipif tests
-    jax_finufft = None  # type: ignore[assignment]
+from mrax.reco.nufft import NUFFTPlan, prepare_nufft
 
 Array = jnp.ndarray
 
@@ -62,6 +63,7 @@ class RegridApodizationCorrection:
     full_shape: tuple[int, ...] | None = None
     crop_offset: tuple[int, ...] | None = None
     strength: float = 1.0
+    normalization: str = "relative"
 
 
 def fftnc(x: Array, axes: Sequence[int] = (-2, -1)) -> Array:
@@ -95,8 +97,7 @@ def _as_mask(mask: Array | np.ndarray | None, spatial_shape: tuple[int, ...]) ->
         leading_shape = mask_arr.shape[:-spatial_ndim]
         if all(int(s) == 1 for s in leading_shape):
             return mask_arr.reshape(spatial_shape)
-        lead_axes = tuple(range(mask_arr.ndim - spatial_ndim))
-        return jnp.any(mask_arr != 0, axis=lead_axes)
+        return mask_arr
     raise ValueError(f"mask shape {tuple(mask_arr.shape)} does not match spatial shape {spatial_shape}")
 
 
@@ -116,21 +117,21 @@ def _coerce_reference_image(reference_image: Array | np.ndarray, spatial_shape: 
     return ref
 
 
-def _infer_spatial_shape_from_kspace(kspace: Array | np.ndarray) -> tuple[int, int]:
-    k = np.asarray(kspace)
-    if k.ndim < 2:
-        raise ValueError("kspace must be at least 2D for Cartesian reconstruction")
-    return (int(k.shape[-2]), int(k.shape[-1]))
+def _infer_spatial_shape_from_kspace(kspace: Array | np.ndarray, spatial_ndim: int = 2) -> tuple[int, ...]:
+    shape = np.shape(kspace)
+    if len(shape) < spatial_ndim:
+        raise ValueError("K-space has fewer dimensions than the declared encoding axes")
+    return tuple(int(n) for n in shape[-spatial_ndim:])
 
 
 def _has_coils_cartesian(
     kspace: Array | np.ndarray, spatial_shape: tuple[int, ...], sensitivities: Array | np.ndarray | None
 ) -> bool:
-    k = np.asarray(kspace)
+    dimensions = np.ndim(kspace)
     if sensitivities is not None:
         return True
     # Heuristic: (.., coils, *spatial) must have at least one extra dim beyond spatial.
-    return k.ndim >= len(spatial_shape) + 2
+    return dimensions >= len(spatial_shape) + 2
 
 
 def _ensure_coil_axis(
@@ -223,8 +224,10 @@ def _kaiser_bessel_deapodization_1d(
     kernel_width: float,
     shape_parameter: float,
     strength: float,
+    normalization: str = "relative",
 ) -> Array:
     """Approximate deapodization for a Kaiser-Bessel gridding kernel."""
+    from jax.scipy.special import i0e
 
     if output_size <= 0 or full_size <= 0:
         raise ValueError("deapodization sizes must be positive")
@@ -234,17 +237,25 @@ def _kaiser_bessel_deapodization_1d(
         return jnp.ones((int(output_size),), dtype=jnp.float32)
 
     idx = jnp.arange(int(offset), int(offset) + int(output_size), dtype=jnp.float32)
-    u = (idx - (float(full_size) / 2.0)) / float(full_size)
+    u = (idx - (int(full_size) // 2)) / float(full_size)
     arg = beta**2 - (np.pi * width * u) ** 2
     sqrt_pos = jnp.sqrt(jnp.maximum(arg, 0.0))
     sqrt_neg = jnp.sqrt(jnp.maximum(-arg, 0.0))
-    pos = jnp.sinh(sqrt_pos) / jnp.where(sqrt_pos > 1e-6, sqrt_pos, 1.0)
-    neg = jnp.sin(sqrt_neg) / jnp.where(sqrt_neg > 1e-6, sqrt_neg, 1.0)
+    scaled_sinh = (jnp.exp(sqrt_pos - beta) - jnp.exp(-sqrt_pos - beta)) / (2 * jnp.maximum(sqrt_pos, 1e-6))
+    pos = jnp.where(sqrt_pos > 1e-6, scaled_sinh, jnp.exp(-beta)) / i0e(beta)
+    neg = jnp.sinc(sqrt_neg / np.pi) * jnp.exp(-beta) / i0e(beta)
     response = jnp.where(arg >= 0.0, pos, neg)
-    response = response / jnp.maximum(jnp.max(jnp.abs(response)), 1e-6)
+    dc_response = -jnp.expm1(-2 * beta) / (2 * beta * i0e(beta))
+    response = response / dc_response
     correction = 1.0 / jnp.maximum(jnp.abs(response), 1e-3)
     if float(strength) != 1.0:
         correction = correction ** float(strength)
+    if normalization == "inverse_fft":
+        kernel_integral = width * dc_response
+        correction *= (full_size / kernel_integral)**float(strength)
+    elif normalization != "relative":
+        raise ValueError("Deapodization normalization must be relative or inverse_fft")
+    correction *= jnp.where(response < 0, -1., 1.)
     return correction.astype(jnp.float32)
 
 
@@ -273,6 +284,7 @@ def _apply_regrid_apodization_correction(
             kernel_width=float(correction.kernel_width),
             shape_parameter=float(correction.shape_parameter),
             strength=float(correction.strength),
+            normalization=correction.normalization,
         )
         reshape = (1,) * (arr.ndim - spatial_ndim + axis) + (int(out),) + (1,) * (spatial_ndim - axis - 1)
         corrected = corrected * corr_1d.reshape(reshape)
@@ -283,7 +295,9 @@ def _ellipse_mask(shape: tuple[int, ...], radius: float = 1.0) -> Array:
     spatial_shape = tuple(int(v) for v in shape)
     dist = jnp.zeros(spatial_shape, dtype=jnp.float32)
     for axis, size in enumerate(spatial_shape):
-        coords = (jnp.arange(int(size), dtype=jnp.float32) + 0.5 - size / 2.0) / (size / 2.0)
+        # Spatial support shares the centered Fourier grid's DC origin. A
+        # half-pixel offset clips different voxels on opposite boundaries.
+        coords = (jnp.arange(int(size), dtype=jnp.float32) - size // 2) / (size / 2.0)
         reshape = (1,) * axis + (int(size),) + (1,) * (len(spatial_shape) - axis - 1)
         dist = dist + coords.reshape(reshape) ** 2
     return (dist <= float(radius) ** 2).astype(jnp.float32)
@@ -311,7 +325,7 @@ def checkerboard_phase(shape: tuple[int, ...]) -> Array:
 
     This is useful after FFT-style reconstructions when a scanner convention or gridding
     path leaves the image on the opposite centered-grid parity. It is the public version
-    of the phase step optionally used by :func:`reconstruct_regrid`.
+    of the optional phase step in the acquisition recipe.
     """
 
     return _checkerboard(tuple(int(v) for v in shape))
@@ -384,7 +398,7 @@ def combine_coil_images(
     method:
         ``"sum"`` for direct complex summation, ``"rss"`` for magnitude RSS, or
         ``"sense"`` for sensitivity-weighted combination. ``"sense"`` falls back to
-        sum when sensitivities are not supplied, matching :func:`reconstruct_regrid`.
+        sum when sensitivities are not supplied.
     sensitivities:
         Optional ``(coil, *spatial)`` sensitivity map for SENSE combination.
     coil_axis:
@@ -560,6 +574,7 @@ def regrid_nearest(
     grid_shape: tuple[int, ...],
     *,
     density: Array | None = None,
+    normalize_occupancy: bool = False,
 ) -> tuple[Array, Array]:
     """Nearest-neighbor regridding for non-Cartesian samples.
 
@@ -590,11 +605,11 @@ def regrid_nearest(
         raise ValueError("density must have shape (num_samples,)")
 
     coords = (traj + 0.5) * jnp.asarray(shape, dtype=jnp.float32)
-    coords = jnp.floor(coords).astype(jnp.int32)
+    coords = jnp.floor(coords + .5).astype(jnp.int32)
     flat_idx = jnp.zeros((m,), dtype=jnp.int32)
     stride = 1
     for axis in range(len(shape) - 1, -1, -1):
-        idx = jnp.clip(coords[:, axis], 0, shape[axis] - 1)
+        idx = jnp.mod(coords[:, axis], shape[axis])
         flat_idx = flat_idx + idx * int(stride)
         stride *= int(shape[axis])
 
@@ -610,126 +625,34 @@ def regrid_nearest(
 
     grid = grid_flat.reshape(leading_shape + shape)
     weights = weights_flat.reshape(shape)
-    denom = jnp.where(weights == 0, 1.0, weights)
-    grid = grid / denom
+    if normalize_occupancy:
+        grid = grid / jnp.where(weights == 0, 1.0, weights)
     return grid, weights
 
 
-def reconstruct_regrid(
-    kspace_samples: Array | np.ndarray,
-    trajectory: Array | np.ndarray,
-    *,
-    spatial_shape: tuple[int, ...],
-    sensitivities: Array | np.ndarray | None = None,
-    density: Array | np.ndarray | None = None,
-    grid_shape: tuple[int, ...] | None = None,
-    crop_offset: tuple[int, ...] | None = None,
-    phase_correction: Literal["none", "checkerboard"] | None = None,
-    apodization_correction: RegridApodizationCorrection | None = None,
-    image_mask: str | Array | np.ndarray | None = None,
-    coil_combine: Literal["sum", "rss", "sense"] = "sense",
-    magnitude: bool = False,
-    return_coils: bool = False,
-    axes: Sequence[int] | None = None,
-) -> Array:
-    """Quick non-Cartesian reconstruction via regridding + IFFT (not iterative).
-
-    If ``density`` is omitted, a simple radial density compensation (:math:`|k|`) normalized
-    to sum to the number of spatial pixels is applied. Pass
-    ``density=np.ones(num_samples)`` to disable.
-
-    Optional arguments expose common vendor-style gridding post-processing without
-    changing the default MRax path:
-
-    - ``grid_shape`` can reconstruct on an oversampled grid before cropping to
-      ``spatial_shape``.
-    - ``phase_correction="checkerboard"`` applies a :math:`\\pi` phase alternation
-      on all spatial image axes.
-    - ``apodization_correction`` applies a separable Kaiser-Bessel deapodization.
-    - ``image_mask="ellipse"`` masks the final image support.
-    - ``coil_combine="rss"`` uses root-sum-of-squares coil combination.
-    - ``return_coils=True`` returns the complex coil images before combination in
-      ``(batch, coil, *spatial)`` layout.
-    """
-
-    y = jnp.asarray(kspace_samples)
-    traj = jnp.asarray(trajectory)
-    output_shape = tuple(int(v) for v in spatial_shape)
-    spatial_ndim = len(output_shape)
-    if spatial_ndim not in (2, 3):
-        raise ValueError("reconstruct_regrid supports 2D or 3D spatial shapes")
-    if traj.ndim != 2 or int(traj.shape[1]) != spatial_ndim:
-        raise ValueError("trajectory dimensionality must match spatial_shape")
-    sens = None if sensitivities is None else jnp.asarray(sensitivities)
-    combine = str(coil_combine).lower()
-    if combine not in ("sum", "rss", "sense"):
-        raise ValueError("coil_combine must be one of 'sum', 'rss', or 'sense'")
-    if combine == "sense" and sens is None:
-        combine = "sum"
-    phase = "none" if phase_correction is None else str(phase_correction).lower()
-    if phase not in ("none", "checkerboard"):
-        raise ValueError("phase_correction must be None, 'none', or 'checkerboard'")
-
-    if y.ndim == 1:
-        y = y[None, :]
-    if y.ndim == 2 and sens is None:
-        # Treat as (batch, num_samples) for single-coil.
-        y = y[:, None, :]
-    if y.ndim == 2 and sens is not None:
-        # Treat as (coils, num_samples).
-        y = y[None, :, :]
-
-    if y.shape[-1] != traj.shape[0]:
-        raise ValueError("kspace_samples length does not match trajectory length")
-
-    dens = (
-        _default_density_from_trajectory(traj, spatial_shape=spatial_shape)
-        if density is None
-        else jnp.asarray(density)
-    )
-    target_grid_shape = tuple(int(v) for v in (grid_shape or output_shape))
-    transform_axes = tuple(range(-spatial_ndim, 0)) if axes is None else tuple(int(ax) for ax in axes)
-    grid, weights = regrid_nearest(y, traj, target_grid_shape, density=dens)
-    coil_images = ifftnc(grid, axes=transform_axes)
-    if phase == "checkerboard":
-        coil_images = coil_images * _checkerboard(target_grid_shape).reshape(
-            (1,) * (coil_images.ndim - spatial_ndim) + target_grid_shape
-        )
-    if target_grid_shape != output_shape:
-        coil_images = _center_crop_lastn(coil_images, output_shape, crop_offset)
-    if apodization_correction is not None:
-        coil_images = _apply_regrid_apodization_correction(coil_images, apodization_correction, output_shape)
-    coil_images = _apply_image_mask(coil_images, image_mask, output_shape)
-
-    if return_coils:
-        if np.asarray(kspace_samples).ndim == 1 and coil_images.shape[0] == 1:
-            return coil_images[0]
-        return coil_images
-
-    if combine == "rss":
-        combined = jnp.sqrt(jnp.sum(jnp.abs(coil_images) ** 2, axis=-(spatial_ndim + 1)))
-    elif combine == "sense":
-        combined = _coil_combine_sense(coil_images, sens, coil_axis=-(spatial_ndim + 1))
-    else:
-        combined = jnp.sum(coil_images, axis=-(spatial_ndim + 1))
-    if magnitude:
-        combined = jnp.abs(combined)
-    if kspace_samples is not None and np.asarray(kspace_samples).ndim in (1, 2) and combined.shape[0] == 1:
-        combined = combined[0]
-    return combined
 
 
 @dataclass(frozen=True)
 class MRIEncodingOperator:
-    """Encoding operator A for multi-coil MRI: y = M F S x (Cartesian) or NUFFT (non-Cartesian)."""
+    """Explicit encoding and its mathematical adjoint on a declared spatial grid."""
 
-    spatial_shape: tuple[int, int]
-    sensitivities: Array | None = None  # (coils, *spatial)
-    mask: Array | None = None  # (*spatial,) for Cartesian
-    trajectory: Array | None = None  # (num_samples, 2) with (kx, ky) in cycles/pixel for non-Cartesian
-    density: Array | None = None  # (num_samples,) optional weights for non-Cartesian
-    axes: tuple[int, int] = (-2, -1)
+    spatial_shape: tuple[int, ...]
+    sensitivities: Array | None = None
+    mask: Array | None = None
+    trajectory: Array | None = None
+    density: Array | None = None
+    axes: tuple[int, ...] = (-2, -1)
     nufft_eps: float = 1e-6
+    independent_coils: bool = False
+    readout_coordinates: Array | None = None
+    readout_polarity: Array | None = None
+    readout_phase: Array | None = None
+    nufft_plan: NUFFTPlan | None = dataclass_field(default=None, init=False, repr=False)
+
+    def __post_init__(self):
+        if self.trajectory is not None:
+            object.__setattr__(self, "nufft_plan", prepare_nufft(
+                self.spatial_shape, self.trajectory, eps=self.nufft_eps))
 
     @property
     def is_non_cartesian(self) -> bool:
@@ -737,382 +660,387 @@ class MRIEncodingOperator:
 
     @property
     def coil_count(self) -> int:
-        return 1 if self.sensitivities is None else int(self.sensitivities.shape[0])
+        return 1 if self.sensitivities is None else int(self.sensitivities.shape[-len(self.spatial_shape) - 1])
 
-    def _apply_mask(self, kspace: Array) -> Array:
+    def _apply_mask(self, kspace: Array, *, adjoint: bool = False) -> Array:
         if self.mask is None:
             return kspace
-        return kspace * self.mask
+        return kspace * (jnp.conj(self.mask) if adjoint else self.mask)
 
-    def forward(self, image: Array) -> Array:
-        """Apply A(image) -> k-space (shape: ``batch..., coils, *spatial`` or ``batch..., coils, num_samples``)."""
+    def _readout_transform(self, array, *, adjoint=False):
+        """A separable readout Fourier matrix and its exact conjugate transpose."""
+        size = self.spatial_shape[-1]
+        position = jnp.arange(size) - size // 2
+        coordinates = (jnp.broadcast_to(jnp.fft.fftshift(jnp.fft.fftfreq(size)), (2, size))
+                       if self.readout_coordinates is None else jnp.asarray(self.readout_coordinates))
+        matrix = jnp.exp(-2j * jnp.pi * coordinates[:, :, None] * position[None, None, :]) / np.sqrt(size)
+        negative = jnp.asarray(self.readout_polarity) < 0
+        phase = jnp.asarray(1., dtype=array.dtype)
+        if self.readout_phase is not None:
+            coefficients = jnp.asarray(self.readout_phase)
+            coefficients = coefficients.reshape(coefficients.shape[:-1] + (1,) * (array.ndim - coefficients.ndim) + (2,))
+            phase = jnp.exp(1j * (coefficients[..., 0, None] + coefficients[..., 1, None] * position / size))
+        if not adjoint:
+            positive = jnp.einsum("...n,mn->...m", array, matrix[0], precision=jax.lax.Precision.HIGHEST)
+            opposite = jnp.einsum("...n,mn->...m", array * phase, matrix[1], precision=jax.lax.Precision.HIGHEST)
+            return jnp.where(negative, opposite, positive)
+        positive = jnp.einsum("...m,mn->...n", jnp.where(negative, 0, array), jnp.conj(matrix[0]), precision=jax.lax.Precision.HIGHEST)
+        opposite = jnp.einsum("...m,mn->...n", jnp.where(negative, array, 0), jnp.conj(matrix[1]), precision=jax.lax.Precision.HIGHEST)
+        return positive + opposite * jnp.conj(phase)
 
+    def forward(self, image: Array, *, image_has_coils: bool | None = None) -> Array:
+        """Encode image batches; a receiver axis is always explicitly requested."""
         x = jnp.asarray(image)
-        if x.shape[-2:] != self.spatial_shape:
-            raise ValueError(
-                f"image spatial shape {tuple(x.shape[-2:])} does not match operator {self.spatial_shape}"
-            )
-
-        sens = None if self.sensitivities is None else jnp.asarray(self.sensitivities)
-        coil_count = 1 if sens is None else int(sens.shape[0])
-        input_has_coils = x.ndim >= 3 and int(x.shape[-3]) == coil_count
-        x_coils, _ = _ensure_coil_axis(x, has_coils=input_has_coils, spatial_ndim=2, coil_axis=-3)
-        if sens is not None and not input_has_coils:
-            x_coils = x_coils * sens  # broadcast over batch dims
-
-        if not self.is_non_cartesian:
-            kspace = fftnc(x_coils, axes=self.axes)
-            return self._apply_mask(kspace)
-
-        if jax_finufft is None:
-            raise ImportError(
-                "Non-Cartesian reconstruction requires 'jax-finufft' (jax_finufft). "
-                "Install it with `pip install 'mrax[nufft]'`."
-            )
-
-        nufft_norm = float(np.sqrt(np.prod(self.spatial_shape)))
-        traj = jnp.asarray(self.trajectory)
-        if traj.ndim != 2 or traj.shape[1] != 2:
-            raise ValueError("trajectory must have shape (num_samples, 2) for 2D NUFFT")
-        omega = (2.0 * jnp.pi) * traj.astype(jnp.float32)
-        kx = omega[:, 0]
-        ky = omega[:, 1]
-
-        # Collapse batch dims for FINUFFT and keep coil axis as broadcast dimension.
-        batch_shape = x_coils.shape[:-3]
-        batch = int(np.prod(batch_shape)) if batch_shape else 1
-        x_flat = x_coils.reshape((batch, x_coils.shape[-3]) + self.spatial_shape).astype(jnp.complex64)
-        kx_b = jnp.broadcast_to(kx[None, :], (batch, kx.shape[0]))
-        ky_b = jnp.broadcast_to(ky[None, :], (batch, ky.shape[0]))
-        samples = jax_finufft.nufft2(x_flat, kx_b, ky_b, iflag=-1, eps=float(self.nufft_eps))
-        out = samples.reshape(batch_shape + (x_coils.shape[-3], kx.shape[0]))
-        if nufft_norm > 0:
-            out = out / nufft_norm
-        return out
-
-    def adjoint(self, kspace: Array) -> Array:
-        """Apply A^H(kspace) -> combined image (shape: ``batch..., *spatial``)."""
-
-        y = jnp.asarray(kspace)
-
-        if not self.is_non_cartesian:
-            has_coils = _has_coils_cartesian(y, self.spatial_shape, self.sensitivities)
-            y_coils, added = _ensure_coil_axis(y, has_coils=has_coils, spatial_ndim=2, coil_axis=-3)
-            y_coils = self._apply_mask(y_coils)
-            coil_images = ifftnc(y_coils, axes=self.axes)
-            combined = _coil_combine_sense(coil_images, self.sensitivities, coil_axis=-3)
-            return combined
-
-        if jax_finufft is None:
-            raise ImportError(
-                "Non-Cartesian reconstruction requires 'jax-finufft' (jax_finufft). "
-                "Install it with `pip install 'mrax[nufft]'`."
-            )
-        nufft_norm = float(np.sqrt(np.prod(self.spatial_shape)))
-        traj = jnp.asarray(self.trajectory)
-        if traj.ndim != 2 or traj.shape[1] != 2:
-            raise ValueError("trajectory must have shape (num_samples, 2) for 2D NUFFT")
-
-        omega = (2.0 * jnp.pi) * traj.astype(jnp.float32)
-        kx = omega[:, 0]
-        ky = omega[:, 1]
-
-        # Normalize k-space shape to (..., coils, num_samples) when possible.
-        original_ndim = y.ndim
-        if y.ndim == 1:
-            y_coils = y[None, None, :]
-        elif y.ndim == 2 and self.sensitivities is None:
-            # Ambiguous case: treat as (batch, num_samples) for single-coil inputs.
-            y_coils = y[:, None, :]
-        elif y.ndim == 2:
-            # With sensitivities, treat the leading dimension as coils.
-            y_coils = y[None, :, :]
+        ndim = len(self.spatial_shape)
+        if tuple(x.shape[-ndim:]) != self.spatial_shape:
+            raise ValueError("Image shape does not match the encoding grid")
+        has_coils = self.independent_coils if image_has_coils is None else image_has_coils
+        if has_coils:
+            if x.ndim < ndim + 1:
+                raise ValueError("Explicit coil images require a receiver axis")
+            if self.sensitivities is not None and x.shape[-ndim - 1] != self.coil_count:
+                raise ValueError("Coil images do not match sensitivity receiver count")
+            coils = x
         else:
-            y_coils = y
+            coils = jnp.expand_dims(x, axis=-ndim - 1)
+            if self.sensitivities is not None:
+                coils = coils * jnp.asarray(self.sensitivities)
+        if not self.is_non_cartesian:
+            if self.readout_coordinates is not None or self.readout_phase is not None:
+                hybrid = fftnc(coils, axes=self.axes[:-1]) if len(self.axes) > 1 else coils
+                return self._apply_mask(self._readout_transform(hybrid))
+            return self._apply_mask(fftnc(coils, axes=self.axes))
+        assert self.nufft_plan is not None
+        return self.nufft_plan.forward(coils)
 
-        if y_coils.shape[-1] != kx.shape[0]:
-            raise ValueError("kspace sample count does not match trajectory length")
-        if self.density is not None:
-            w = jnp.asarray(self.density).astype(jnp.float32)
-            if w.shape != (kx.shape[0],):
-                raise ValueError("density must have shape (num_samples,)")
-            y_coils = y_coils * w
-
-        batch_shape = y_coils.shape[:-2]
-        batch = int(np.prod(batch_shape)) if batch_shape else 1
-        y_flat = y_coils.reshape((batch, y_coils.shape[-2], y_coils.shape[-1])).astype(jnp.complex64)
-        kx_b = jnp.broadcast_to(kx[None, :], (batch, kx.shape[0]))
-        ky_b = jnp.broadcast_to(ky[None, :], (batch, ky.shape[0]))
-        coil_images = jax_finufft.nufft1(
-            self.spatial_shape, y_flat, kx_b, ky_b, iflag=1, eps=float(self.nufft_eps)
-        )
-        if nufft_norm > 0:
-            coil_images = coil_images / nufft_norm
-        coil_images = coil_images.reshape(batch_shape + (y_coils.shape[-2],) + self.spatial_shape)
-        combined = _coil_combine_sense(coil_images, self.sensitivities, coil_axis=-3)
-        if original_ndim == 1 or (original_ndim == 2 and self.sensitivities is not None):
-            combined = combined[0]
-        return combined
+    def adjoint(
+        self, kspace: Array, *, kspace_has_coils: bool | None = None,
+        density_compensation: bool = False, normalize_sensitivities: bool = False,
+    ) -> Array:
+        """Apply the true adjoint; compensation and SENSE normalization are opt-in."""
+        y = jnp.asarray(kspace)
+        ndim = len(self.spatial_shape)
+        if not self.is_non_cartesian:
+            has_coils = (_has_coils_cartesian(y, self.spatial_shape, self.sensitivities)
+                         if kspace_has_coils is None else kspace_has_coils)
+            coils, _ = _ensure_coil_axis(y, has_coils=has_coils, spatial_ndim=ndim, coil_axis=-ndim - 1)
+            if self.readout_coordinates is not None or self.readout_phase is not None:
+                hybrid = self._readout_transform(self._apply_mask(coils, adjoint=True), adjoint=True)
+                images = ifftnc(hybrid, axes=self.axes[:-1]) if len(self.axes) > 1 else hybrid
+            else:
+                images = ifftnc(self._apply_mask(coils, adjoint=True), axes=self.axes)
+        else:
+            trajectory = jnp.asarray(self.trajectory)
+            if trajectory.ndim != 2 or trajectory.shape[1] != ndim:
+                raise ValueError("Trajectory columns must match encoding axes")
+            original_ndim = y.ndim
+            if y.ndim == 1:
+                coils = y[None, None, :]
+            elif y.ndim == 2 and self.sensitivities is None and kspace_has_coils is not True:
+                coils = y[:, None, :]
+            elif y.ndim == 2:
+                coils = y[None, :, :]
+            else:
+                coils = y
+            if coils.shape[-1] != len(trajectory):
+                raise ValueError("Samples do not match trajectory length")
+            complex_dtype = jnp.result_type(coils.dtype, jnp.complex64)
+            real_dtype = jnp.real(jnp.asarray(0, complex_dtype)).dtype
+            if density_compensation and self.density is not None:
+                coils = coils * jnp.asarray(self.density, dtype=real_dtype)
+            assert self.nufft_plan is not None
+            images = self.nufft_plan.adjoint(coils.astype(complex_dtype))
+            if original_ndim == 1 or (original_ndim == 2 and (self.sensitivities is not None or kspace_has_coils is True)):
+                images = images[0]
+        if self.independent_coils:
+            return images
+        if self.sensitivities is None:
+            return jnp.sum(images, axis=-ndim - 1)
+        sensitivities = jnp.asarray(self.sensitivities)
+        result = jnp.sum(images * jnp.conj(sensitivities), axis=-ndim - 1)
+        if normalize_sensitivities:
+            result = result / jnp.maximum(jnp.sum(jnp.abs(sensitivities) ** 2, axis=-ndim - 1), 1e-12)
+        return result
 
 
 def build_operator(
     *,
-    spatial_shape: tuple[int, int] | None = None,
+    spatial_shape: tuple[int, ...] | None = None,
     kspace: Array | np.ndarray | None = None,
     sensitivities: Array | np.ndarray | None = None,
     mask: Array | np.ndarray | None = None,
     trajectory: Array | np.ndarray | None = None,
     density: Array | np.ndarray | None = None,
-    axes: Sequence[int] = (-2, -1),
+    axes: Sequence[int] | None = None,
     nufft_eps: float = 1e-6,
+    independent_coils: bool = False,
+    readout_coordinates=None, readout_polarity=None, readout_phase=None,
 ) -> MRIEncodingOperator:
-    """Build a vendor-agnostic MRI encoding operator from generic inputs."""
-
-    if trajectory is None:
-        if spatial_shape is None:
-            if kspace is None:
-                raise ValueError("spatial_shape or kspace must be provided for Cartesian operators")
-            spatial_shape = _infer_spatial_shape_from_kspace(kspace)
-        mask_arr = _as_mask(mask, spatial_shape)
-        sens_arr = None if sensitivities is None else jnp.asarray(sensitivities)
-        if sens_arr is not None and tuple(sens_arr.shape[-2:]) != spatial_shape:
-            raise ValueError("sensitivities must have shape (coils, *spatial_shape)")
-        return MRIEncodingOperator(
-            spatial_shape=spatial_shape,
-            sensitivities=None if sens_arr is None else sens_arr,
-            mask=mask_arr,
-            trajectory=None,
-            density=None,
-            axes=tuple(int(ax) for ax in axes),
-            nufft_eps=float(nufft_eps),
-        )
-
+    """Build one explicit encoding operator for Cartesian or sampled inputs."""
     if spatial_shape is None:
-        raise ValueError("spatial_shape must be provided for non-Cartesian operators")
-    traj_arr = jnp.asarray(trajectory)
-    dens_arr = (
-        jnp.asarray(_default_density_from_trajectory(trajectory, spatial_shape=spatial_shape))
-        if density is None
-        else jnp.asarray(density)
-    )
-    sens_arr = None if sensitivities is None else jnp.asarray(sensitivities)
-    if sens_arr is not None and tuple(sens_arr.shape[-2:]) != spatial_shape:
-        raise ValueError("sensitivities must have shape (coils, *spatial_shape)")
+        if kspace is None or trajectory is not None:
+            raise ValueError("An explicit encoding grid is required")
+        spatial_shape = _infer_spatial_shape_from_kspace(kspace, len(axes) if axes is not None else 2)
+    spatial_shape = tuple(int(n) for n in spatial_shape)
+    if not 1 <= len(spatial_shape) <= 3 or any(n <= 0 for n in spatial_shape):
+        raise ValueError("Encoding grid must contain one to three positive dimensions")
+    if axes is None:
+        axes = tuple(range(-len(spatial_shape), 0))
+    elif kspace is not None:
+        axes = tuple(axis - np.ndim(kspace) if axis >= 0 else axis for axis in axes)
+    axes = tuple(int(axis) for axis in axes)
+    if set(axes) != set(range(-len(spatial_shape), 0)):
+        raise ValueError("Encoding axes must identify the trailing spatial grid")
+    if not np.isfinite(nufft_eps) or nufft_eps <= 0:
+        raise ValueError("nufft_eps must be finite and positive")
+    sens = None if sensitivities is None else jnp.asarray(sensitivities)
+    if sens is not None and (sens.ndim not in (len(spatial_shape) + 1, len(spatial_shape) + 2) or tuple(sens.shape[-len(spatial_shape):]) != spatial_shape):
+        raise ValueError("Sensitivities require an explicit receiver axis and matching grid")
+    points = None if trajectory is None else jnp.asarray(trajectory)
+    if points is not None and (points.ndim != 2 or points.shape[1] != len(spatial_shape)):
+        raise ValueError("Trajectory columns must match the encoding dimensions")
+    density_array = None if density is None else jnp.asarray(density)
+    if readout_coordinates is not None or readout_phase is not None:
+        if points is not None or readout_polarity is None:
+            raise ValueError("Readout Fourier calibration requires Cartesian phase axes and explicit polarities")
+        if readout_coordinates is not None:
+            checked_coordinates = np.asarray(readout_coordinates)
+            if checked_coordinates.shape != (2, spatial_shape[-1]) or not np.isfinite(checked_coordinates).all():
+                raise ValueError("Readout coordinates must contain finite positive/negative readout vectors")
+        if readout_phase is not None and (np.shape(readout_phase)[-1:] != (2,) or not np.isfinite(readout_phase).all()):
+            raise ValueError("Readout phase requires finite offset/slope pairs")
+        checked_polarity = np.asarray(readout_polarity)
+        if not np.isin(checked_polarity, [-1, 0, 1]).all() or not np.array_equal(checked_polarity,
+                np.broadcast_to(checked_polarity[..., :1], checked_polarity.shape)):
+            raise ValueError("Readout polarity must be constant along each readout")
+    if density_array is not None:
+        if points is None or density_array.shape != (len(points),):
+            raise ValueError("Density must match sampled trajectory length")
+        if not isinstance(density_array, jax.core.Tracer):
+            checked = np.asarray(density_array)
+            if not np.isfinite(checked).all() or np.any(checked < 0) or not np.any(checked > 0):
+                raise ValueError("Density must be finite, nonnegative and have positive support")
     return MRIEncodingOperator(
-        spatial_shape=spatial_shape,
-        sensitivities=None if sens_arr is None else sens_arr,
-        mask=None,
-        trajectory=traj_arr,
-        density=dens_arr,
-        axes=tuple(int(ax) for ax in axes),
-        nufft_eps=float(nufft_eps),
+        spatial_shape=spatial_shape, sensitivities=sens,
+        mask=_as_mask(mask, spatial_shape) if points is None else None,
+        trajectory=points, density=density_array, axes=axes,
+        nufft_eps=float(nufft_eps), independent_coils=independent_coils,
+        readout_coordinates=readout_coordinates, readout_polarity=readout_polarity,
+        readout_phase=readout_phase,
     )
 
 
-def reconstruct_ifft(
-    kspace: Array | np.ndarray,
-    *,
-    sensitivities: Array | np.ndarray | None = None,
-    mask: Array | np.ndarray | None = None,
-    axes: Sequence[int] = (-2, -1),
-) -> Array:
-    """Direct (zero-filled) reconstruction for Cartesian k-space via :math:`A^H y`."""
-
-    op = build_operator(kspace=kspace, sensitivities=sensitivities, mask=mask, axes=axes)
-    return op.adjoint(jnp.asarray(kspace))
 
 
-def reconstruct_variational(
-    kspace: Array | np.ndarray,
-    *,
-    spatial_shape: tuple[int, int] | None = None,
+@device_function
+def solve_variational(
+    kspace: Array | np.ndarray, *,
+    spatial_shape: tuple[int, ...] | None = None,
     sensitivities: Array | np.ndarray | None = None,
     mask: Array | np.ndarray | None = None,
     trajectory: Array | np.ndarray | None = None,
     density: Array | np.ndarray | None = None,
+    data_weights: Array | np.ndarray | None = None,
+    independent_coils: bool = False,
+    readout_coordinates=None, readout_polarity=None, readout_phase=None,
     frame_shifts: Array | np.ndarray | None = None,
-    frame_axis: int = 0,
-    shift_order: int = 1,
-    shift_mode: str = "constant",
-    shift_cval: float = 0.0,
-    optimizer_name: str = "fista",
-    step_size: float = 0.5,
+    frame_axis: int = 0, shift_order: int = 1,
+    shift_mode: str = "constant", shift_cval: float = 0.0,
+    optimizer_name: str | None = None, step_size: float | None = None,
     num_steps: int = 50,
     regularizer: Literal["none", "l2", "l1", "tv"] = "tv",
-    regularizer_weight: float = 0.01,
-    tv_iterations: int = 30,
-    nufft_eps: float = 1e-6,
+    regularizer_weight: float = 0.01, tv_iterations: int = 2048,
+    prox_tolerance: float = 1e-7, nufft_eps: float = 1e-6,
+    bregman_penalty: float | None = None,
     initial_image: Array | np.ndarray | None = None,
-    return_history: bool = False,
-    grad_clip_norm: float | None = None,
+    return_history: bool = False, grad_clip_norm: float | None = None,
+    device: DeviceLike = "cpu",
 ) -> tuple[Array, list[float]] | Array:
-    """Solve a variational reconstruction with Optax/proximal variants.
+    """Minimize a measured-sample mean squared error plus an image penalty.
 
-    Minimizes: :math:`\\tfrac12 \\|\\|A x - y\\|\\|_2^2 + R(x)`
-
-    - Cartesian operators use centered FFT and optional sampling masks.
-    - Non-Cartesian operators use FINUFFT (jax_finufft) when trajectory is provided.
-    - TV regularization uses a proper proximal operator (Chambolle) when
-      ``optimizer_name`` is ``"fista"`` or ``"split_bregman"``; otherwise TV is treated
-      as a differentiable penalty.
-    - If ``density`` is omitted for non-Cartesian data, a simple radial density
-      compensation (:math:`|k|`) normalized so the weights sum to the number of spatial
-      pixels is applied to the data term. Pass ``density=np.ones(num_samples)``
-      to disable.
-    - If ``frame_shifts`` is provided, the data term is built from per-frame shifted
-      images: ``y_i = A(shift(x, shift_i))``. Shifts are specified in index units
-      (row, col). In this mode, ``kspace`` must include a frame axis.
-    - For proximal solvers, the effective shrinkage threshold is
-      ``regularizer_weight * step_size``.
-    - Optional gradient clipping helps stabilize long iterative runs.
+    Sampling masks retain frame and receiver dimensions. Density compensation
+    only initializes the image; statistical likelihood weights are supplied
+    separately through ``data_weights``. TV defaults to objective-aware FISTA
+    with a certified proximal step. Explicit Adam with TV warns and smooths TV.
+    Spatial grids can have one, two or three dimensions.
     """
+    import warnings
+    from operator import index
 
+    from mrax.core.fit_execution import execute_optimizer
+    from mrax.core.tv_fit import make_tv_steps
+    from mrax.opt.tv import L1Operator, TVOperator
+
+    num_steps, tv_iterations = index(num_steps), index(tv_iterations)
+    if num_steps < 0 or tv_iterations < 1:
+        raise ValueError("num_steps must be nonnegative and tv_iterations positive")
+    if not np.isfinite(regularizer_weight) or regularizer_weight < 0:
+        raise ValueError("regularizer_weight must be finite and nonnegative")
+    if not np.isfinite(prox_tolerance) or prox_tolerance <= 0:
+        raise ValueError("prox_tolerance must be finite and positive")
+    if grad_clip_norm is not None and (not np.isfinite(grad_clip_norm) or grad_clip_norm <= 0):
+        raise ValueError("grad_clip_norm must be finite and positive")
+    reg = regularizer.lower()
+    if reg not in {"none", "l2", "l1", "tv"}:
+        raise ValueError(f"Unknown regularizer '{regularizer}'")
+    name = (optimizer_name or ("fista" if reg in {"tv", "l1"} and regularizer_weight else "adam")).lower()
+    if name == "bregman":
+        name = "split_bregman"
+    proximal = name in {"fista", "split_bregman"}
+    if reg in {"tv", "l1"} and regularizer_weight and not proximal:
+        warnings.warn(f"{name} uses a smoothed {reg.upper()} penalty; select FISTA or split_bregman for exact proximal regularization",
+                      UserWarning, stacklevel=2)
+    op = build_operator(spatial_shape=spatial_shape, kspace=kspace,
+        sensitivities=sensitivities, trajectory=trajectory, density=density,
+        nufft_eps=nufft_eps, independent_coils=independent_coils,
+        readout_coordinates=readout_coordinates, readout_polarity=readout_polarity, readout_phase=readout_phase)
+    ndim = len(op.spatial_shape)
     y = jnp.asarray(kspace)
-    op = build_operator(
-        spatial_shape=spatial_shape,
-        kspace=kspace,
-        sensitivities=sensitivities,
-        mask=mask,
-        trajectory=trajectory,
-        density=density,
-        nufft_eps=nufft_eps,
-    )
-    shifts_arr = None
-    if frame_shifts is not None:
-        shifts_arr = jnp.asarray(frame_shifts, dtype=jnp.float32)
-        if shifts_arr.ndim != 2 or shifts_arr.shape[1] != 2:
-            raise ValueError("frame_shifts must have shape (frames, 2)")
-        y = jnp.moveaxis(y, int(frame_axis), 0)
-        frame_count = int(y.shape[0])
-        if int(shifts_arr.shape[0]) != frame_count:
-            raise ValueError("frame_shifts length must match kspace frame axis")
-        y = _normalize_kspace_for_model(
-            y,
-            frame_count=frame_count,
-            coil_count=op.coil_count,
-            is_non_cartesian=op.is_non_cartesian,
-            sensitivities=op.sensitivities,
-        )
-        if not op.is_non_cartesian:
-            y = op._apply_mask(y)
+    if op.is_non_cartesian:
+        has_coils = independent_coils or (sensitivities is not None)
+        if y.ndim == 1:
+            y = y[None, :]
+        elif y.ndim == 2 and not has_coils:
+            y = y[:, None, :]
     else:
-        if not op.is_non_cartesian:
-            y = op._apply_mask(y)
+        has_coils = independent_coils or _has_coils_cartesian(y, op.spatial_shape, op.sensitivities)
+        if initial_image is not None and not has_coils:
+            initial = jnp.asarray(initial_image)
+            layout = jax.eval_shape(op.forward, jax.ShapeDtypeStruct(initial.shape, initial.dtype))
+            has_coils = layout.shape == y.shape
+        if not has_coils:
+            y = jnp.expand_dims(y, -ndim - 1)
+    if not independent_coils and y.shape[-(2 if op.is_non_cartesian else ndim + 1)] != op.coil_count:
+        raise ValueError("Multiple receivers require sensitivities or independent_coils=True")
+
+    def sample_weights(value, default):
+        if value is None:
+            return jnp.asarray(default, dtype=jnp.real(y).dtype)
+        array = jnp.asarray(value)
+        # Image-shaped frame masks acquire their missing receiver dimension.
+        if array.ndim == y.ndim - 1 and tuple(array.shape) == tuple(y.shape[:-ndim - 1] + y.shape[-ndim:]) and not op.is_non_cartesian:
+            array = jnp.expand_dims(array, -ndim - 1)
+        if np.broadcast_shapes(array.shape, y.shape) != y.shape:
+            raise ValueError("Sampling weights do not broadcast to measured samples")
+        checked = np.asarray(array)
+        if not np.isfinite(checked).all() or np.any(checked < 0):
+            raise ValueError("Sampling and statistical weights must be finite and nonnegative")
+        return array
+
+    weights = sample_weights(mask, 1) * sample_weights(data_weights, 1)
+    if not bool(jnp.any(weights > 0)):
+        raise ValueError("No acquired samples have positive weight")
+    if not bool(jax.jit(lambda data, weight: jnp.all(jnp.where(weight > 0, jnp.isfinite(data), True)))(y, weights)):
+        raise ValueError("Acquired samples must be finite")
+    weight_sum = jnp.sum(weights) * (int(np.prod(y.shape)) // int(np.prod(weights.shape)))
+    shifts = None
+    if frame_shifts is not None:
+        if ndim != 2 or independent_coils:
+            raise ValueError("Frame motion requires two-dimensional sensitivity-combined images")
+        shifts = jnp.asarray(frame_shifts)
+        full_weights = jnp.broadcast_to(weights, y.shape)
+        y = jnp.moveaxis(y, frame_axis, 0)
+        weights = jnp.moveaxis(full_weights, frame_axis, 0)
+        if shifts.shape != (y.shape[0], 2):
+            raise ValueError("frame_shifts must have shape (frames, 2)")
+
+    def shift_image(image, shift, *, cval=shift_cval):
+        return _shift_image_last2(image, shift, order=shift_order,
+            mode=shift_mode, cval=cval)
 
     if initial_image is None:
-        if shifts_arr is None:
-            x0 = op.adjoint(y)
-        else:
-            def _adjoint_one(y_frame, shift):
-                adj = op.adjoint(y_frame)
-                return _shift_image_last2(
-                    adj,
-                    -shift,
-                    order=shift_order,
-                    mode=shift_mode,
-                    cval=shift_cval,
-                )
-
-            x0 = jnp.mean(jax.vmap(_adjoint_one)(y, shifts_arr), axis=0)
+        backprojection = op.adjoint(jnp.where(weights > 0, y, 0), kspace_has_coils=True,
+            density_compensation=True, normalize_sensitivities=True)
+        x0 = (jnp.mean(jax.vmap(lambda image, shift: shift_image(image, -shift))(backprojection, shifts), axis=0)
+              if shifts is not None else backprojection)
     else:
-        x0 = jnp.asarray(initial_image)
-    if x0.shape[-2:] != op.spatial_shape:
-        raise ValueError("initial_image does not match spatial_shape")
+        x0 = jnp.asarray(initial_image, dtype=jnp.result_type(y.dtype, jnp.asarray(initial_image).dtype))
+    if tuple(x0.shape[-ndim:]) != op.spatial_shape:
+        raise ValueError("initial_image does not match the encoding grid")
+    if not bool(jnp.all(jnp.isfinite(x0))):
+        raise ValueError("initial_image must be finite")
 
-    reg = regularizer.lower()
-    if reg not in ("none", "l2", "l1", "tv"):
-        raise ValueError(f"Unknown regularizer '{regularizer}'")
-    reg_weight = float(regularizer_weight)
+    def encode(image, *, homogeneous=False):
+        if shifts is None:
+            return op.forward(image)
+        fill = 0. if homogeneous else shift_cval
+        return jax.vmap(lambda shift: op.forward(shift_image(image, shift, cval=fill)))(shifts)
 
-    def data_loss(x: Array) -> Array:
-        if shifts_arr is None:
-            pred = op.forward(x)
+    def data_loss(image):
+        prediction = encode(image)
+        if prediction.shape != y.shape:
+            raise ValueError("Encoded image layout does not match measured samples")
+        residual = jnp.where(weights > 0, prediction - y, 0)
+        return .5 * jnp.sum(weights * jnp.abs(residual)**2) / weight_sum
+
+    homogeneous_data_loss = None
+    if (sensitivities is not None and not independent_coils and not op.is_non_cartesian and shifts is None and
+            op.readout_coordinates is None and op.readout_phase is None and y.ndim in (ndim + 1, ndim + 2)):
+        from .cartesian_loss import cartesian_sense_loss
+
+        data_loss = cartesian_sense_loss(y, weights, op.sensitivities, op.spatial_shape)
+        homogeneous_data_loss = cartesian_sense_loss(y, weights, op.sensitivities, op.spatial_shape, homogeneous=True)
+
+    tv_operator = None
+    if reg == "tv" and regularizer_weight:
+        tv_operator = TVOperator.create(x0.shape, tuple(range(x0.ndim - ndim, x0.ndim)),
+            weight=float(regularizer_weight), dtype=jnp.real(x0).dtype)
+    if reg == "l1" and regularizer_weight:
+        tv_operator = L1Operator(jnp.full(x0.shape, regularizer_weight / x0.size, dtype=jnp.real(x0).dtype))
+    def penalty(image):
+        if tv_operator is not None:
+            return tv_operator.value(image, smoothed=not proximal)
+        return (regularizer_weight * jnp.mean(jnp.abs(image)**2) if reg == "l2" else jnp.asarray(0., jnp.real(image).dtype))
+    def objective(values):
+        return data_loss(values["image"]) + penalty(values["image"])
+    def smooth(values):
+        return data_loss(values["image"]) + (penalty(values["image"]) if tv_operator is None else 0)
+
+    if step_size is None:
+        if proximal:
+            l2_curvature = 2 * regularizer_weight / x0.size if reg == "l2" else 0.
+            if not op.is_non_cartesian and op.readout_coordinates is None and op.readout_phase is None and sensitivities is None and shifts is None:
+                # Unitary Fourier encoding diagonalizes the sample weights.
+                curvature = jnp.max(weights) / weight_sum + l2_curvature
+            else:
+                def homogeneous_loss(image):
+                    value = (homogeneous_data_loss(image) if homogeneous_data_loss is not None else
+                        .5 * jnp.sum(weights * jnp.abs(encode(image, homogeneous=True))**2) / weight_sum)
+                    return value + (regularizer_weight * jnp.mean(jnp.abs(image)**2) if reg == "l2" else 0)
+                gradient = jax.grad(homogeneous_loss)
+                direction = jax.random.rademacher(jax.random.key(0), x0.shape, dtype=jnp.real(x0).dtype).astype(x0.dtype)
+                if jnp.iscomplexobj(x0):
+                    direction += 1j * jax.random.rademacher(jax.random.key(1), x0.shape, dtype=jnp.real(x0).dtype)
+                direction /= jnp.linalg.norm(direction)
+                def power(_, vector):
+                    product = jnp.conj(gradient(vector))
+                    return product / jnp.maximum(jnp.linalg.norm(product), 1e-20)
+                direction = jax.lax.fori_loop(0, 20, power, direction)
+                curvature = jnp.real(jnp.vdot(direction, jnp.conj(gradient(direction))))
+            step_size = .95 / max(float(curvature), 1e-12)
         else:
-            def _forward_one(shift):
-                shifted = _shift_image_last2(
-                    x,
-                    shift,
-                    order=shift_order,
-                    mode=shift_mode,
-                    cval=shift_cval,
-                )
-                return op.forward(shifted)
-
-            pred = jax.vmap(_forward_one)(shifts_arr)
-        diff = pred - y
-        if op.is_non_cartesian and op.density is not None:
-            w = jnp.asarray(op.density, dtype=jnp.float32)
-            diff = diff * jnp.sqrt(w)
-        return 0.5 * jnp.mean(jnp.abs(diff) ** 2)
-
-    def smooth_reg(x: Array) -> Array:
-        if reg == "none":
-            return jnp.array(0.0, dtype=jnp.float32)
-        if reg == "l2":
-            return reg_weight * jnp.mean(jnp.abs(x) ** 2)
-        if reg == "tv":
-            # Isotropic TV penalty as a differentiable fallback.
-            grad = _forward_gradient_last2(x)
-            norm = jnp.sqrt(jnp.sum(jnp.abs(grad) ** 2, axis=-1) + 1e-8)
-            return reg_weight * jnp.mean(norm)
-        if reg == "l1":
-            return reg_weight * jnp.mean(jnp.abs(x))
-        raise AssertionError("unreachable")
-
-    opt_name = optimizer_name.lower()
-    use_prox = opt_name in ("fista", "split_bregman", "bregman") and reg in ("l1", "tv") and reg_weight > 0
-    if use_prox and reg == "tv":
-        def prox(arr, threshold):
-            return prox_tv_chambolle(arr, threshold, iterations=tv_iterations)
-        loss_fn = data_loss
-        opt = make_optimizer(
-            opt_name,
-            step_size,
-            regularizer_weight=reg_weight,
-            regularizer_prox=prox,
-            base_optimizer_factory=lambda lr: optax.sgd(lr),
-        )
-    elif use_prox and reg == "l1":
-        from mrax.opt.ops import soft_threshold
-
-        loss_fn = data_loss
-        opt = make_optimizer(
-            opt_name,
-            step_size,
-            regularizer_weight=reg_weight,
-            regularizer_prox=soft_threshold,
-            base_optimizer_factory=lambda lr: optax.sgd(lr),
-        )
+            step_size = .02 * max(float(jnp.sqrt(jnp.mean(jnp.abs(x0)**2))), 1e-6)
+    if not np.isfinite(step_size) or step_size <= 0:
+        raise ValueError("step_size must be finite and positive")
+    parameters = {"image": x0}
+    step_function = convergence_check = None
+    if proximal:
+        optimizer, step_function, convergence_check = make_tv_steps(objective, smooth,
+            {"image": (-np.inf, np.inf)}, {"image": () if tv_operator is None else (tv_operator,)},
+            name, step_size, tolerance=prox_tolerance, max_prox_steps=tv_iterations,
+            grad_clip_norm=grad_clip_norm,
+            penalty=1. / x0.size if bregman_penalty is None else bregman_penalty,
+            device=device)
     else:
-        def loss_fn(x):
-            return data_loss(x) + smooth_reg(x)
-        opt = make_optimizer(optimizer_name, step_size)
-
-    opt_state = opt.init(x0)
-    use_grad_clip = grad_clip_norm is not None and grad_clip_norm > 0
-    clip_norm = float(grad_clip_norm) if use_grad_clip else 0.0
-
-    @jax.jit
-    def step(x, state):
-        loss, grads = jax.value_and_grad(loss_fn)(x)
-        if use_grad_clip:
-            grad_norm = optax.global_norm(grads)
-            scale = jnp.minimum(1.0, clip_norm / (grad_norm + 1e-8))
-            grads = jax.tree_util.tree_map(lambda g: g * scale, grads)
-        updates, state = opt.update(grads, state, x)
-        x = optax.apply_updates(x, updates)
-        return x, state, loss
-
-    history: list[float] = []
-    x = x0
-    for _ in range(int(num_steps)):
-        x, opt_state, loss = step(x, opt_state)
-        if return_history:
-            history.append(float(loss))
-
-    if return_history:
-        return x, history
-    return x
+        optimizer = make_optimizer(name, step_size, device=device)
+        if grad_clip_norm is not None:
+            optimizer = optax.chain(optax.clip_by_global_norm(grad_clip_norm), optimizer)
+    parameters, losses, info = execute_optimizer(objective, parameters, optimizer,
+        num_steps=num_steps, step_function=step_function,
+        convergence_check=convergence_check, device=device)
+    image = parameters["image"]
+    history = losses[1:] + [float(info.final_loss)] if losses else []
+    return (image, history) if return_history else image
 
 
 def _infer_sampling_mask_cartesian(kspace: Array) -> Array:
@@ -1130,82 +1058,32 @@ def _infer_sampling_mask_cartesian(kspace: Array) -> Array:
 
 
 def _normalize_kspace_for_model(
-    kspace: Array | np.ndarray,
-    *,
-    frame_count: int,
-    coil_count: int,
-    is_non_cartesian: bool,
-    sensitivities: Array | None,
+    kspace: Array | np.ndarray, *, frame_count: int, coil_count: int,
+    is_non_cartesian: bool, sensitivities: Array | None, spatial_ndim: int = 2,
 ) -> Array:
-    """Return k-space normalized to (frames, coils, ...)."""
-
+    """Normalize array layouts into explicit (frame, receiver, encoding...)."""
     y = jnp.asarray(kspace)
-    frame_count = int(frame_count)
-    coil_count = int(coil_count)
-
-    if is_non_cartesian:
-        if y.ndim == 1:
-            if frame_count > 1:
-                raise ValueError("kspace must include a frame axis matching experiment.frame_count")
-            y = y[None, None, :]
-        elif y.ndim == 2:
-            if frame_count > 1:
-                if int(y.shape[0]) != frame_count:
-                    raise ValueError("kspace frame dimension does not match experiment.frame_count")
-                y = y[:, None, :]
-            else:
-                if sensitivities is not None and coil_count > 1 and int(y.shape[0]) == coil_count:
-                    y = y[None, :, :]
-                elif int(y.shape[0]) == frame_count:
-                    y = y[:, None, :]
-                else:
-                    raise ValueError("kspace shape does not match expected frame/coil layout for non-Cartesian data")
-        elif y.ndim == 3:
-            if int(y.shape[0]) == frame_count and int(y.shape[1]) == coil_count:
-                y = y
-            elif int(y.shape[1]) == frame_count and int(y.shape[0]) == coil_count:
-                y = jnp.swapaxes(y, 0, 1)
-            else:
-                raise ValueError("kspace shape does not match expected frame/coil layout for non-Cartesian data")
+    dimensions = 1 if is_non_cartesian else spatial_ndim
+    if y.ndim == dimensions:
+        if frame_count != 1 or coil_count != 1:
+            raise ValueError("Samples require explicit frame and receiver axes")
+        y = y[None, None, ...]
+    elif y.ndim == dimensions + 1:
+        if y.shape[0] == frame_count and coil_count == 1:
+            y = y[:, None, ...]
+        elif frame_count == 1 and y.shape[0] == coil_count:
+            y = y[None, ...]
         else:
-            raise ValueError(
-                "non-Cartesian kspace must have shape (num_samples,), (frames, num_samples), "
-                "(coils, num_samples), or (frames, coils, num_samples)"
-            )
+            raise ValueError("Samples do not match declared frame and receiver counts")
+    elif y.ndim == dimensions + 2:
+        if y.shape[:2] == (frame_count, coil_count):
+            pass
+        elif y.shape[:2] == (coil_count, frame_count):
+            y = jnp.swapaxes(y, 0, 1)
+        else:
+            raise ValueError("Samples do not match declared frame and receiver counts")
     else:
-        if y.ndim == 2:
-            if frame_count > 1:
-                raise ValueError("kspace must include a frame axis matching experiment.frame_count")
-            y = y[None, None, :, :]
-        elif y.ndim == 3:
-            if frame_count > 1:
-                if int(y.shape[0]) != frame_count:
-                    raise ValueError("kspace frame dimension does not match experiment.frame_count")
-                y = y[:, None, :, :]
-            else:
-                if sensitivities is not None and coil_count > 1 and int(y.shape[0]) == coil_count:
-                    y = y[None, :, :, :]
-                elif int(y.shape[0]) == frame_count:
-                    y = y[:, None, :, :]
-                else:
-                    raise ValueError("kspace shape does not match expected frame/coil layout for Cartesian data")
-        elif y.ndim == 4:
-            if int(y.shape[0]) == frame_count:
-                y = y
-            elif int(y.shape[1]) == frame_count and int(y.shape[0]) == coil_count:
-                y = jnp.swapaxes(y, 0, 1)
-            else:
-                raise ValueError("kspace shape does not match expected frame/coil layout for Cartesian data")
-        else:
-            raise ValueError(
-                "Cartesian kspace must have shape (Ny, Nx), (frames, Ny, Nx), (coils, Ny, Nx), "
-                "or (frames, coils, Ny, Nx)"
-            )
-
-    if int(y.shape[0]) != frame_count:
-        raise ValueError("kspace frame dimension does not match experiment.frame_count")
-    if int(y.shape[1]) != coil_count:
-        raise ValueError("kspace coil dimension does not match sensitivities")
+        raise ValueError("Samples have an invalid encoding layout")
     return y
 
 
@@ -1253,21 +1131,90 @@ def _align_kspace_global_phase_by_frame(
     return (aligned, rot) if return_rotation else aligned
 
 
-def reconstruct_model_based(
+def _model_encoding_loss(op, *, samples, weights, denominator, scale, frame_weights,
+                         batch_size, full_op=None, completion=None, completion_weights=None,
+                         completion_denominator=None, completion_weight=0.):
+    """Sum exact frame losses with a bounded, rematerialized encoding workspace."""
+    from dataclasses import replace
+
+    frames = samples.shape[0]
+    if batch_size is not None:
+        from operator import index
+        batch_size = index(batch_size)
+        if batch_size < 1:
+            raise ValueError("encoding_batch_size must be positive or None")
+    batch_size = frames if batch_size is None else min(batch_size, frames)
+
+    def select(value, start, size, *, rank=None, minimum_rank=None):
+        if value is None:
+            return None
+        if ((rank is None or value.ndim == rank) and (minimum_rank is None or value.ndim >= minimum_rank)
+                and value.ndim > 0 and value.shape[0] == frames):
+            return jax.lax.dynamic_slice_in_dim(value, start, size, axis=0)
+        return value
+
+    def sliced_operator(operator, start, size):
+        return replace(operator,
+            sensitivities=select(operator.sensitivities, start, size, rank=len(op.spatial_shape) + 2),
+            mask=select(operator.mask, start, size, rank=samples.ndim),
+            readout_polarity=select(operator.readout_polarity, start, size, rank=samples.ndim),
+            readout_phase=select(operator.readout_phase, start, size, minimum_rank=2))
+
+    def loss(images):
+        images = jnp.broadcast_to(images, (frames,) + op.spatial_shape)
+        def piece(start, size):
+            image = jax.lax.dynamic_slice_in_dim(images, start, size, axis=0)
+            local_op = sliced_operator(op, start, size)
+            target = jax.lax.dynamic_slice_in_dim(samples, start, size, axis=0)
+            pred_full = sliced_operator(full_op, start, size).forward(image) if full_op is not None else None
+            prediction = local_op.forward(image) if pred_full is None else local_op._apply_mask(pred_full)
+            difference = (prediction - target) * scale
+            local_frames = select(frame_weights, start, size, rank=samples.ndim)
+            if local_frames is not None:
+                difference = jnp.where(local_frames > 0, difference, 0.)
+            local_weights = select(weights, start, size, rank=samples.ndim)
+            value = jnp.sum(jnp.abs(difference)**2 * local_weights) / denominator
+            if pred_full is not None:
+                assert completion is not None and completion_weights is not None and completion_denominator is not None
+                target_missing = jax.lax.dynamic_slice_in_dim(completion, start, size, axis=0)
+                difference_missing = (pred_full - target_missing) * scale
+                if local_frames is not None:
+                    difference_missing = jnp.where(local_frames > 0, difference_missing, 0.)
+                missing_weights = select(completion_weights, start, size, rank=samples.ndim)
+                value = value + completion_weight * jnp.sum(jnp.abs(difference_missing)**2 * missing_weights) / completion_denominator
+            return value
+
+        if batch_size == frames:
+            return piece(0, frames)
+        count, remainder = divmod(frames, batch_size)
+        # Rematerialization retains the full model/time regularizers, without
+        # saving every frame's coil-space intermediates during reverse AD.
+        parts = jax.lax.map(jax.checkpoint(lambda batch: piece(batch * batch_size, batch_size)),
+                            jnp.arange(count))
+        total = jnp.sum(parts)
+        return total + piece(count * batch_size, remainder) if remainder else total
+
+    return loss
+
+
+@device_function
+def solve_model_based(
     kspace: Array | np.ndarray,
     *,
     experiment: Experiment,
     model: Model,
-    spatial_shape: tuple[int, int] | None = None,
+    spatial_shape: tuple[int, ...] | None = None,
     sensitivities: Array | np.ndarray | None = None,
     mask: Array | np.ndarray | None = None,
+    data_weights: Array | np.ndarray | None = None,
     completion_kspace: Array | np.ndarray | None = None,
     completion_weight: float = 0.0,
     trajectory: Array | np.ndarray | None = None,
     density: Array | np.ndarray | None = None,
-    optimizer_name: str = "adam",
+    optimizer_name: str | None = None,
     step_size: float = 0.02,
     num_steps: int = 200,
+    encoding_batch_size: int | None = 32,
     regularizer_weight=0.0,
     regularizer_prox=None,
     optimizer_base_factory=None,
@@ -1278,6 +1225,11 @@ def reconstruct_model_based(
     regularizer_weights: dict[str, float] | None = None,
     roi_mask: object | None = None,
     roi_mask_dims: tuple[str, ...] | None = None,
+    object_support_mask: object | None = None,
+    image_phase: Array | np.ndarray | None = None,
+    image_to_encoding: Callable | None = None,
+    encoding_frame_indices: Array | np.ndarray | None = None,
+    readout_coordinates=None, readout_polarity=None, readout_phase=None,
     study_globals: dict[str, Quantity] | None = None,
     frame_mask: object | None = None,
     auto_mask_nan_observables: bool = True,
@@ -1290,24 +1242,33 @@ def reconstruct_model_based(
     frame_phase_correction: str | None = "none",
     return_history: bool = False,
     return_model_callable: bool = False,
+    return_reconstruction_image: bool = False,
+    proximal_tolerance: float = 1e-8,
+    proximal_max_steps: int = 2048,
+    bregman_penalty: float = 1.0,
+    bregman_inner_steps: int = 5,
+    device: DeviceLike = "cpu",
 ) -> (
-    tuple[dict[str, Quantity], list[float], Callable[[dict, Array | None, dict[str, Any] | None], Array]]
+    tuple[dict[str, Quantity], list[float], Callable, Array]
+    | tuple[dict[str, Quantity], list[float], Callable[[dict, Array | None, dict[str, Any] | None], Array]]
     | tuple[dict[str, Quantity], list[float]]
     | dict[str, Quantity]
 ):
     """Directly reconstruct parameter maps from k-space via a chained model+encoding operator.
 
-    Minimizes: :math:`\\tfrac12 \\|\\|A(M(\\theta)) - y\\|\\|_2^2 + R(\\theta)`
+    Minimizes RMS-normalized mean squared encoding error plus field regularizers.
+    ``encoding_batch_size`` bounds frame-wise encoding workspace (default 32);
+    ``None`` uses all frames at once. Temporal model/regularizer axes remain intact.
 
     Notes
     -----
     - The signal model comes from :class:`mrax.data_struct.model.Model` and is treated as a
       (generally non-linear) operator mapping parameter fields -> image series.
-    - The encoding operator :math:`A` is the same as in :func:`reconstruct_variational` (FFT/NUFFT,
+    - The encoding operator :math:`A` is the same as in :func:`solve_variational` (FFT/NUFFT,
       optional sampling mask, optional coil sensitivities).
-    - ``roi_mask`` weights regularizers and masks output fields; when provided, the model
-      prediction is also zeroed outside the mask to prevent NaN observables from propagating
-      through the k-space data term.
+    - ``roi_mask`` weights regularizers and masks output fields. Physical object
+      support is supplied separately with ``object_support_mask``; an analysis ROI
+      must not erase signal outside that ROI before Fourier encoding.
     - ``frame_mask`` (or ``auto_mask_nan_observables=True``) can drop frames with missing
       per-frame observables; masked frames do not contribute to the data term.
     - ``reference_image`` / ``reference_kspace`` can be used to model acquisitions where the
@@ -1322,25 +1283,33 @@ def reconstruct_model_based(
       ``completion_weight=(1-f)/f`` where :math:`f=\\mathrm{mean}(mask)`.
     - ``frame_phase_correction`` can apply a global phase alignment per frame (recommended
       for magnitude-only models when raw k-space contains frame-dependent phase flips).
+    - ``return_reconstruction_image=True`` additionally returns the fitted image
+      before output ROI masking, and requires ``return_model_callable=True``.
     """
 
     warn_if_fit_requires_model_override(experiment, model)
 
-    # Mirror run_fit behavior: auto-attach globals if present on the experiment.
-    if (
-        study_globals is None
-        and getattr(model, "_mrax_study_globals", None) is None
-    ):
-        exp_globals = getattr(experiment, "study_globals", None)
-        if exp_globals:
-            model._mrax_study_globals = exp_globals
-            study_globals = exp_globals
+    from operator import index
+
+    from mrax.core.fit_execution import execute_optimizer
+
+    num_steps = index(num_steps)
+    if return_reconstruction_image and not return_model_callable:
+        raise ValueError("return_reconstruction_image requires return_model_callable=True")
+    if num_steps < 0:
+        raise ValueError("num_steps must be nonnegative")
+    for label, value in (("completion_weight", completion_weight), ("reference_weight", reference_weight)):
+        if not np.isfinite(value) or value < 0:
+            raise ValueError(f"{label} must be finite and nonnegative")
 
     full_spatial_shape, spatial_dim_names = _extract_spatial_metadata(experiment)
     if spatial_shape is None:
-        spatial_shape = tuple(int(v) for v in full_spatial_shape[:2])  # type: ignore[assignment]
-    if len(spatial_shape) != 2:
-        raise ValueError("reconstruct_model_based currently supports 2D spatial_shape only")
+        spatial_shape = tuple(int(v) for v in full_spatial_shape)
+    spatial_ndim = len(spatial_shape)
+    if spatial_ndim not in (1, 2, 3):
+        raise ValueError("Model reconstruction requires one to three spatial axes")
+    if reference_kspace is not None and spatial_ndim != 2:
+        raise ValueError("Joint reference reconstruction currently requires two spatial axes")
 
     field_shape, field_dim_names, _extra_dim_names = _field_metadata(experiment, model=model)
     constant_dims = _normalize_constant_dims(model.parameter_constant_dims, field_dim_names, field_shape)
@@ -1354,7 +1323,12 @@ def reconstruct_model_based(
     )
 
     params, unpack = model.parametrization_factory(field_shape)
+    params = jax.device_put(params, device)
+    unpack = jit_on_device(unpack, device)
     params = _collapse_params_for_constant_dims(params, constant_dims)
+    field_keys = set(unpack(params))
+    if set(constant_dims) - field_keys:
+        raise ValueError("parameter_constant_dims contains unknown parameter fields")
 
     reg_terms = model.make_regularizer_terms(
         field_shape,
@@ -1362,14 +1336,33 @@ def reconstruct_model_based(
         regularizer_type=regularizer_type,
         reg_weights=regularizer_weights,
     )
+    configured_keys = set((regularizer_configs if regularizer_configs is not None else model.regularizer_configs) or {})
+    configured_keys.update((regularizer_weights if regularizer_weights is not None else model.reg_weights) or {})
+    if configured_keys - field_keys:
+        raise ValueError("Regularization contains unknown parameter fields")
+    has_tv = any(hasattr(fn, "tv_order") for entries in reg_terms.values() for _, fn in entries)
+    selected = (optimizer_name or ("fista" if has_tv else "adam")).lower()
+    if selected == "bregman":
+        selected = "split_bregman"
+    true_tv = has_tv and selected in {"fista", "split_bregman"}
+    if has_tv and not true_tv:
+        import warnings
+        warnings.warn(f"{selected} uses smoothed TV; select FISTA or split_bregman for exact proximal TV", UserWarning, stacklevel=2)
+        reg_terms = model.make_regularizer_terms(field_shape, regularizer_configs=regularizer_configs,
+            regularizer_type=regularizer_type, reg_weights=regularizer_weights, smoothed_tv=True)
+    if true_tv:
+        if reference_kspace is not None:
+            raise ValueError("Joint reference estimation with exact TV is not yet supported; supply a fixed reference_image")
+        if regularizer_prox is not None or any(np.any(np.asarray(v) != 0) for v in jax.tree.leaves(regularizer_weight)) or box_constraints is not None:
+            raise ValueError("Exact field TV uses physical parameter bounds and cannot combine raw proximal penalties")
+        if optimizer_base_factory is not None and optimizer_base_factory is not optax.sgd:
+            raise ValueError("Exact TV requires objective-aware gradient steps")
+        from mrax.core.physical_parameters import physical_parametrization
+        params, unpack = physical_parametrization(model, params, unpack)
 
     # Observables: merge study globals (if any) with experiment observables and unwrap to arrays for JIT.
     observables = require_quantity_dict(experiment.observables, "Observable")
-    inferred_globals = (
-        study_globals
-        or getattr(model, "_mrax_study_globals", None)
-        or getattr(experiment, "study_globals", None)
-    )
+    inferred_globals = _resolve_globals(experiment, model, study_globals)
     global_obs = require_quantity_dict(inferred_globals or {}, "Study global")
     merged_observables = {**global_obs, **observables}
     dim_map = getattr(experiment, "_mrax_dim_observables", None)
@@ -1388,17 +1381,31 @@ def reconstruct_model_based(
         if obs_field_mask is not None:
             mask_fields = obs_field_mask if mask_fields is None else (mask_fields * obs_field_mask)
     support_mask = None
-    if mask_data is not None:
-        support_mask = _flatten_to_frames(jnp.asarray(mask_data), experiment) > 0
+    if object_support_mask is not None:
+        support_data, _ = _prepare_mask_arrays(object_support_mask, roi_mask_dims, experiment,
+            field_shape, field_dim_names, spatial_dim_names)
+        support_mask = _flatten_to_frames(jnp.asarray(support_data), experiment) > 0
+    phase_image = None if image_phase is None else jnp.asarray(image_phase)
+    if phase_image is not None:
+        if not bool(jnp.all(jnp.isfinite(phase_image))):
+            raise ValueError("image_phase must be finite")
+        phase_image = jnp.exp(1j * phase_image)
 
     frame_weights = _prepare_frame_mask(frame_mask, experiment)
     if auto_mask_nan_observables and auto_frame_mask is not None:
         frame_weights = auto_frame_mask if frame_weights is None else (frame_weights * auto_frame_mask)
     frame_weights = jnp.asarray(frame_weights) if frame_weights is not None else None
+    if encoding_frame_indices is not None:
+        frame_indices = np.asarray(encoding_frame_indices)
+        if frame_indices.ndim != 1 or not np.issubdtype(frame_indices.dtype, np.integer) or not len(frame_indices) or np.any(frame_indices < 0) or np.any(frame_indices >= experiment.frame_count):
+            raise ValueError("Encoding frame indices must refer to valid signal-model frames")
+        if frame_weights is not None:
+            frame_weights = frame_weights[jnp.asarray(frame_indices)]
 
     y = jnp.asarray(kspace)
-    if trajectory is None and mask is None:
-        mask = _infer_sampling_mask_cartesian(y)
+    # A zero measurement is valid data. Missingness must be declared explicitly.
+    if mask is not None and not np.all((np.asarray(mask) == 0) | (np.asarray(mask) == 1)):
+        raise ValueError("Model-based sampling masks must be binary; use data_weights for statistical weights")
 
     op = build_operator(
         spatial_shape=spatial_shape,
@@ -1407,26 +1414,43 @@ def reconstruct_model_based(
         trajectory=trajectory,
         density=density,
         nufft_eps=nufft_eps,
+        readout_coordinates=readout_coordinates, readout_polarity=readout_polarity, readout_phase=readout_phase,
     )
-    frame_count = int(experiment.frame_count)
+    frame_count = int(experiment.frame_count) if encoding_frame_indices is None else len(frame_indices)
     y_coils = _normalize_kspace_for_model(
         y,
         frame_count=frame_count,
         coil_count=op.coil_count,
         is_non_cartesian=op.is_non_cartesian,
         sensitivities=op.sensitivities,
+        spatial_ndim=spatial_ndim,
     )
     if op.is_non_cartesian:
         traj_len = int(np.asarray(op.trajectory).shape[0]) if op.trajectory is not None else 0
         if int(y_coils.shape[-1]) != traj_len:
             raise ValueError("kspace sample count does not match trajectory length")
     else:
-        if tuple(int(v) for v in y_coils.shape[-2:]) != spatial_shape:
+        if tuple(int(v) for v in y_coils.shape[-spatial_ndim:]) != spatial_shape:
             raise ValueError(
-                f"kspace spatial shape {tuple(int(v) for v in y_coils.shape[-2:])} does not match {spatial_shape}"
+                f"kspace spatial shape {tuple(int(v) for v in y_coils.shape[-spatial_ndim:])} does not match {spatial_shape}"
             )
 
     data_finite = jnp.isfinite(y_coils)
+    measured_support = None
+    if mask is not None:
+        try:
+            measured_support = jnp.broadcast_to(jnp.asarray(mask, bool), y_coils.shape)
+        except ValueError as error:
+            raise ValueError("Sampling support must broadcast to measured samples") from error
+    likelihood_weights = None
+    if data_weights is not None:
+        raw_weights = jnp.asarray(data_weights)
+        if jnp.iscomplexobj(raw_weights) or not np.isfinite(raw_weights).all() or np.any(np.asarray(raw_weights) < 0):
+            raise ValueError("Statistical data weights must be finite, real and nonnegative")
+        try:
+            likelihood_weights = jnp.broadcast_to(raw_weights, y_coils.shape)
+        except ValueError as error:
+            raise ValueError("Statistical data weights must broadcast to measured samples") from error
     y_coils = jnp.where(data_finite, y_coils, jnp.zeros((), dtype=y_coils.dtype))
     if not op.is_non_cartesian:
         y_coils = op._apply_mask(y_coils)
@@ -1448,6 +1472,7 @@ def reconstruct_model_based(
             coil_count=op.coil_count,
             is_non_cartesian=op.is_non_cartesian,
             sensitivities=op.sensitivities,
+            spatial_ndim=spatial_ndim,
         )
         if y_completion_coils.shape != y_coils.shape:
             raise ValueError("completion_kspace does not match normalized kspace shape")
@@ -1464,12 +1489,11 @@ def reconstruct_model_based(
                     trajectory=None,
                     density=None,
                     nufft_eps=nufft_eps,
+                    readout_coordinates=readout_coordinates, readout_polarity=readout_polarity, readout_phase=readout_phase,
                 )
                 use_completion = True
 
-    expected_frames = experiment.frame_count if hasattr(experiment, "frame_count") else int(
-        experiment.dims.get("frame", int(y_coils.shape[0]))
-    )
+    expected_frames = frame_count
     y_coils, phase_rot = _align_kspace_global_phase_by_frame(
         y_coils,
         expected_frames=int(expected_frames),
@@ -1479,7 +1503,25 @@ def reconstruct_model_based(
     if y_completion_coils is not None and phase_rot is not None:
         y_completion_coils = y_completion_coils * phase_rot
 
-    scale = 1.0 / jnp.maximum(_masked_rms(y_coils, data_finite), 1e-6)
+    included = data_finite
+    if measured_support is not None:
+        included &= measured_support
+    if frame_weights is not None:
+        included = included & (frame_weights.reshape((frame_count,) + (1,) * (y_coils.ndim - 1)) > 0)
+    if likelihood_weights is not None:
+        included &= likelihood_weights > 0
+    if not bool(jnp.any(included)):
+        raise ValueError("No measured samples remain after acquisition and frame masking")
+    normalization_weights = included if likelihood_weights is None else included * likelihood_weights
+    scale = 1.0 / jnp.maximum(_masked_rms(y_coils, normalization_weights), 1e-6)
+    tv_operators = {}
+    if true_tv:
+        from mrax.opt.tv import TVOperator
+        for key, value in params.items():
+            field_mask = _mask_for_regularized_field(mask_fields, value)
+            tv_operators[key] = tuple(TVOperator.create(value.shape, fn.tv_axes, fn.tv_order,
+                field_mask, weight * unpack._mrax_physical_scales[key], value.dtype)
+                for weight, fn in reg_terms.get(key, ()) if hasattr(fn, "tv_order"))
 
     ref_fixed: Array | None = None
     if reference_image is not None and reference_kspace is None:
@@ -1553,23 +1595,67 @@ def reconstruct_model_based(
     z_prev_base = observable_arrays.get("z_prev")
     z_ref_image = observable_arrays.get("z_reference_image")
     adjust_z_prev = z_prev_base is not None and z_ref_image is not None
+
+    def normalized_previous(reference):
+        return _rescale_previous_signal(z_prev_base, z_ref_image, reference)
+
     observable_arrays_fixed = observable_arrays
     if adjust_z_prev and reference_kspace is None and ref_fixed is not None:
-        ref_safe = ref_fixed.reshape((1,) + ref_fixed.shape) + 1e-6
-        z_prev_adj = jnp.asarray(z_prev_base) * z_ref_image.reshape((1,) + z_ref_image.shape) / ref_safe
         observable_arrays_fixed = dict(observable_arrays)
-        observable_arrays_fixed["z_prev"] = z_prev_adj
+        observable_arrays_fixed["z_prev"] = normalized_previous(ref_fixed)
 
-    def model_apply(fields: dict, ref_for_zprev: Array | None) -> Array:
+    def model_apply(fields: dict, ref_for_zprev: Array | None, offsets=None, observables=None) -> Array:
         obs = observable_arrays_fixed
         if adjust_z_prev and reference_kspace is not None and ref_for_zprev is not None:
-            ref_safe = ref_for_zprev.reshape((1,) + ref_for_zprev.shape) + 1e-6
-            z_prev_adj = jnp.asarray(z_prev_base) * z_ref_image.reshape((1,) + z_ref_image.shape) / ref_safe
             obs = dict(observable_arrays)
-            obs["z_prev"] = z_prev_adj
-        return jnp.asarray(model_fn(fields, offsets_array, obs))
+            obs["z_prev"] = normalized_previous(ref_for_zprev)
+        if observables:
+            obs = {**obs, **observables}
+        return jnp.asarray(model_fn(fields, offsets_array if offsets is None else offsets, obs))
 
-    def loss_fn(p):
+    def signal_image(fields, reference, offsets=None, observables=None):
+        prediction = _align_predicted(model_apply(fields, reference, offsets, observables), experiment)
+        if support_mask is not None:
+            prediction = jnp.where(support_mask, prediction, 0)
+        if reference is not None:
+            prediction = prediction * reference
+        if phase_image is not None:
+            prediction = prediction * phase_image
+        if support_mask is not None:
+            prediction = jnp.where(support_mask, prediction, 0)
+        return prediction
+
+    # Sampling and statistical weights are fixed for the entire optimization.
+    # Hoist their reductions out of each compiled loss/Hessian evaluation.
+    w_frame = None if frame_weights is None else frame_weights.reshape(
+        (frame_count,) + (1,) * (y_coils.ndim - 1))
+    weights = data_finite if measured_support is None else measured_support * data_finite
+    if w_frame is not None:
+        weights = weights * w_frame
+    if likelihood_weights is not None:
+        weights = weights * likelihood_weights
+    denominator = (jnp.sum(weights) + 1e-8).astype(jnp.float32)
+    weight_missing = denominator_missing = None
+    if use_completion:
+        assert op.mask is not None and completion_finite is not None
+        weight_missing = 1.0 - op.mask.astype(jnp.float32)
+        if w_frame is not None:
+            weight_missing = weight_missing * w_frame
+        weight_missing = weight_missing * completion_finite
+        denominator_missing = (jnp.sum(weight_missing) + 1e-8).astype(jnp.float32)
+    weights_ref = denominator_ref = None
+    if reference_kspace is not None:
+        assert op_ref is not None and ref_finite is not None
+        weights_ref = ref_finite if op_ref.is_non_cartesian or op_ref.mask is None else op_ref.mask * ref_finite
+        denominator_ref = (jnp.sum(weights_ref) + 1e-8).astype(jnp.float32)
+
+    encoding_loss = _model_encoding_loss(op, samples=y_coils, weights=weights, denominator=denominator,
+        scale=scale, frame_weights=w_frame, batch_size=encoding_batch_size,
+        full_op=op_full if use_completion else None,
+        completion=y_completion_coils, completion_weights=weight_missing,
+        completion_denominator=denominator_missing, completion_weight=completion_w)
+
+    def smooth_loss(p):
         if reference_kspace is None:
             p_model = p
             ref = ref_fixed
@@ -1578,81 +1664,31 @@ def reconstruct_model_based(
             ref = p["reference_image"]
 
         fields = unpack(p_model)
-        pred_img = model_apply(fields, ref)
-        pred_img = _align_predicted(jnp.asarray(pred_img), experiment)
-        if support_mask is not None:
-            pred_img = jnp.where(support_mask, pred_img, jnp.zeros((), dtype=pred_img.dtype))
-        if ref is not None:
-            pred_img = pred_img * ref
-        if support_mask is not None:
-            pred_img = jnp.where(support_mask, pred_img, jnp.zeros((), dtype=pred_img.dtype))
-        if use_completion:
-            assert op_full is not None and y_completion_coils is not None
-            pred_full = op_full.forward(pred_img)
-            pred_k = op._apply_mask(pred_full)
-            diff = (pred_k - y_coils) * scale
-        else:
-            pred_k = op.forward(pred_img)
-            diff = (pred_k - y_coils) * scale
-
-        w_frame = None
-        if frame_weights is not None:
-            w_frame = frame_weights.reshape((int(diff.shape[0]),) + (1,) * (diff.ndim - 1))
-            diff = jnp.where(w_frame > 0, diff, 0.0)
-
-        weights = None
-        if not op.is_non_cartesian and op.mask is not None:
-            weights = op.mask
-        if w_frame is not None:
-            weights = w_frame if weights is None else (weights * w_frame)
-        weights = data_finite if weights is None else (weights * data_finite)
-
-        if weights is not None:
-            num = jnp.sum(jnp.abs(diff) ** 2 * weights)
-            denom = (jnp.sum(weights) + 1e-8).astype(jnp.float32)
-            misfit = 0.5 * num / denom
-        else:
-            misfit = 0.5 * jnp.mean(jnp.abs(diff) ** 2)
-
-        if use_completion:
-            assert op.mask is not None and op_full is not None and y_completion_coils is not None
-            inv_mask = (1.0 - op.mask.astype(jnp.float32)).reshape(op.mask.shape)
-            diff_missing = (pred_full - y_completion_coils) * scale
-            if w_frame is not None:
-                diff_missing = jnp.where(w_frame > 0, diff_missing, 0.0)
-                weight_missing = inv_mask * w_frame
-            else:
-                weight_missing = inv_mask
-            if completion_finite is not None:
-                weight_missing = weight_missing * completion_finite
-            num_missing = jnp.sum(jnp.abs(diff_missing) ** 2 * weight_missing)
-            denom_missing = (jnp.sum(weight_missing) + 1e-8).astype(jnp.float32)
-            misfit = misfit + completion_w * (0.5 * num_missing / denom_missing)
+        pred_img = signal_image(fields, ref)
+        if image_to_encoding is not None:
+            pred_img = image_to_encoding(pred_img)
+        misfit = encoding_loss(pred_img)
 
         reg_term: Array = jnp.array(0.0, dtype=jnp.float32)
         for key, field in fields.items():
             configs = reg_terms.get(key, ())
             for weight, reg_fn in configs:
-                reg_term = reg_term + weight * reg_fn(field, mask_fields)
+                if true_tv and key in p_model and hasattr(reg_fn, "tv_order"):
+                    continue
+                reg_term = reg_term + weight * reg_fn(field, _mask_for_regularized_field(mask_fields, field))
 
         total = misfit + reg_term
         if reference_kspace is not None:
             assert op_ref is not None and y_ref_coils is not None and scale_ref is not None
             pred_ref_k = op_ref.forward(ref)
             diff_ref = (pred_ref_k - y_ref_coils) * scale_ref
-            weights_ref = None
-            if not op_ref.is_non_cartesian and op_ref.mask is not None:
-                weights_ref = op_ref.mask
-            if ref_finite is not None:
-                weights_ref = ref_finite if weights_ref is None else (weights_ref * ref_finite)
-            if weights_ref is not None:
-                num_ref = jnp.sum(jnp.abs(diff_ref) ** 2 * weights_ref)
-                denom_ref = (jnp.sum(weights_ref) + 1e-8).astype(jnp.float32)
-                misfit_ref = 0.5 * num_ref / denom_ref
-            else:
-                misfit_ref = 0.5 * jnp.mean(jnp.abs(diff_ref) ** 2)
+            assert weights_ref is not None and denominator_ref is not None
+            misfit_ref = jnp.sum(jnp.abs(diff_ref) ** 2 * weights_ref) / denominator_ref
             total = total + ref_weight * misfit_ref
         return total
+
+    def loss_fn(p):
+        return smooth_loss(p) + sum(op.value(p[key]) for key, ops in tv_operators.items() for op in ops)
 
     def _validate_init(default, candidate):
         if candidate is None:
@@ -1676,38 +1712,45 @@ def reconstruct_model_based(
             raise ValueError("Invalid initial_params provided") from exc
         return candidate
 
+    if initial_params is not None and true_tv:
+        initial_params = unpack._mrax_from_raw(_collapse_params_for_constant_dims(initial_params, constant_dims))
     params = _validate_init(params, initial_params)
     if reference_kspace is not None:
         params_all = {"model": params, "reference_image": params_all["reference_image"]}
     else:
         params_all = params
 
+    if true_tv:
+        from mrax.core.physical_parameters import balance_physical_coordinates
+        params_all = balance_physical_coordinates(smooth_loss, params_all, unpack,
+            tv_operators, balance=num_steps != 0)
+
     opt = make_optimizer(
-        optimizer_name,
+        selected,
         step_size,
         regularizer_weight=regularizer_weight,
         regularizer_prox=regularizer_prox,
         base_optimizer_factory=optimizer_base_factory,
+        device=device,
         box_constraints=box_constraints,
     )
-    opt_state = opt.init(params_all)
-
-    @jax.jit
-    def train_step(params, opt_state):
-        loss, grads = jax.value_and_grad(loss_fn)(params)
-        updates, opt_state = opt.update(grads, opt_state, params)
-        params = optax.apply_updates(params, updates)
-        return params, opt_state, loss
-
-    keep_losses = return_history or return_model_callable
-    losses: list[float] = []
-    for _ in range(int(num_steps)):
-        params_all, opt_state, loss = train_step(params_all, opt_state)
-        if keep_losses:
-            losses.append(float(loss))
+    step_function = convergence_check = None
+    if true_tv:
+        from mrax.core.tv_fit import make_tv_steps
+        opt, step_function, convergence_check = make_tv_steps(loss_fn, smooth_loss,
+            unpack._mrax_physical_bounds, tv_operators, selected, step_size,
+            tolerance=proximal_tolerance, max_prox_steps=proximal_max_steps,
+            penalty=bregman_penalty, inner_steps=bregman_inner_steps, device=device)
+    params_all, losses, info = execute_optimizer(loss_fn, params_all, opt, num_steps=num_steps,
+        step_function=step_function, convergence_check=convergence_check, device=device)
+    losses = losses[1:] + [float(info.final_loss)] if losses else []
 
     final_model_params = params_all if reference_kspace is None else params_all["model"]
     fitted_fields_raw = unpack(final_model_params)
+    reconstruction_image = None
+    if return_reconstruction_image:
+        reference = ref_fixed if reference_kspace is None else params_all["reference_image"]
+        reconstruction_image = signal_image(fitted_fields_raw, reference)
     if reference_kspace is not None:
         fitted_fields_raw = dict(fitted_fields_raw)
         fitted_fields_raw["reference_image"] = params_all["reference_image"]
@@ -1722,7 +1765,17 @@ def reconstruct_model_based(
         return fitted_fields
 
     if return_model_callable:
-        model_callable = make_model_callable(experiment, model, study_globals=inferred_globals)
+        def predict(fields, offsets=None, observables=None):
+            reference = ref_fixed
+            if reference_kspace is not None:
+                reference = fields["reference_image"]
+                if isinstance(reference, Quantity):
+                    reference = reference.values
+            return signal_image({key: fields[key] for key in field_keys}, reference, offsets, observables)
+
+        model_callable = bind_device(predict, device)
+        if return_reconstruction_image:
+            return fitted_fields, losses, model_callable, reconstruction_image
         return fitted_fields, losses, model_callable
 
     return fitted_fields, losses
@@ -1737,8 +1790,6 @@ __all__ = [
     "ifftnc",
     "prox_tv_chambolle",
     "regrid_nearest",
-    "reconstruct_regrid",
-    "reconstruct_ifft",
-    "reconstruct_variational",
-    "reconstruct_model_based",
+    "solve_variational",
+    "solve_model_based",
 ]

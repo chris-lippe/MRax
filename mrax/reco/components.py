@@ -12,6 +12,7 @@ from .phase import unwrap_phase_image
 RAW_RECONSTRUCTION_KEY = "raw_reconstruction"
 RAW_RECONSTRUCTION_COILS_KEY = "raw_reconstruction_coils"
 RAW_RECONSTRUCTION_COMPLEX_KEY = "raw_reconstruction_complex"
+RAW_RECONSTRUCTION_FREQUENCY_KEY = "raw_reconstruction_frequency_hz"
 
 
 def reconstruction_coil_images(processed: Mapping[str, Any] | None) -> np.ndarray | None:
@@ -71,6 +72,9 @@ def reconstruction_variant(
         return value[frame_index : frame_index + 1]
 
     if coil is None and component_key == "magnitude":
+        frequency = payload.get(RAW_RECONSTRUCTION_FREQUENCY_KEY)
+        if frequency is not None:
+            return select_frame(np.asarray(frequency)).astype(np.float32, copy=False)
         combined = payload.get(RAW_RECONSTRUCTION_KEY)
         if combined is not None:
             return select_frame(np.abs(np.asarray(combined))).astype(np.float32, copy=False)
@@ -99,7 +103,7 @@ def reconstruction_variant(
             complex_image = select_frame(np.asarray(combined))
             if not np.iscomplexobj(complex_image) and component_key == "phase":
                 raise RuntimeError(
-                    "Combined reconstruction phase is unavailable because this legacy "
+                    "Combined reconstruction phase is unavailable because this stored "
                     "payload contains magnitude data only."
                 )
 

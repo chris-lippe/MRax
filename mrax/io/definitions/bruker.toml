@@ -1,0 +1,73 @@
+schema_version = 1
+
+[[profiles]]
+name = "echo_pair.frequency"
+role = "product"
+match = {image_units = "Hz", paired_echoes = true}
+settings = {kind = "frequency_hz", echo_spacing_key = "EchoSpacing", time_unit = "ms"}
+
+[[profiles]]
+name = "epi.full_echo_coordinates"
+role = "readout"
+match = {encoding = "epi", partial_echo = false}
+settings = {resolver = "integrated_gradient", center = "trajectory_midpoint"}
+
+[[profiles]]
+name = "epi.partial_echo_coordinates"
+role = "readout"
+match = {encoding = "epi", partial_echo = true}
+settings = {resolver = "integrated_gradient", center = "nominal_echo_fraction"}
+
+[[profiles]]
+name = "fid.standard_blocks"
+role = "storage"
+match = {stream = "fid", block_format = "Standard_KBlock_Format"}
+settings = {reader = "fid_records", alignment_bytes = 1024}
+
+[[profiles]]
+name = "fid.continuous"
+role = "storage"
+match = {stream = "fid", block_format = "continuous"}
+settings = {reader = "fid_records", alignment_bytes = 1}
+
+[[profiles]]
+name = "raw_job.records"
+role = "storage"
+match = {stream = "job", descriptor_valid = true}
+settings = {reader = "job_records", alignment_bytes = 1}
+
+[[profiles]]
+name = "cartesian.objects"
+role = "events"
+match = {encoding = "cartesian", dimensions = [1, 2, 3], explicit_events = false}
+settings = {resolver = "object_phase_groups", loop_order = ["repeat", "partition", "phase_group", "object", "within_group", "coil", "read"]}
+
+[[profiles]]
+name = "cartesian.coordinate_events"
+role = "events"
+match = {encoding = "cartesian", dimensions = [2, 3], explicit_events = true}
+settings = {resolver = "coordinate_events", loop_order = ["repeat", "event_group", "object", "within_group", "coil", "read"]}
+
+[[profiles]]
+name = "sampled.trajectory_profiles"
+role = "events"
+match = {encoding = "sampled", delayed_readout = false}
+settings = {resolver = "trajectory_profiles", loop_order = ["interleave", "frame", "coil", "read"]}
+
+[[profiles]]
+name = "sampled.delayed_profile_pairs"
+role = "events"
+match = {encoding = "sampled", delayed_readout = true}
+settings = {resolver = "delayed_profile_pairs", loop_order = ["polarity", "interleave", "frame", "coil", "read"]}
+
+[[profiles]]
+name = "epi.alternating_readouts"
+role = "events"
+match = {encoding = "epi", dimensions = [2, 3], echo_objects = 1}
+settings = {resolver = "segmented_epi", loop_order = ["repeat", "partition", "shot", "coil", "echo", "read"], first_negative_echo = 0, image_object = 0, phase_correction = "entropy_if_requested", object_combination = "selected"}
+
+[[profiles]]
+name = "epi.dual_readouts"
+role = "events"
+match = {encoding = "epi", dimensions = [2, 3], echo_objects = 2}
+settings = {resolver = "segmented_epi", loop_order = ["repeat", "partition", "shot", "coil", "echo", "read"], first_negative_echo = 0, image_object = 1, phase_correction = "none", object_combination = "magnitude_mean"}

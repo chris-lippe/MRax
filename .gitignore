@@ -208,6 +208,7 @@ __marimo__/
 
 # Output files
 /data/
+/local_testing/
 *.png
 !MRax_logo.png
 !docs/_static/MRax_logo*

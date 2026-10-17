@@ -1,20 +1,16 @@
 Guides and Workflows
 ====================
 
-Use these guides to walk through the pipeline end-to-end. The left sidebar shows the
-section navigation for each topic; notebooks are linked where they match the workflow.
-
-.. contents::
-   :local:
-   :depth: 2
+Choose a workflow below. Section Navigation links to pages in the current
+section; notebooks accompany the relevant workflows.
 
 Core pipeline
 -------------
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Core pipeline
+   :maxdepth: 1
 
+   acquisition_reconstruction
    reconstruction
    preprocessing
    variance_weighting
@@ -27,17 +23,15 @@ Import Workflows
 ----------------
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Import
+   :maxdepth: 1
 
-   importer_development
    dicom_import
    bruker_import
    pulseq_import
 
 - DICOM import supports individual series and recursive study folders, with
   identifiers excluded from returned metadata by default.
-- Bruker import has been tested on ParaVision 360 3.5–3.7 data.
+- Bruker import reads ParaVision study folders and standalone experiment exports.
 - Pulseq walkthrough notebook: :doc:`notebooks/pulseq_import_demo`
 - Pulseq notebook download: :download:`pulseq_import_demo.ipynb <notebooks/pulseq_import_demo.ipynb>`
 
@@ -45,8 +39,7 @@ Quantitative mapping
 --------------------
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Quantitative mapping
+   :maxdepth: 1
 
    quantitative_fits
 

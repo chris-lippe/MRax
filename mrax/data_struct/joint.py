@@ -170,12 +170,13 @@ def select_experiment_frames(
     data_flat = _flatten_to_frames(data, experiment)
     data_sel = data_flat[idx]
 
-    kspace_sel = None
-    if dataset.kspace is not None:
+    acquisition_sel = dataset.acquisition.select_frames(idx) if dataset.acquisition is not None else None
+    kspace_sel = acquisition_sel.samples if acquisition_sel is not None else None
+    if dataset.kspace is not None and acquisition_sel is None:
         kspace_sel = _slice_kspace(np.asarray(dataset.kspace), frame_count, idx)
 
-    sampling_mask_sel = None
-    if dataset.sampling_mask is not None:
+    sampling_mask_sel = acquisition_sel.acquired if acquisition_sel is not None else None
+    if dataset.sampling_mask is not None and acquisition_sel is None:
         sampling_mask_arr = np.asarray(dataset.sampling_mask)
         if sampling_mask_arr.ndim >= 1 and int(sampling_mask_arr.shape[0]) == frame_count:
             sampling_mask_sel = sampling_mask_arr[idx]
@@ -193,6 +194,7 @@ def select_experiment_frames(
         sampling_mask=jnp.asarray(sampling_mask_sel) if sampling_mask_sel is not None else None,
         kspace_metadata=dataset.kspace_metadata,
         spatial_geometry=dataset.spatial_geometry,
+        acquisition=acquisition_sel,
     )
     return new_exp, new_ds
 

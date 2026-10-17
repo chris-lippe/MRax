@@ -8,11 +8,9 @@ from typing import Mapping, Sequence
 import jax.numpy as jnp
 import numpy as np
 
-from mrax.data_struct import DataSet, Experiment, Quantity, SpatialGeometry
+from mrax.data_struct import AcquisitionData, DataSet, Experiment, Quantity, SpatialGeometry
 from mrax.data_struct.dimensions import reshape_frames_to_dims, reshape_observables_to_dims
 from mrax.library.default_experiments import build_default_experiment, filter_observables_for_type
-from mrax.reco.pipeline import FFTStage, RecoPipeline
-from mrax.reco.processing import estimate_radial_density
 
 _LOG = logging.getLogger(__name__)
 
@@ -45,29 +43,9 @@ class NormalizedMetadata:
     sat_time_ms: Sequence[float] | float | None = None
     diffusion_bvals: Sequence[float] | float | None = None
     diffusion_bvecs: Sequence[Sequence[float]] | np.ndarray | None = None
+    spin_lock: bool | None = None
 
 
-@dataclass(frozen=True)
-class KSpaceImportDefinition:
-    """Vendor-neutral raw k-space payload.
-
-    ``kind`` is one of ``"cartesian"``, ``"epi"``, or ``"non_cartesian"``. Cartesian
-    and EPI data use grid-shaped k-space with spatial axes last. Non-Cartesian data
-    uses samples with the sample axis last and a matching ``trajectory`` array with
-    columns ``(kx, ky)`` in cycles/pixel. ``sequence_type`` describes the sequence-
-    specific acquisition ordering used to interpret the samples (for example
-    ``"rare"`` for Turbo Spin Echo / RARE style line ordering).
-    """
-
-    samples: np.ndarray
-    kind: str = "cartesian"
-    sequence_type: str = "standard"
-    trajectory: np.ndarray | None = None
-    density: np.ndarray | None = None
-    sampling_mask: np.ndarray | None = None
-    spatial_shape: tuple[int, ...] | None = None
-    sample_axis: int = -1
-    metadata: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -81,25 +59,26 @@ class ImportDefinition:
     exp_type: str
     observables: Mapping[str, Quantity] = field(default_factory=dict)
     processed: Mapping[str, object] | None = None
-    kspace: np.ndarray | KSpaceImportDefinition | None = None
-    trajectory: np.ndarray | None = None
-    density: np.ndarray | None = None
-    sampling_mask: np.ndarray | None = None
-    kspace_kind: str = "cartesian"
+    acquisition: AcquisitionData | None = None
     sequence_type: str = "standard"
     kspace_metadata: Mapping[str, object] = field(default_factory=dict)
     spatial_geometry: SpatialGeometry | None = None
+    dims: Mapping[str, int] | None = None
 
 
 def build_imported_experiment_dataset(definition: ImportDefinition) -> tuple[Experiment, DataSet]:
     """Build MRax containers from a normalized import definition."""
 
-    experiment = build_default_experiment(
-        definition.exp_type,
-        definition.frame_count,
-        definition.spatial_shape,
-        definition.observables,
-    )
+    if definition.dims is None:
+        experiment = build_default_experiment(
+            definition.exp_type,
+            definition.frame_count,
+            definition.spatial_shape,
+            definition.observables,
+        )
+    else:
+        experiment = Experiment(dims=dict(definition.dims), observables=dict(definition.observables),
+            exp_type=definition.exp_type)
     dim_map = getattr(experiment, "_mrax_dim_observables", None)
     experiment.observables = reshape_observables_to_dims(
         experiment.observables,
@@ -116,39 +95,23 @@ def build_imported_experiment_dataset(definition: ImportDefinition) -> tuple[Exp
         if arr.ndim >= 1 and int(arr.shape[0]) == int(definition.frame_count):
             processed[key] = jnp.asarray(reshape_frames_to_dims(arr, experiment.dims))
 
-    kspace = definition.kspace
-    trajectory = definition.trajectory
-    density = definition.density
-    sampling_mask = definition.sampling_mask
-    kspace_kind = definition.kspace_kind
-    sequence_type = normalize_sequence_type(definition.sequence_type)
+    acquisition = definition.acquisition
     kspace_metadata = dict(definition.kspace_metadata or {})
-    if isinstance(kspace, KSpaceImportDefinition):
-        kspace_def = kspace
-        kspace = kspace_def.samples
-        trajectory = kspace_def.trajectory if trajectory is None else trajectory
-        density = kspace_def.density if density is None else density
-        sampling_mask = kspace_def.sampling_mask if sampling_mask is None else sampling_mask
-        kspace_kind = kspace_def.kind
-        sequence_type = normalize_sequence_type(kspace_def.sequence_type)
-        if kspace_def.spatial_shape is not None:
-            kspace_metadata.setdefault("spatial_shape", tuple(int(v) for v in kspace_def.spatial_shape))
-        kspace_metadata.setdefault("sample_axis", int(kspace_def.sample_axis))
-        kspace_metadata.update(dict(kspace_def.metadata or {}))
-    if sampling_mask is None and processed and "sampling_mask" in processed:
-        sampling_mask = np.asarray(processed["sampling_mask"])
-    if kspace is not None:
-        kspace_metadata.setdefault("kind", kspace_kind)
-        kspace_metadata.setdefault("sequence_type", sequence_type)
+    if acquisition is not None:
+        kspace_metadata.update(kind=acquisition.kind,
+            sequence_type=normalize_sequence_type(definition.sequence_type),
+            acquisition_schema_version=acquisition.schema_version,
+            sample_domain=acquisition.domain, reconstruction_status="not_run")
 
     dataset = DataSet(
         data=jnp.asarray(data),
         name=definition.name,
         processed=processed or None,
-        kspace=jnp.asarray(kspace) if kspace is not None else None,
-        trajectory=jnp.asarray(trajectory) if trajectory is not None else None,
-        density=jnp.asarray(density) if density is not None else None,
-        sampling_mask=jnp.asarray(sampling_mask) if sampling_mask is not None else None,
+        acquisition=acquisition,
+        kspace=None if acquisition is None else jnp.asarray(acquisition.samples),
+        trajectory=None if acquisition is None or acquisition.trajectory is None else jnp.asarray(acquisition.trajectory),
+        density=None if acquisition is None or acquisition.density is None else jnp.asarray(acquisition.density),
+        sampling_mask=None if acquisition is None or acquisition.acquired is None else jnp.asarray(acquisition.acquired),
         kspace_metadata=kspace_metadata or None,
         spatial_geometry=definition.spatial_geometry,
     )
@@ -200,12 +163,14 @@ def _first_finite_scalar(val) -> float | None:
 
 
 def _trim_to_frames(val, frame_count: int):
+    if isinstance(val, np.ndarray):
+        val = val.tolist()
+    if np.isscalar(val) and not isinstance(val, (str, bytes)):
+        val = [val]
     if isinstance(val, (list, tuple)):
         if len(val) > frame_count:
             return list(val)[-frame_count:]
         return val
-    if isinstance(val, np.ndarray) and val.ndim == 1 and val.size > frame_count:
-        return val[-frame_count:].tolist()
     return val
 
 
@@ -364,7 +329,9 @@ def detect_experiment_type(meta: NormalizedMetadata) -> str:
     ):
         return "dce"
 
-    if any(k in combined for k in ("msme", "multi spin", "spin_echo")) or _contains_keyword_token(combined, "mse"):
+    spin_echo_train = any(_contains_keyword_token(combined, k) for k in ('tse', 'fse', 'rare', 'cpmg'))
+    if (any(k in combined for k in ("msme", "multi spin", "spin_echo")) or _contains_keyword_token(combined, "mse")
+            or spin_echo_train and _has_variation(meta.echo_times)):
         return "mse"
     if any(k in combined for k in ("t2star", "t2*", "multi gradient", "ge3d", "gradient_echo")) or _contains_keyword_token(combined, "mge"):
         return "mge"
@@ -408,7 +375,9 @@ def extract_observables_from_metadata(
         obs["flip_angle"] = Quantity(fa_arr, "deg")
 
     if exp_type == "dce" and meta.scan_time_ms is not None:
-        obs["scan_time"] = Quantity(jnp.asarray(float(meta.scan_time_ms), dtype=jnp.float32), "ms")
+        duration = float(meta.scan_time_ms)
+        obs["scan_time"] = Quantity(jnp.asarray(duration, dtype=jnp.float32), "ms")
+        obs["time"] = Quantity(jnp.arange(frame_count, dtype=jnp.float32) * duration / frame_count / 1000., "s")
 
     if exp_type == "fair_asl":
         fair_labels = _trim_to_frames(meta.fair_labels, frame_count)
@@ -431,6 +400,9 @@ def extract_observables_from_metadata(
             sat_time = _trim_to_frames(meta.sat_time_ms, frame_count)
             obs["sat_time"] = Quantity(jnp.asarray(sat_time, dtype=jnp.float32), "ms")
 
+        if meta.spin_lock is not None:
+            obs["spin_lock"] = Quantity(meta.spin_lock, "1")
+
     if exp_type in ("dti", "diffusion"):
         bvals = _trim_to_frames(meta.diffusion_bvals, frame_count)
         if _has_value(bvals):
@@ -442,20 +414,6 @@ def extract_observables_from_metadata(
     return filter_observables_for_type(exp_type, obs)
 
 
-def _normalize_kspace_kind(kind: str) -> str:
-    normalized = str(kind or "cartesian").lower().replace("-", "_")
-    aliases = {
-        "noncartesian": "non_cartesian",
-        "non_cart": "non_cartesian",
-        "nufft": "non_cartesian",
-        "radial": "non_cartesian",
-        "spiral": "non_cartesian",
-        "echo_planar": "epi",
-    }
-    normalized = aliases.get(normalized, normalized)
-    if normalized not in ("cartesian", "epi", "non_cartesian"):
-        raise ValueError("k-space kind must be one of: cartesian, epi, non_cartesian")
-    return normalized
 
 
 def normalize_sequence_type(sequence_type: str | None) -> str:
@@ -480,10 +438,6 @@ def normalize_sequence_type(sequence_type: str | None) -> str:
     return aliases.get(normalized, normalized)
 
 
-def sampling_mask_from_kspace(kspace: np.ndarray, threshold: float = 0.0) -> np.ndarray:
-    """Return a boolean mask marking acquired Cartesian/EPI k-space samples."""
-
-    return np.abs(np.asarray(kspace)) > float(threshold)
 
 
 def reshape_epi_samples(
@@ -598,7 +552,12 @@ def reshape_rare_samples(
     if ky_unique.size > ny:
         raise ValueError(f"Trajectory contains {ky_unique.size} unique ky lines but spatial_shape expects {ny}")
 
-    ky_offset = (ny - int(ky_unique.size)) // 2
+    ky_steps = np.rint(ky_unique * ny).astype(int)
+    if not np.allclose(ky_unique * ny, ky_steps, atol=1e-4):
+        raise ValueError("Cartesian phase coordinates must lie on the declared Fourier grid")
+    destination_rows = ky_steps + ny // 2
+    if np.any(destination_rows < 0) or np.any(destination_rows >= ny):
+        raise ValueError("Phase coordinates exceed the declared encoding grid")
     seen_per_ky = np.zeros((int(ky_unique.size),), dtype=int)
     frame_count = 0
     for ky in ky_values.tolist():
@@ -624,7 +583,7 @@ def reshape_rare_samples(
         acq_frame_idx = int(frame_occurrence[ky_idx])
         frame_occurrence[ky_idx] += 1
         frame_idx = int(frame_order_arr[acq_frame_idx])
-        dst_ky = ky_idx + ky_offset
+        dst_ky = int(destination_rows[ky_idx])
         line = lines[..., line_idx, :]
         if reverse_negative_readout and traj_lines[line_idx].shape[0] >= 2:
             if float(traj_lines[line_idx][-1, 0] - traj_lines[line_idx][0, 0]) < 0.0:
@@ -634,374 +593,30 @@ def reshape_rare_samples(
     return output[0] if frame_count == 1 else output
 
 
-def build_kspace_definition(
-    kspace: np.ndarray,
-    *,
-    kind: str = "cartesian",
-    sequence_type: str = "standard",
-    trajectory: np.ndarray | None = None,
-    density: np.ndarray | None = None,
-    sampling_mask: np.ndarray | None = None,
-    spatial_shape: tuple[int, ...] | None = None,
-    sample_axis: int = -1,
-    metadata: Mapping[str, object] | None = None,
-) -> KSpaceImportDefinition:
-    """Validate and describe raw k-space for an importer payload."""
-
-    kspace_kind = _normalize_kspace_kind(kind)
-    normalized_sequence_type = normalize_sequence_type(sequence_type)
-    samples = np.asarray(kspace)
-    sample_axis = int(sample_axis)
-    if sample_axis < 0:
-        sample_axis += samples.ndim
-    if sample_axis < 0 or sample_axis >= samples.ndim:
-        raise ValueError("sample_axis is out of range for k-space samples")
-
-    traj = None if trajectory is None else np.asarray(trajectory, dtype=np.float32)
-    dens = None if density is None else np.asarray(density, dtype=np.float32)
-    mask = None if sampling_mask is None else np.asarray(sampling_mask, dtype=bool)
-
-    if kspace_kind == "non_cartesian":
-        if traj is None:
-            raise ValueError("non-Cartesian k-space requires a trajectory")
-        if traj.ndim != 2 or traj.shape[1] not in (2, 3):
-            raise ValueError("trajectory must have shape (num_samples, 2) or (num_samples, 3)")
-        if spatial_shape is not None and len(spatial_shape) != int(traj.shape[1]):
-            raise ValueError("spatial_shape dimensionality must match the non-Cartesian trajectory")
-        if sample_axis != samples.ndim - 1:
-            samples = np.moveaxis(samples, sample_axis, -1)
-            sample_axis = samples.ndim - 1
-        sample_count = int(samples.shape[sample_axis])
-        if sample_count != int(traj.shape[0]):
-            raise ValueError(
-                f"k-space sample axis has {sample_count} samples but trajectory has {traj.shape[0]}"
-            )
-        if dens is None:
-            dens = estimate_radial_density(
-                traj,
-                spatial_shape=spatial_shape
-                if spatial_shape is not None and len(spatial_shape) == int(traj.shape[1])
-                else None,
-            )
-        elif dens.shape != (sample_count,):
-            raise ValueError("density must have shape (num_samples,)")
-    elif traj is not None:
-        raise ValueError("trajectory is only valid for non-Cartesian k-space definitions")
-
-    if mask is None and kspace_kind in ("cartesian", "epi"):
-        mask = sampling_mask_from_kspace(samples)
-
-    return KSpaceImportDefinition(
-        samples=samples,
-        kind=kspace_kind,
-        sequence_type=normalized_sequence_type,
-        trajectory=traj,
-        density=dens,
-        sampling_mask=mask,
-        spatial_shape=spatial_shape,
-        sample_axis=sample_axis,
-        metadata=dict(metadata or {}),
-    )
 
 
-def build_cartesian_kspace_definition(
-    kspace: np.ndarray,
-    *,
-    sequence_type: str = "standard",
-    sampling_mask: np.ndarray | None = None,
-    spatial_shape: tuple[int, ...] | None = None,
-    metadata: Mapping[str, object] | None = None,
-) -> KSpaceImportDefinition:
-    """Create a Cartesian k-space definition."""
-
-    return build_kspace_definition(
-        kspace,
-        kind="cartesian",
-        sequence_type=sequence_type,
-        sampling_mask=sampling_mask,
-        spatial_shape=spatial_shape,
-        metadata=metadata,
-    )
 
 
-def build_epi_kspace_definition(
-    kspace: np.ndarray,
-    *,
-    samples_per_line: int | None = None,
-    line_count: int | None = None,
-    reverse_odd_lines: bool = True,
-    sequence_type: str = "standard",
-    sampling_mask: np.ndarray | None = None,
-    spatial_shape: tuple[int, ...] | None = None,
-    metadata: Mapping[str, object] | None = None,
-) -> KSpaceImportDefinition:
-    """Create an EPI k-space definition, optionally reshaping serial ADC samples."""
-
-    samples = np.asarray(kspace)
-    meta = dict(metadata or {})
-    if samples_per_line is not None:
-        samples = reshape_epi_samples(
-            samples,
-            samples_per_line=int(samples_per_line),
-            line_count=line_count,
-            reverse_odd_lines=reverse_odd_lines,
-        )
-        meta.update(
-            {
-                "samples_per_line": int(samples_per_line),
-                "line_count": int(samples.shape[-2]),
-                "reverse_odd_lines": bool(reverse_odd_lines),
-            }
-        )
-    return build_kspace_definition(
-        samples,
-        kind="epi",
-        sequence_type=sequence_type,
-        sampling_mask=sampling_mask,
-        spatial_shape=spatial_shape,
-        metadata=meta,
-    )
 
 
-def build_rare_kspace_definition(
-    samples: np.ndarray,
-    *,
-    trajectory: np.ndarray,
-    adc_counts: Sequence[int],
-    sampling_mask: np.ndarray | None = None,
-    spatial_shape: tuple[int, int],
-    frame_order: Sequence[int] | None = None,
-    metadata: Mapping[str, object] | None = None,
-) -> KSpaceImportDefinition:
-    """Create a Cartesian k-space definition for RARE/TurboSE acquisitions."""
-
-    reshaped = reshape_rare_samples(
-        samples,
-        trajectory=trajectory,
-        adc_counts=adc_counts,
-        spatial_shape=spatial_shape,
-        frame_order=frame_order,
-    )
-    return build_kspace_definition(
-        reshaped,
-        kind="cartesian",
-        sequence_type="rare",
-        sampling_mask=sampling_mask,
-        spatial_shape=spatial_shape,
-        metadata=metadata,
-    )
 
 
-def build_non_cartesian_kspace_definition(
-    samples: np.ndarray,
-    *,
-    trajectory: np.ndarray,
-    density: np.ndarray | None = None,
-    spatial_shape: tuple[int, ...] | None = None,
-    sample_axis: int = -1,
-    sequence_type: str = "standard",
-    metadata: Mapping[str, object] | None = None,
-) -> KSpaceImportDefinition:
-    """Create a non-Cartesian k-space definition with trajectory and density."""
-
-    return build_kspace_definition(
-        samples,
-        kind="non_cartesian",
-        sequence_type=sequence_type,
-        trajectory=trajectory,
-        density=density,
-        spatial_shape=spatial_shape,
-        sample_axis=sample_axis,
-        metadata=metadata,
-    )
 
 
-def apply_encoding_steps(
-    kspace: np.ndarray,
-    enc_steps: Sequence[int],
-    axis: int = -2,
-    *,
-    target_size: int | None = None,
-) -> np.ndarray:
-    """Reorder k-space lines according to acquisition encoding steps."""
-
-    steps = np.asarray(enc_steps, dtype=int).ravel()
-    if steps.size == 0:
-        return kspace
-
-    axis = axis if axis >= 0 else kspace.ndim + axis
-
-    desired = int(target_size) if target_size is not None else int(kspace.shape[axis])
-    desired = max(desired, 1)
-
-    shape = list(kspace.shape)
-    shape[axis] = desired
-    filled = np.zeros(shape, dtype=kspace.dtype)
-
-    s_min = int(steps.min())
-    s_max = int(steps.max())
-    if s_min >= 0 and s_max < desired:
-        offset = 0
-    elif s_min >= -(desired // 2) and s_max <= (desired // 2) - 1:
-        offset = desired // 2
-    else:
-        offset = -s_min
-
-    slicer_src = [slice(None)] * kspace.ndim
-    slicer_dst = [slice(None)] * kspace.ndim
-    for src_idx, ky in enumerate(steps.tolist()):
-        dst = int(ky) + offset
-        if 0 <= dst < desired:
-            slicer_src[axis] = src_idx
-            slicer_dst[axis] = dst
-            filled[tuple(slicer_dst)] = kspace[tuple(slicer_src)]
-    return filled
 
 
-def reshape_raw_kspace(
-    samples: np.ndarray,
-    *,
-    frame_count: int,
-    spatial_shape: tuple[int, ...],
-    coil_count: int | None = None,
-    is_multi_echo: bool = False,
-    enc_steps: Sequence[int] | None = None,
-    target_ky: int | None = None,
-) -> np.ndarray:
-    """Reshape serial complex samples into k-space, applying optional ordering hints."""
-
-    base_shape = tuple(int(s) for s in spatial_shape)
-    if not base_shape:
-        raise ValueError("Cannot reshape raw k-space samples without a spatial shape.")
-    total_points = int(np.prod(base_shape))
-    if total_points == 0:
-        raise ValueError("Invalid spatial shape for raw k-space reconstruction.")
-    repeats = samples.size // total_points
-    if repeats == 0:
-        raise ValueError(
-            f"Expected at least {total_points} complex samples for one frame, found {samples.size}."
-        )
-
-    inferred_coils = 1
-    if repeats % frame_count == 0:
-        inferred_coils = repeats // frame_count
-    if coil_count is None:
-        coil_count = inferred_coils
-    if coil_count <= 0 or coil_count * frame_count != repeats:
-        coil_count = inferred_coils
-
-    frames = frame_count if coil_count == repeats // frame_count else repeats
-    usable = samples[: frames * coil_count * total_points]
-
-    def _frame_smooth(arr: np.ndarray) -> float:
-        if arr.shape[0] <= 1:
-            return 0.0
-        mag = np.abs(arr)
-        return float(np.mean(np.abs(np.diff(mag, axis=0))))
-
-    def _ky_smooth(arr: np.ndarray) -> float:
-        mag = np.abs(arr)
-        return float(np.mean(np.abs(np.diff(mag, axis=2))))
-
-    def _score(arr: np.ndarray) -> float:
-        fr = _frame_smooth(arr)
-        ky = _ky_smooth(arr)
-        return ky * (fr if fr > 0 else 1.0)
-
-    if len(base_shape) == 2:
-        ky, kx = base_shape
-    else:
-        ky = kx = None
-
-    enc_steps_arr = None
-    if enc_steps is not None:
-        try:
-            enc_steps_arr = np.asarray(enc_steps, dtype=int).ravel()
-            if enc_steps_arr.size == 0:
-                enc_steps_arr = None
-        except Exception:
-            enc_steps_arr = None
-
-    candidates: list[np.ndarray] = []
-    if coil_count > 1:
-        block_major = usable.reshape((frames, coil_count) + base_shape)
-        candidates.append(block_major)
-        if len(base_shape) == 2:
-            line_major = usable.reshape((frames, ky, coil_count, kx))
-            line_major = np.moveaxis(line_major, 2, 1)
-            candidates.append(line_major)
-            if is_multi_echo:
-                ky_major = np.transpose(usable.reshape((ky, frames, coil_count, kx)), (1, 2, 0, 3))
-                ky_major_alt = np.transpose(usable.reshape((ky, coil_count, frames, kx)), (2, 1, 0, 3))
-                candidates.extend([ky_major, ky_major_alt])
-    else:
-        frame_major = usable.reshape((frames,) + base_shape)
-        if frame_major.ndim == 3:
-            candidates.append(frame_major[:, None, :, :])
-        else:
-            candidates.append(frame_major[:, None] + np.zeros((frames, 1) + base_shape, dtype=frame_major.dtype))
-        if is_multi_echo and len(base_shape) == 2 and ky is not None and kx is not None:
-            ky_major = np.transpose(usable.reshape((ky, frames, kx)), (1, 0, 2))
-            candidates.append(ky_major[:, None, :, :])
-
-    def _score_candidate(arr: np.ndarray) -> float:
-        scored = arr
-        if enc_steps_arr is not None:
-            try:
-                scored = apply_encoding_steps(scored, enc_steps_arr, axis=-2, target_size=target_ky)
-            except Exception:
-                scored = arr
-        if is_multi_echo and len(candidates) > 1:
-            return _score(scored)
-        return _ky_smooth(scored)
-
-    if not candidates:
-        kspace = (
-            usable.reshape((frames, coil_count) + base_shape)
-            if coil_count > 1
-            else usable.reshape((frames,) + base_shape)
-        )
-    else:
-        if len(candidates) > 1:
-            kspace = min(candidates, key=_score_candidate)
-        else:
-            kspace = candidates[0]
-
-    if coil_count == 1 and kspace.ndim == 4:
-        kspace = kspace[:, 0, ...]
-
-    if enc_steps_arr is not None:
-        try:
-            kspace = apply_encoding_steps(kspace, enc_steps_arr, axis=-2, target_size=target_ky)
-        except Exception:
-            _LOG.debug("Ignored optional operation failure", exc_info=True)
-    return kspace
 
 
-def default_reco_pipeline(mask: np.ndarray | None) -> RecoPipeline:
-    """Default reconstruction chain for Cartesian importers."""
-
-    return RecoPipeline([FFTStage(direction="inverse", axes=(-2, -1))])
 
 
 __all__ = [
     "ImportDefinition",
-    "KSpaceImportDefinition",
     "NormalizedMetadata",
-    "apply_encoding_steps",
-    "build_cartesian_kspace_definition",
-    "build_epi_kspace_definition",
     "build_imported_experiment_dataset",
-    "build_kspace_definition",
-    "build_non_cartesian_kspace_definition",
-    "build_rare_kspace_definition",
-    "default_reco_pipeline",
     "detect_experiment_type",
     "extract_observables_from_metadata",
     "needs_manual_type_override",
     "normalize_sequence_type",
     "reshape_epi_samples",
     "reshape_rare_samples",
-    "reshape_raw_kspace",
-    "sampling_mask_from_kspace",
 ]
