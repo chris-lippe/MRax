@@ -73,7 +73,7 @@ def _resolve_sequence(path, sequence_path, sidecar):
         return Path(sequence_path)
     if sidecar.get('sequence_path'):
         return path.parent / str(sidecar['sequence_path'])
-    exact = path.with_suffix('.seq')
+    exact = path.with_name(path.name[:-7] + '.seq') if path.name.lower().endswith('.nii.gz') else path.with_suffix('.seq')
     if exact.exists():
         return exact
     # Filenames with a vendor prefix are deliberately not matched by substring.
@@ -123,13 +123,19 @@ def read_pulseq_measurement(path: str | Path, *, sequence_path=None, format=None
     if info is not None:
         from mrax.io.pulseq_companions import acquisition_frequency, sequence_frame_metadata
 
-        coordinates = coordinates or result.metadata.get('frame_coordinates', {})
-        if coordinates and options.get('frame_selection') is not None and result.acquisition is None:
+        contrast_count = len(np.unique(coordinates.get('contrast', []))) or result.metadata.get('source_contrast_count')
+        if coordinates and options.get('frame_selection') is not None:
             coordinates = {key: np.atleast_1d(value[options['frame_selection']]) for key, value in coordinates.items()}
             if echo_times is not None:
                 echo_times = np.atleast_1d(np.asarray(echo_times)[options['frame_selection']])
+        coordinates = coordinates or result.metadata.get('frame_coordinates', {})
         normalized = sequence_frame_metadata(info, coordinates, result.normalized_metadata.frame_count,
-            echo_times=echo_times if echo_times is not None else result.metadata.get('executed_echo_times_ms'))
+            echo_times=echo_times if echo_times is not None else result.metadata.get('executed_echo_times_ms'),
+            frame_indices=result.metadata.get('frame_indices'), source_frame_count=result.metadata.get('source_frame_count'),
+            contrast_count=contrast_count)
+        if result.metadata.get('image_component') == 'parameter_map':
+            normalized = replace(result.normalized_metadata, method_name=normalized.method_name,
+                sequence_name=normalized.sequence_name, protocol_name=normalized.protocol_name)
         if (np.size(normalized.echo_times) == 1 and result.normalized_metadata.echo_times is not None
                 and np.size(result.normalized_metadata.echo_times) > 1):
             normalized = replace(normalized, echo_times=result.normalized_metadata.echo_times)

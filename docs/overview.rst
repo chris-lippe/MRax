@@ -6,29 +6,34 @@ MRax is a JAX-based toolkit for quantitative MRI research. It provides:
 - **Experiments** to describe acquisition geometry, observables, and fitted maps.
 - **Models** to encode signal behavior and parameterizations.
 - **Studies** to coordinate multiple experiments that may depend on one another.
-- **Optimization utilities** for fitting with Optax-based solvers.
-- **Storage helpers** to persist MR images, k-space, and fitted maps in ISMRMRD files.
+- **Optimization utilities** for voxelwise and spatially regularized fitting.
+- **Study bundles** to save images, prepared k-space, fitted maps and metadata in
+  portable ``.mrax`` files.
+
+.. toctree::
+   :maxdepth: 1
+
+   setup
+   docker_setup
+   windows_setup
+   contributing
+   importer_development
 
 Getting Started
 ---------------
 
-1. Ensure Python >= 3.12.
-
-2. Install the package from PyPI or from a clone (ideally in a virtual environment)::
+1. Install MRax with Python 3.12 or newer, preferably in a virtual environment::
 
      pip install mrax
-     # or, from a clone:
-     pip install -e .
 
-3. Install dev tooling for tests/docs/notebooks when working from a clone::
+2. Launch the desktop GUI to import measurements, reconstruct images and fit maps::
 
-     pip install -e ".[all,dev,docs,notebooks]"
+     mrax-gui
 
-4. Run the smoke tests::
+3. Follow :doc:`gui` for interactive analysis, or :doc:`guides` for Python workflows.
+   The :doc:`notebooks` provide worked examples with synthetic data.
 
-     python -m pytest
-
-5. Open ``notebooks/getting_started.ipynb`` for a synthetic fitting walkthrough.
+For editable installations, containers and contributor checks, see :doc:`setup`.
 
 Key Modules
 -----------
@@ -69,99 +74,4 @@ needed.
 For multiple subjects, :func:`mrax.core.batch.run_batch_studies` loops over study
 folders, runs a shared fitting or analysis function, and exports one manifest per run.
 
-Custom Models
--------------
-
-Define new models in separate files using the template in ``docs/model_template.py``. Minimum requirements:
-
-- ``model_apply(fields, model_axis, observables)`` returning a predicted data cube.
-- ``parametrization_factory(spatial_shape)`` returning (params, unpack_fn).
-- ``parameter_units`` covering every unpacked field.
-
-Optionally set default ``regularizer_configs``/``regularizer_type``/``reg_weights``.
-Observables can include timing, encoding, calibration, or sequence metadata using
-``Quantity`` objects to track units.
-
-To shrink the parameter space when a map is known to be constant along an axis, set
-``parameter_constant_dims`` on your ``Model`` (e.g., ``{"amp": ("x",)}``). The fitter
-optimizes a collapsed parameter array and broadcasts the result back to the full spatial
-shape when returning fitted fields.
-
-You can also provide a spatial ``mask`` (e.g., a 2D ``x,y`` array) to ``run_fit``.
-Pixels outside the mask are ignored in the misfit and regularization terms, so
-constant-dimension constraints only matter inside the masked region. Fitted maps are set
-to ``NaN`` outside the mask, which makes downstream summaries and plots easier to filter.
-
-Quick tutorial (custom model in a separate file)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-1. Copy ``docs/model_template.py`` next to your code (e.g., ``my_models.py``) and edit the two required callables:
-
-   .. code-block:: python
-
-      # my_models.py
-      import jax.numpy as jnp
-      from mrax.data_struct.model import Model
-
-      def make_my_model():
-          def model_apply(fields, model_axis, observables=None):
-              # model_axis/observables can be None for purely spatial models
-              x = model_axis[:, None, None]
-              return fields["amp"][None, ...] * jnp.exp(-x / fields["tau"][None, ...])
-
-          def parametrization_factory(spatial_shape):
-              params = {"amp_raw": jnp.zeros(spatial_shape), "tau_raw": jnp.zeros(spatial_shape)}
-
-              def unpack(p):
-                  amp = jnp.exp(p["amp_raw"])
-                  tau = 1e-3 + 5.0 * jnp.exp(p["tau_raw"])
-                  return {"amp": amp, "tau": tau}
-
-              return params, unpack
-
-          return Model(
-              name="my_decay",
-              model_apply=model_apply,
-              parametrization_factory=parametrization_factory,
-              parameter_units={"amp": "a.u.", "tau": "s"},
-          )
-
-2. Use it in code or notebooks:
-
-   .. code-block:: python
-
-     from my_models import make_my_model
-     from mrax.core.loss_builder import run_fit, make_model_callable
-
-     model = make_my_model()
-     fields, losses, model_fn = run_fit(
-         experiment,
-         model,
-         dataset,
-         num_steps=200,
-         step_size=0.02,
-         return_model_callable=True,
-     )
-     preds = model_fn(field_arrays)  # merges study globals + observables
-
-3. Hook it into a Study or Bruker import:
-
-   .. code-block:: python
-
-     custom_map = {"my_experiment_type": make_my_model}
-     study, meta = import_bruker_study(root, model_map_by_type=custom_map)
-
-The same pattern applies to synthetic studies: construct your ``Model`` first, then
-pass it into ``Study`` entries or ``run_fit`` directly. For imported data, use
-``model_map_by_type`` or ``recipe=`` when the automatically selected model is not the
-one you want.
-
-Documentation Build
--------------------
-
-To build the docs locally::
-
-   cd docs
-   sphinx-build -E -b html . _build/html
-
-Open ``_build/html/index.html`` in your browser to view the rendered pages.
+For custom forward models and a worked example, see :doc:`custom_models`.

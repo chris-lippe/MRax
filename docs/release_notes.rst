@@ -4,52 +4,26 @@ Release Notes
 Version 0.3.0
 -------------
 
-Unreleased.
+Highlights
+~~~~~~~~~~
 
-- Pulseq quantitative imports reconcile echo axes, timing and compact-image
-  frame order with MRD acquisitions; validated physical trajectories use the
-  appropriate Cartesian or sampled reconstruction path. Auxiliary HDF5 products
-  are excluded from scan discovery.
-
-- Conventional fitting accepts ``reference_image`` for signal-domain forward
-  fitting. Dynamic parameter fields no longer expand a second frame axis.
-- Model-based fitting now uses the image-fitting loss prefactor; its regularizer
-  weights previously had twice the relative strength. Proximal warm starts choose
-  optimizer scaling from the supplied parameters.
-- Model-based prediction callables include the reference, phase and support used
-  during optimization.
-- Model-based encoding batches frames and rematerializes gradients to bound
-  coil-space workspace, while keeping temporal regularization intact. Shared
-  frame layouts use one transpose instead of tracing every frame separately.
-
-- Non-Cartesian iterative reconstruction uses a built-in CPU/GPU JAX NUFFT;
-  the ``jax-finufft`` dependency and ``nufft`` installation extra are removed.
-- NUFFT preparation and gradients bound trajectory workspace. Single-precision
-  NUFFT and proximal optimizers retain their dtype when JAX x64 is enabled.
-- Study saves default to portable ``.mrax`` bundles; Python saves omit GUI context.
-  GUI saves show progress. NIfTI export splits frames, and DICOM export is available.
-- Plot axes follow the sliders with units; DCE uses elapsed time in seconds.
-
-- Bruker and Pulseq imports prepare raw acquisitions for a shared FFT,
-  variational and model-based reconstruction pipeline with editable plans.
-- Pulseq imports extracted MRD, Siemens, NIfTI and DICOM measurements, with
-  editable metadata mappings and separate reconstruction.
-- Explicit DICOM series groups assemble quantitative sweeps; MRD metadata
-  templates and receiver-noise whitening support externally converted raw data.
-- Image-based inversion-recovery imports initialize T1 from the recovery curve.
-- Built-in relaxometry and saturation-transfer models support volumetric maps.
-- GUI import uses one folder picker, automatically detects Bruker or Pulseq data,
-  and opens the shared study overview.
-- Bruker study import accepts standalone exports and skips incomplete or
-  unsupported scans with a warning.
-- Fitting defaults to CPU; select a device with ``device``. TV regularization
-  selects FISTA automatically; explicit Adam uses smoothed TV with a warning.
-- FISTA and split Bregman retain appropriate steps for large mean-normalized
-  problems and use relative line-search tolerances for weak signals.
-- Data normalization defaults to the included ROI and frames. See :doc:`models`
-  for regularizer-weight adjustment when changing normalization scope.
-- Fixed FAIR ASL ROI preview curves and ROI drawing on comparison views.
-  GUI startup avoids bulk GPU memory preallocation by default.
+- Unified Bruker and Pulseq import with editable plans for FFT, variational and
+  model-based reconstruction.
+- Bruker import now includes PV 360 3.x and PV 6.0.1 support.
+- Expanded Pulseq support for MRD, Siemens, NIfTI and DICOM measurements, with
+  improved quantitative timing and frame alignment.
+- Built-in CPU/GPU JAX NUFFT replaces ``jax-finufft`` and the ``nufft`` extra,
+  with bounded workspace memory.
+- Improved FISTA and split Bregman optimizers. TV regularization selects FISTA
+  automatically; explicit Adam uses smoothed TV with a warning.
+- Fitting defaults to CPU and ROI-based normalization, with explicit device
+  selection. See :doc:`models` for regularizer-weight adjustments.
+- Reference-image forward fitting supports conventional and model-based fits,
+  with consistent loss scaling and reduced model-based memory use.
+- Portable ``.mrax`` bundles are the default study format. GUI saves show progress;
+  exports support multi-frame NIfTI and DICOM.
+- GUI import detects Bruker or Pulseq folders automatically. Improved plot axes,
+  elapsed-time display, ROI fitting and drawing, and GPU startup memory use.
 
 API changes: replace ``load_bruker_*`` with ``import_bruker_*``. Pulseq raw import
 uses ``read_pulseq_acquisition``. Reconstruct explicitly with
@@ -62,8 +36,6 @@ Low-level solvers are ``solve_variational`` and ``solve_model_based``.
 Version 0.2.1
 -------------
 
-Released 2026-08-10.
-
 Bug fixes
 ~~~~~~~~~
 
@@ -74,8 +46,6 @@ Bug fixes
 
 Version 0.2.0
 -------------
-
-Released 2026-08-08.
 
 Highlights
 ~~~~~~~~~~

@@ -89,6 +89,7 @@ def _read_nifti(path, *, frame_selection=None, spatial_ndim=None, spatial_unit=N
     selected = np.arange(frame_count) if frame_selection is None else np.atleast_1d(np.arange(frame_count)[frame_selection])
     if not len(selected):
         raise ValueError("Frame selection is empty")
+    frame_indices = selected.copy()
     if frame_order is not None:
         order = np.asarray(frame_order)
         if (order.shape != (frame_count,) or not np.issubdtype(order.dtype, np.integer)
@@ -119,7 +120,8 @@ def _read_nifti(path, *, frame_selection=None, spatial_ndim=None, spatial_unit=N
     affine[:3] *= {'meter': 1000., 'micron': .001}.get(spatial_unit, 1.)
     geometry = nifti_spatial_geometry(affine, spatial_shape=shape)
     metadata: dict[str, object] = {"format": "nifti", "path": str(path), "spatial_unit": spatial_unit,
-        "time_unit": time_unit, "source_frame_indices": selected}
+        "time_unit": time_unit, "source_frame_indices": selected,
+        "frame_indices": frame_indices, "source_frame_count": frame_count}
     normalized = NormalizedMetadata(frame_count=len(native))
     if len(image.shape) >= 4 and time_unit in ('sec', 'msec', 'usec'):
         factor = {'sec': 1., 'msec': 1e-3, 'usec': 1e-6}[time_unit]

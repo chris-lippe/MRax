@@ -133,9 +133,8 @@ html_context = {
     "license_name": license_name,
 }
 html_theme_options = {
-    "show_nav_level": 1,
-    "show_toc_level": 2,
-    "navigation_depth": 2,
+    "navigation_depth": 1,
+    "sidebar_includehidden": False,
     "navbar_end": ["theme-switcher", "navbar-icon-links"],
     "logo": {
         "image_light": "_static/MRax_logo_nav.png",
@@ -143,16 +142,14 @@ html_theme_options = {
         "text": "",
     },
     "secondary_sidebar_items": [],
-    "primary_sidebar_end": ["indices"],
+    "primary_sidebar_end": [],
     "footer_start": ["license-contact"],
     "icon_links": [],
 }
 
 html_sidebars = {
     "**": ["sidebar-nav-bs.html"],
-    "api": ["page-toc.html"],
-    "models": ["page-toc.html"],
-    "overview": ["page-toc.html"],
 }
 
 html_css_files = ["custom.css"]
+html_js_files = ["navigation.js"]

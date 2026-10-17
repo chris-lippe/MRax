@@ -1,50 +1,46 @@
 Acquisitions and reconstruction plans
 =====================================
 
-Importers prepare measurements and geometry; numerical reconstruction is vendor
-independent. Existing scanner images can be imported separately. For a runnable
-example, see :doc:`reconstruction`.
+Reconstruction plans let you compare methods and corrections on the same imported
+measurements. The workflow is the same for Bruker and Pulseq data.
 
-Acquisition contract
---------------------
+Run the suggested plan
+----------------------
 
-``AcquisitionData`` uses these conventions:
+After importing a study with raw data, choose a dataset and build its suggested
+reconstruction plan:
 
-- Complex samples: ``(frame, coil, *encoding_shape)`` for Cartesian data or
-  ``(frame, coil, sample)`` for trajectories.
-- Auxiliary samples hold complex calibration data; auxiliary coordinates hold
-  real values such as navigator times. ``auxiliary_frame_axes`` declares their
-  frame-dependent axes for selection, batching and saving.
-- Trajectory columns follow ``encoding_axes``, in cycles per pixel of the encoding
-  grid. Cartesian DC is at ``size // 2``; the inverse FFT is centered and orthonormal.
-- ``acquired`` marks measured support, including measured zeros. Interpolated or
-  completed samples do not enter iterative objectives as new measurements.
-- ``density`` supplies quadrature weights for initialization;
-  ``statistical_weights`` supplies confidence in the likelihood. Sampling masks
-  are binary.
-- ``domain="adc"`` requires spatial encoding before MRI reconstruction.
-  ``auxiliary_samples`` retains additional navigators or unresolved ADC regions.
+.. code-block:: python
 
-Importers normalize storage order, polarity, Fourier signs, units and receiver
-calibration. Recipes specify image permutations, flips and cropping.
-``stack_slices`` and ``average_repeats`` map native readouts to output frames;
-model-based encoding reverses this layout. Sensitivities may be shared or vary
-by frame, with an explicit receiver axis. Acquisition archives use arrays and
-JSON without pickle.
+   from mrax.reco import ReconstructionPipeline
 
-Readouts can carry nonuniform coordinates and polarity. FFT initialization uses
-direct Fourier quadrature by default; linear and windowed-sinc interpolation are
-alternatives. Coordinates retain their declared span. Iterative solvers encode
-the original measurements. ``ReadoutModel`` optionally initializes delayed or
-paired profiles with a truncated-SVD inverse and reports rank and conditioning.
+   dataset = study.datasets[0]
+   acquisition = dataset.acquisition
+   plan = ReconstructionPipeline.from_acquisition(acquisition)
+   result = plan.run(acquisition, device="cpu")
+   image = result.image
+
+The plan includes the corrections, output geometry and scaling supplied by the
+importer. ``result.image`` holds the reconstructed product; the imported scanner
+image remains in ``dataset.data``. See :doc:`bruker_import` and
+:doc:`pulseq_import` for loading a study.
 
 Editing a plan
 --------------
 
-``ReconstructionPipeline.from_acquisition(acquisition)`` supplies the suggested
-plan. Replace stages to compare methods. Plans allow EPI correction, FOV shifts,
-partial Fourier or gridding, one solver (``fft``, ``variational`` or
-``model_based``), output formatting and coil combination.
+Replace a stage to compare reconstruction methods while keeping the other settings:
+
+.. code-block:: python
+
+   tv_plan = plan.replace_stage(
+       "fft", replacement="variational",
+       regularizer="tv", regularizer_weight=0.001, num_steps=100,
+   )
+   tv_result = tv_plan.run(acquisition, device="cpu")
+
+Plans support EPI correction, FOV shifts, partial Fourier or gridding, a solver
+(``fft``, ``variational`` or ``model_based``), output formatting and coil combination.
+See :doc:`reconstruction` for fitting models directly to raw measurements.
 
 TOML plans use ``schema_version = 1`` and ``[[stages]]`` with ``kind`` and optional
 ``[stages.options]``. Include ``format`` and ``combine`` explicitly. Omitting a
@@ -92,5 +88,5 @@ quality-guided or weighted Laplacian unwrapping are configurable. Quality-guided
 unwrapping uses the CPU. Each disconnected region has an independent integer
 phase-period ambiguity.
 
-For source definitions and extension points, see :doc:`bruker_import` and
-:doc:`importer_development`.
+Array shapes, encoding axes and low-level readout conventions are documented in
+the :ref:`api-acquisition-conventions`.

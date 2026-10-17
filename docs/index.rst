@@ -13,15 +13,18 @@ MRax
          <p class="mrax-hero-copy">
            MRax provides data structures and optimization utilities for quantitative MRI
            research. It includes unit-aware observables, common signal models,
-           reconstruction helpers, and manifest-based storage.
+           reconstruction helpers, and portable <code>.mrax</code> study bundles.
          </p>
          <p class="mrax-hero-copy">
-           <strong>Disclaimer:</strong> MRax is intended for research use only. This is an early release, and bugs may occur.
-           Coding agents were used to assist in development. Code was manually reviewed and validated on Bruker ParaVision 360 3.5–3.7 data.
+           MRax is intended for research use only.
          </p>
          <div class="mrax-hero-actions">
            <a class="mrax-button mrax-button-primary" href="overview.html">Start with the overview</a>
            <a class="mrax-button" href="notebooks.html">Open the notebooks</a>
+           <a class="mrax-button mrax-button-github" href="https://github.com/chris-lippe/MRax">
+             <i class="fa-brands fa-github" aria-hidden="true"></i>
+             <span>View on GitHub</span>
+           </a>
          </div>
        </div>
      </div>
@@ -40,12 +43,13 @@ Main components
    * - **Named experiments**
      - ``Experiment`` and ``Quantity`` objects keep dimensions and units attached to arrays.
    * - **JAX optimization**
-     - Differentiable fitting, regularization, masks, constraints, and study-level execution with Optax-based solvers.
+     - Differentiable fitting with masks, constraints and regularization, using Optax and proximal solvers.
    * - **MRI reconstruction**
      - Cartesian and non-Cartesian helpers, k-space processing blocks, variational
        solvers, and model-based parameter reconstruction.
    * - **Storage**
-     - ISMRMRD-backed manifests for images, k-space, fitted maps, units, metadata, and optional NIfTI exports.
+     - Portable ``.mrax`` study bundles for images, k-space, fitted maps and metadata,
+       with NIfTI and DICOM export.
 
 Core workflow
 -------------
@@ -58,21 +62,18 @@ Core workflow
    :func:`mrax.core.study_runner.execute_study_plan`, or call
    :func:`mrax.core.loss_builder.run_fit` directly for a single experiment.
 4. Inspect fitted fields, derived maps, and convergence history.
-5. Save the run with :func:`mrax.data_struct.storage.save_study_results` and analyze
-   ROI or group summaries from the manifest.
+5. Save the study and results in a ``.mrax`` bundle; see :doc:`storage`. Use
+   :doc:`analysis` for ROI or group summaries.
 
 Start Here
 ----------
 
 .. toctree::
    :maxdepth: 1
-   :caption: Explore the documentation
 
    overview
    guides
    models
-   acquisition_reconstruction
-   setup
    gui
    api
    notebooks

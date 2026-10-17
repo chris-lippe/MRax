@@ -240,7 +240,7 @@ def test_fractional_masks_weight_the_residual(which):
     assert float(loss(params)) == pytest.approx(1.9 / (1.1 * 5.0), rel=1e-6)
 
 
-def test_custom_parameter_name_receives_legacy_regularizer_weights():
+def test_custom_parameter_name_receives_configured_regularizer_weights():
     exp, model, data = _problem([[[1.0], [2.0]]], reg_weights={"level": 0.2})
     loss, params, _ = build_loss(exp, model, data)
     params["level"] = jnp.asarray([[0.0], [1.0]])

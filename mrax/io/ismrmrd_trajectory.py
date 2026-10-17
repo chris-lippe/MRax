@@ -30,26 +30,34 @@ def sequence_trajectory_encoding(records, heads, indices, info, encoding, xyz, n
     """
     if (info is None or info.trajectory_physical is None or len(info.adc_counts) != len(heads)
             or not np.array_equal(info.adc_counts, heads['number_of_samples'])):
-        return units, None, False, False
+        return units, None, False, False, ()
     physical = np.asarray(info.trajectory_physical)
     if physical.ndim != 2 or physical.shape[1] < ndim:
-        return units, None, False, False
+        return units, None, False, False, ()
     starts = np.r_[0, np.cumsum(info.adc_counts)]
+    matched = np.ones(ndim, bool)
+    absent = np.ones(ndim, bool)
+    varying = np.zeros(ndim, bool)
     for j in indices:
         if int(heads[j]['trajectory_dimensions']) < ndim:
-            return units, None, False, False
+            return units, None, False, False, ()
         stored = records[int(j)]['traj'].reshape(-1, int(heads[j]['trajectory_dimensions']))
-        if stored.shape[1] < ndim or not np.allclose(stored[:, :ndim], physical[starts[j]:starts[j + 1], :ndim], atol=1e-3, rtol=1e-5):
-            return units, None, False, False
+        expected = physical[starts[j]:starts[j + 1], :ndim]
+        matched &= np.all(np.isclose(stored[:, :ndim], expected, atol=1e-3, rtol=1e-5), axis=0)
+        absent &= np.all(np.abs(stored[:, :ndim]) < 1e-3, axis=0)
+        varying |= np.ptp(stored[:, :ndim], axis=0) > 1e-2
+    missing = tuple(int(i) for i in np.flatnonzero(~matched))
+    declared = str(getattr(encoding.trajectory, 'value', encoding.trajectory)).lower()
+    if missing and (declared != 'cartesian' or not np.all(absent[list(missing)]) or not np.any(matched & varying)):
+        return units, None, False, False, ()
     units = units or 'cycles/m'
     axes = None
     channel_order = info.definitions.get('channel_order', ())
     channel_order = channel_order.split() if isinstance(channel_order, str) else list(channel_order)
     if len(channel_order) >= ndim and set(channel_order[:ndim]) == set('xyz'[:ndim]):
         axes = ['xyz'.index(k) for k in channel_order[:ndim]]
-    declared = str(getattr(encoding.trajectory, 'value', encoding.trajectory)).lower()
     if declared != 'cartesian':
-        return units, axes, True, False
+        return units, axes, True, False, ()
     if axes is None:
         # Pulseq gradients use physical channels; MRD counters use read/phase.
         spreads = [np.ptp(physical[starts[j]:starts[j + 1], :ndim], axis=0) for j in indices]
@@ -60,6 +68,9 @@ def sequence_trajectory_encoding(records, heads, indices, info, encoding, xyz, n
     for j in indices:
         head = heads[j]
         stored = records[int(j)]['traj'].reshape(-1, int(head['trajectory_dimensions']))
+        if missing:
+            stored = stored.copy()
+            stored[:, missing] = physical[starts[j]:starts[j + 1], missing]
         pre, post = int(head['discard_pre']), int(head['discard_post'])
         end = len(stored) - post
         coords = convert_coordinates(stored[pre:end], units, xyz, encoding, ndim, axes) * np.asarray(xyz[:ndim])
@@ -72,5 +83,7 @@ def sequence_trajectory_encoding(records, heads, indices, info, encoding, xyz, n
             counter = int(head['idx'][key.replace('encoding', 'encode')])
             expected[:, dim] = _phase_index(counter, limit, xyz[dim]) - xyz[dim] // 2
         if not np.allclose(coords, expected, atol=1e-3, rtol=0):
-            return units, axes, True, False
-    return units, axes, True, True
+            if missing:
+                raise ValueError("Incomplete MRD trajectory cannot be verified against sequence and Cartesian counters")
+            return units, axes, True, False, ()
+    return units, axes, True, True, missing

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import warnings
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 
 import h5py
 import numpy as np
@@ -74,17 +74,31 @@ def acquisition_frequency(sequence_path, info):
     return None
 
 
-def sequence_frame_metadata(info, coordinates, frame_count, *, echo_times=None):
+def sequence_frame_metadata(info, coordinates, frame_count, *, echo_times=None,
+                            frame_indices=None, source_frame_count=None, contrast_count=None):
     """Expand an echo spacing only for explicitly separate echo contrasts."""
     meta = replace(info.normalized_metadata, frame_count=frame_count)
     contrasts = np.asarray(coordinates.get('contrast', []), int)
+    contrast_count = contrast_count or len(np.unique(contrasts))
+    selected = {}
+    for item in fields(meta):
+        value = getattr(meta, item.name)
+        array = np.asarray(value)
+        if value is None or array.ndim == 0 or len(array) <= 1:
+            continue
+        if (contrast_count > 1 and len(array) == contrast_count and len(contrasts) == frame_count
+                and np.all((contrasts >= 0) & (contrasts < len(array)))):
+            selected[item.name] = array[contrasts].tolist()
+        elif frame_indices is not None and len(array) == source_frame_count:
+            selected[item.name] = array[np.asarray(frame_indices, int)].tolist()
+    meta = replace(meta, **selected)
     if not len(contrasts) or meta.echo_times is None or np.size(meta.echo_times) != 1:
         return meta
     if echo_times is not None and np.size(echo_times) == frame_count:
         return replace(meta, echo_times=np.asarray(echo_times).tolist())
     train = info.definitions.get('echo_train_length')
     if (train is not None and float(train).is_integer() and int(train) > 1
-            and np.array_equal(np.unique(contrasts), np.arange(int(train)))):
+            and contrast_count == int(train) and np.all((contrasts >= 0) & (contrasts < int(train)))):
         return replace(meta, echo_times=(float(np.asarray(meta.echo_times).item()) * (contrasts + 1)).tolist())
     return meta
 

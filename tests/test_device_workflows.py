@@ -290,3 +290,13 @@ def test_gui_fit_methods_have_cpu_default_and_forward_explicit_device(method, mo
     with pytest.raises(CalledFit):
         entry(device="gpu:0", num_steps=1)
     assert seen == ["gpu:0"]
+
+
+def test_importing_library_and_readers_does_not_initialize_a_backend():
+    import os
+    import subprocess
+    import sys
+
+    script = 'import mrax.library; import mrax.io; import mrax.preprocessing'
+    subprocess.run([sys.executable, '-c', script], check=True, capture_output=True, timeout=45,
+        env={**os.environ, 'JAX_PLATFORMS': 'mrax_unavailable_backend'})

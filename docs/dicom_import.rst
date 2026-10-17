@@ -1,17 +1,8 @@
 DICOM Import
 ============
 
-MRax imports classic and enhanced DICOM image objects through ``pydicom``. The importer
-is split into two layers:
-
-- :mod:`mrax.io.dicom` implements file discovery, pixel decoding and rescaling,
-  functional-group parsing, frame and slice ordering, geometry, standard observables,
-  and conversion to MRax containers.
-- :mod:`mrax.io.dicom_bruker` adds Bruker origin detection and metadata conventions.
-  It does not replace the standards-based image or geometry path.
-
-This separation keeps the general contract vendor-neutral and allows another origin to
-be supported by implementing :class:`mrax.io.dicom.DicomMetadataAdapter`.
+MRax loads classic and enhanced DICOM images into experiments and studies, retaining
+pixel scaling, acquisition timings and physical geometry.
 
 Loading a series or study
 -------------------------
@@ -33,9 +24,8 @@ more than one series. ``load_dicom_study`` recursively groups all readable image
 by series and produces one short, unique experiment name per group. Set
 ``recursive=False`` to restrict discovery to the selected directory.
 
-Identifiers are excluded from returned import metadata by default. Set
-``include_identifiers=True`` only when the caller has an explicit reason and an
-appropriate data-handling context.
+Identifying DICOM attributes are excluded from returned metadata by default.
+``include_identifiers=True`` retains them.
 
 Dimensions, observables, and geometry
 -------------------------------------
@@ -54,8 +44,8 @@ conversion, but does not reorder inputs to reconstruction or quantitative fittin
 When valid orientation metadata is unavailable, MRax retains the native array order and
 uses explicit fallback geometry rather than guessing anatomy from image dimensions.
 
-Vendor adapters and missing metadata
-------------------------------------
+Missing acquisition metadata
+----------------------------
 
 The Bruker adapter is selected automatically when the DICOM manufacturer identifies a
 Bruker export. It supplements standards-based fields with sequence/frame hints used for
@@ -63,15 +53,5 @@ CEST, WASABI, FAIR, and related experiment inference. Only information actually 
 in the DICOM objects can be imported. Acquisition fields that remain solely in the
 vendor source format are reported as unavailable rather than synthesized.
 
-To supply another adapter explicitly:
-
-.. code-block:: python
-
-   experiment, dataset, metadata = load_dicom_series(
-       "dicom_folder",
-       metadata_adapters=[MyDicomMetadataAdapter()],
-   )
-
-An adapter may recognize a source, select the primary image objects, and return a
-:class:`mrax.io.dicom.DicomMetadataPatch`. It should leave general DICOM decoding,
-geometry, and standards-based metadata handling to :mod:`mrax.io.dicom`.
+For custom metadata adapters, see the contributor section
+:doc:`importer_development` and the :ref:`api-importers`.

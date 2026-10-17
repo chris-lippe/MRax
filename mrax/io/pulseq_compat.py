@@ -1,4 +1,4 @@
-"""Isolated compatibility for legacy shape decoding in supported PyPulseq releases."""
+"""Isolated compressed-shape decoding for supported Pulseq sequence formats."""
 from __future__ import annotations
 
 import copy
@@ -11,8 +11,8 @@ import numpy as np
 def read_sequence(sequence, path):
     """Read with RF-use detection, including pre-1.4 compressed shapes.
 
-    Some PyPulseq releases pass Python lists to the legacy shape decompressor,
-    which subtracts NumPy arrays. Clone the reader's globals for this call only;
+    Shape decompression requires NumPy arrays rather than Python lists.
+    Clone the reader's globals for this call only;
     never monkey-patch the installed package or its process-wide functions.
     """
     module = importlib.import_module('pypulseq.Sequence.read_seq')

@@ -32,6 +32,25 @@ def test_global_mrax_version_is_the_packaging_and_file_tag_source():
     assert versioned_payload({}) == {MRAX_VERSION_TAG: MRAX_VERSION}
 
 
+def test_release_citation_and_distribution_exclusions_are_current():
+    root = Path(__file__).parents[1]
+    assert f'version: {MRAX_VERSION}\n' in (root / 'CITATION.cff').read_text()
+    manifest = (root / 'MANIFEST.in').read_text()
+    assert 'prune data\n' in manifest
+    assert 'prune local_testing\n' in manifest
+    exclusions = (root / '.dockerignore').read_text().splitlines()
+    assert 'data/' in exclusions and 'local_testing/' in exclusions
+
+
+def test_gui_state_accepts_only_the_current_spatial_schema():
+    from mrax.gui import GuiSession
+    from mrax.gui.app import _restore_gui_state
+
+    payload = versioned_payload({'format': 'mrax.gui.state', 'version': 2})
+    with pytest.raises(ValueError, match='not supported'):
+        _restore_gui_state(GuiSession(), payload, {})
+
+
 def test_constant_data_fit_uses_bounded_rms_scaling():
     echo_times = jnp.asarray([8.0, 24.0, 48.0, 96.0])
     experiment = build_default_experiment(

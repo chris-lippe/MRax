@@ -58,7 +58,7 @@ def validate_mrax_file_version(
     *,
     file_kind: str,
 ) -> MRaxVersionInfo:
-    """Validate a declared producer version while allowing legacy untagged files."""
+    """Validate producer versions; callers report missing tags separately."""
 
     raw_version = payload.get(MRAX_VERSION_TAG)
     if raw_version is None or not str(raw_version).strip():
@@ -76,7 +76,7 @@ def validate_mrax_file_version(
 
 def missing_mrax_version_message(file_kind: str) -> str:
     return (
-        f"{file_kind} has no '{MRAX_VERSION_TAG}' tag. It may be a legacy MRax file; "
+        f"{file_kind} has no '{MRAX_VERSION_TAG}' tag; "
         "compatibility cannot be verified, so loading will be attempted."
     )
 

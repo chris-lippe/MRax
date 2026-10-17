@@ -67,7 +67,7 @@ def execute_study_plan(
     When ``skip_missing_observables`` is True, experiments missing required observables
     are skipped with an explanatory warning and a ``skipped`` result entry.
 
-    ``run_fit_kwargs`` are passed to every fit. For backwards compatibility, a value
+    ``run_fit_kwargs`` are passed to every fit. A value
     can be a mapping keyed by plan entry name to provide per-experiment values, except
     for dict-valued ``run_fit`` options such as ``regularizer_weights`` and
     ``study_globals``. Use ``run_fit_overrides`` for explicit per-experiment keyword

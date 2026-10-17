@@ -38,8 +38,8 @@ def _normalize_abmt_line_shape_name(line_shape: object) -> str:
     return aliases[key]
 
 
-def _build_super_lorentzian_lookup() -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Build a regularized semisolid super-Lorentzian lookup table."""
+def _build_super_lorentzian_lookup() -> tuple[np.ndarray, np.ndarray]:
+    """Prepare the semisolid lookup on the host without initializing a device."""
     # The ideal super-Lorentzian diverges at zero offset around the magic angle.
     # We tabulate a regularized kernel once and reuse it through interpolation so
     # the model stays finite and reasonably fast during iterative fitting.
@@ -58,7 +58,9 @@ def _build_super_lorentzian_lookup() -> tuple[jnp.ndarray, jnp.ndarray]:
     values = np.sum(kernel * u_weights[None, :], axis=1)
     x_lookup = np.concatenate(([0.0], x_grid))
     value_lookup = np.concatenate(([values[0]], values))
-    return jnp.asarray(x_lookup), jnp.asarray(value_lookup)
+    x_lookup.setflags(write=False)
+    value_lookup.setflags(write=False)
+    return x_lookup, value_lookup
 
 
 _SUPER_LORENTZIAN_LOOKUP_X, _SUPER_LORENTZIAN_LOOKUP_Y = _build_super_lorentzian_lookup()

@@ -1292,13 +1292,13 @@ class GuiSession:
         labels = geometry.axis_anatomical_labels
         if labels is None:
             extra = exp_data.get("extra_metadata")
-            legacy_labels = (
+            metadata_labels = (
                 extra.get("image_axis_anatomical_labels")
                 if isinstance(extra, Mapping)
                 else None
             )
             try:
-                labels = tuple(str(value).lower() for value in legacy_labels)  # type: ignore[arg-type]
+                labels = tuple(str(value).lower() for value in metadata_labels)  # type: ignore[arg-type]
             except TypeError:
                 labels = None
         if labels is None or len(labels) != 3 or set(labels) != {"x", "y", "z"}:
@@ -1325,10 +1325,10 @@ class GuiSession:
             exp_name = name or self.selected_experiment
             exp_data = self.data.get("experiments", {}).get(exp_name or "")
             extra = exp_data.get("extra_metadata") if isinstance(exp_data, Mapping) else None
-            legacy_plane = extra.get("native_image_plane") if isinstance(extra, Mapping) else None
-            if legacy_plane:
+            metadata_plane = extra.get("native_image_plane") if isinstance(extra, Mapping) else None
+            if metadata_plane:
                 try:
-                    return _normalize_image_plane(str(legacy_plane))
+                    return _normalize_image_plane(str(metadata_plane))
                 except ValueError:
                     pass
         return "axial"
@@ -2770,7 +2770,7 @@ def _spatial_geometry_from_metadata(
     affine_values = values.get("affines")
     if affine_values is None:
         affine_values = values.get("affine")
-    source = str(values.get("import_format") or values.get("format") or "legacy")
+    source = str(values.get("import_format") or values.get("format") or "unknown")
     return SpatialGeometry.from_affines(
         affine_values,
         spatial_shape=spatial_shape,

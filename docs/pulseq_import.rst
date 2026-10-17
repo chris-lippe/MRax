@@ -6,8 +6,8 @@ measurements. A Pulseq ``.seq`` describes the executed sequence, not the measure
 signal. Pair it with the measurement using ``sequence_path`` or a matching
 filename. Archives must be extracted first.
 
-Read, reconstruct, fit
-----------------------
+Read, reconstruct and save
+--------------------------
 
 Import prepares samples; reconstruction is a separate, vendor-independent step.
 
@@ -25,6 +25,8 @@ Import prepares samples; reconstruction is a separate, vendor-independent step.
    )
    study = Study([experiment], [dataset], [model])
    study.save("study.mrax")
+
+For quantitative fitting after import, see :doc:`quantitative_fits`.
 
 For files containing reconstructed images, call
 ``import_pulseq_experiment("images.h5")`` directly. Select ``image_series`` or
@@ -80,24 +82,19 @@ verify frame order. Ambiguous stacks require ``reader_options`` with
 ``spatial_unit`` can declare missing NIfTI units. Phase images and parameter maps
 remain viewable without automatically selecting a magnitude-fitting model.
 
-Prepared samples
-----------------
+Raw reconstruction
+------------------
 
-Acquisitions retain explicit frame and receiver axes, measured-zero masks,
-calibration records and geometry. Sequence coordinates determine Cartesian
-ordering; ramp and fractional-grid samples keep their actual trajectories.
-Recordings without a proven spatial encoding remain ADC data. Matched three-echo
-EPI navigators retain polarity and precise timing for a generic phase-calibration
-stage. When that calibration is unavailable, the suggested entropy stage remains
-editable in the reconstruction plan.
+The imported acquisition includes sampling, calibration and geometry information,
+along with suggested readout and EPI corrections. Review or change these in a
+:doc:`reconstruction plan <acquisition_reconstruction>`. Recordings with unresolved
+spatial encoding remain ADC data and need encoding information before reconstruction.
 
 MRD trajectory units can be selected explicitly with
 ``reader_options={"trajectory_units": "cycles/fov"}``; other choices are
 ``cycles/pixel``, ``cycles/m`` and ``radians/pixel``. Automatic interpretation
 warns when assuming cycles/FOV. Use ``density_column`` for a declared quadrature
-column. Matching executed Pulseq coordinates establish physical trajectory units
-and gradient-channel order. Cartesian counters are used only after every stored
-coordinate passes the grid check; fractional samples retain their trajectories.
+column.
 Missing patient orientation remains marked as partial geometry. Supply
 ``density`` explicitly to override sampled quadrature.
 The default sampled preview estimates
@@ -107,6 +104,9 @@ reconstruction automatically batches large recordings before device placement;
 ``frame_batch_size`` overrides the batch size while retaining complete slice and
 repeat groups. Batched coil images stay in host memory; the combined image uses
 the requested device. Set the batch size to zero to disable batching.
+
+Advanced reader options
+-----------------------
 
 When conversion leaves placeholder acquisition counters, supply a matching MRD
 metadata file through ``reader_options={"metadata_template": "metadata.h5"}``.
@@ -143,14 +143,6 @@ explicit sequence ``SlicePositions`` resolve slice offsets in metres
 (``SlicePositionsUnit = mm`` declares millimetres). Without them, slice positions
 remain uncertain and geometry is marked partial.
 
-Extension points
-----------------
-
-Register another extracted-file adapter with ``register_measurement_reader``.
-It returns ``MeasurementData`` containing images or ``AcquisitionData`` and
-normalized metadata; it must not reconstruct images or change source files.
-An optional inspector lists groups or image series without reading pixels.
-
-Observable aliases and unit scales live in ``mrax/io/definitions/pulseq.toml``.
-Pass ``definition_paths`` to extend this library with additional TOML mappings.
-See :doc:`notebooks/pulseq_import_demo` for an array-based example.
+For an array-based example, see :doc:`notebooks/pulseq_import_demo`. Adding file
+readers or sequence metadata mappings is covered in the contributor section
+:doc:`importer_development`.

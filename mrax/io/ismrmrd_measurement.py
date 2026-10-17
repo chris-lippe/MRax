@@ -179,6 +179,9 @@ def _images(group, header, *, series=None, frame_selection=None, sequence_info=N
     missing_planes = len(np.unique(heads['slice'])) > 1 and np.allclose(heads['position'], heads['position'][0], atol=1e-3)
     if len(heads) != pixel_source.shape[0]:
         raise ValueError("ISMRMRD image headers and pixel frames do not match")
+    source_frame_count = len(heads)
+    contrast_count = len(np.unique(heads['contrast']))
+    selection = np.arange(source_frame_count)
     if frame_selection is None:
         arrays = np.asarray(pixel_source)
     else:
@@ -203,6 +206,7 @@ def _images(group, header, *, series=None, frame_selection=None, sequence_info=N
             volume_heads['position'] = centres
             heads = volume_heads
             coords = {k: values[groups[:, 0]] for k, values in coords.items()}
+            selection = selection[groups[:, 0]]
             fov[2] = spacing * slices
     geometry = _geometry(heads, arrays.shape[1:], fov, source="ismrmrd")
     if missing_planes:
@@ -210,6 +214,8 @@ def _images(group, header, *, series=None, frame_selection=None, sequence_info=N
     meta = _metadata(header, coords, len(arrays)) if header else NormalizedMetadata(frame_count=len(arrays))
     return MeasurementData(arrays, spatial_geometry=geometry, normalized_metadata=meta,
         metadata={"format": "ismrmrd", "image_series": series, "frame_coordinates": coords,
+            "frame_indices": selection, "source_frame_count": source_frame_count,
+            "source_contrast_count": contrast_count,
             "field_strength_mhz": float(header.experimentalConditions.H1resonanceFrequency_Hz) / 1e6 if header else None})
 
 
@@ -291,6 +297,8 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
             warnings.warn("Empty ISMRMRD records were skipped", RuntimeWarning, stacklevel=2)
         keys = np.column_stack([heads['idx'][k][indices] for k in _FRAME_FIELDS])
         frame_keys, frame_inverse = np.unique(keys, axis=0, return_inverse=True)
+        source_frame_count = len(frame_keys)
+        source_contrast_count = len(np.unique(frame_keys[:, _FRAME_FIELDS.index('contrast')]))
         selected_frames = np.arange(len(frame_keys)) if frame_selection is None else np.atleast_1d(np.arange(len(frame_keys))[frame_selection])
         if not len(selected_frames):
             raise ValueError("Frame selection is empty")
@@ -328,11 +336,15 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
                         warnings.warn(f"Variable-length {name} records are not attached", RuntimeWarning, stacklevel=2)
         has_trajectory = bool(np.any(heads['trajectory_dimensions'][indices]))
         trajectory_axes, physical_trajectory, cartesian_grid = None, False, False
+        recovered_axes = ()
         if has_trajectory and trajectory_mode != 'cartesian':
             from mrax.io.ismrmrd_trajectory import sequence_trajectory_encoding
 
-            trajectory_units, trajectory_axes, physical_trajectory, cartesian_grid = sequence_trajectory_encoding(
+            trajectory_units, trajectory_axes, physical_trajectory, cartesian_grid, recovered_axes = sequence_trajectory_encoding(
                 records, heads, indices, sequence_info, enc, encoded_xyz, ndim, trajectory_units)
+            if recovered_axes:
+                warnings.warn("Incomplete MRD trajectory axes recovered from matching Pulseq sequence and Cartesian counters",
+                              RuntimeWarning, stacklevel=2)
         if trajectory_mode == 'sampled' and not has_trajectory:
             raise ValueError("Sampled trajectory_mode requires stored trajectories")
         if trajectory_mode == 'cartesian':
@@ -346,7 +358,8 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
             if np.any(heads['trajectory_dimensions'][indices] < ndim):
                 raise ValueError("Every sampled imaging record requires spatial trajectory coordinates")
             samples, acquired, trajectory, recorded_density = _sampled(records, heads, indices, frame_inverse,
-                frames, coils, encoded_xyz, enc, ndim, trajectory_units, density_column, trajectory_axes)
+                frames, coils, encoded_xyz, enc, ndim, trajectory_units, density_column, trajectory_axes,
+                sequence_info.trajectory_physical if recovered_axes else None)
             shape = tuple(reversed(encoded_xyz[:ndim]))
             if recorded_density is not None:
                 resolved_density = recorded_density
@@ -459,15 +472,19 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
             metadata={'format': 'ismrmrd', 'path': str(path), 'group': group,
                       'field_strength_mhz': float(header.experimentalConditions.H1resonanceFrequency_Hz) / 1e6,
                       'encoding_ref': encoding_ref, 'frame_coordinates': coordinates,
+                      'frame_indices': selected_frames, 'source_frame_count': source_frame_count,
+                      'source_contrast_count': source_contrast_count,
                       'trajectory_units': trajectory_units, 'trajectory_axes': trajectory_axes,
                       'sequence_trajectory_matched': physical_trajectory,
                       'cartesian_trajectory_validated': cartesian_grid,
+                      'trajectory_axes_from_sequence': recovered_axes,
                       'executed_echo_times_ms': executed_echo_times,
                       'metadata_template_used': metadata_template is not None,
                       'sequence_parameters_available': header.sequenceParameters is not None})
 
 
-def _sampled(records, heads, indices, frame_inverse, frames, coils, xyz, encoding, ndim, units, density_column, axes=None):
+def _sampled(records, heads, indices, frame_inverse, frames, coils, xyz, encoding, ndim, units, density_column, axes=None,
+             sequence_trajectory=None):
     from mrax.io.ismrmrd_trajectory import convert_coordinates
 
     if units is None:
@@ -493,6 +510,7 @@ def _sampled(records, heads, indices, frame_inverse, frames, coils, xyz, encodin
     counts = np.zeros((frames, 1, offsets[-1]), np.uint32)
     trajectory = np.full((offsets[-1], ndim), np.nan, np.float32)
     density = np.ones(offsets[-1], np.float32) if density_column is not None else None
+    sequence_starts = np.r_[0, np.cumsum(heads['number_of_samples'])] if sequence_trajectory is not None else None
     for j, frame in zip(indices, frame_inverse):
         head = heads[j]
         key = tuple(int(head['idx'][k]) for k in ('kspace_encode_step_2', 'kspace_encode_step_1', 'segment'))
@@ -503,6 +521,8 @@ def _sampled(records, heads, indices, frame_inverse, frames, coils, xyz, encodin
         end = int(head['number_of_samples']) - post
         values = row['data'].view(np.complex64).reshape(coils, -1)[:, pre:end]
         coords = row['traj'].reshape(-1, int(head['trajectory_dimensions']))[pre:end]
+        if sequence_trajectory is not None:
+            coords = sequence_trajectory[sequence_starts[j] + pre:sequence_starts[j] + end]
         if coords.shape[-1] < ndim:
             raise ValueError("ISMRMRD trajectory has too few spatial coordinates")
         coords = convert_coordinates(coords, units, xyz, encoding, ndim, axes)

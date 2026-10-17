@@ -576,7 +576,7 @@ def test_siemens_adc_transforms_are_disabled_and_samples_stay_measured(tmp_path,
     np.testing.assert_array_equal(measurement.acquisition.samples[0, 0], np.arange(12).reshape(4, 3).T.ravel())
 
 
-def test_legacy_compressed_shapes_do_not_patch_pypulseq(tmp_path):
+def test_compressed_shape_reader_does_not_patch_pypulseq(tmp_path):
     import importlib
 
     import pypulseq
@@ -585,7 +585,7 @@ def test_legacy_compressed_shapes_do_not_patch_pypulseq(tmp_path):
 
     module = importlib.import_module('pypulseq.Sequence.read_seq')
     original = module.__dict__['__read_shapes']
-    path = tmp_path / 'legacy.seq'
+    path = tmp_path / 'compressed.seq'
     path.write_text('[VERSION]\nmajor 1\nminor 3\nrevision 1\n\n[SHAPES]\nshape_id 1\nnum_samples 3\n0.1\n0.1\n1\n\n')
     sequence = pypulseq.Sequence()
     with pytest.warns(UserWarning):

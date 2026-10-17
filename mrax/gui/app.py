@@ -13521,12 +13521,11 @@ def _restore_gui_state(
     if "version" not in payload:
         raise ValueError("GUI state version is required.")
     version = _safe_int_value(payload.get("version"), -1)
-    if version not in {2, _GUI_STATE_CURRENT_VERSION}:
+    if version != _GUI_STATE_CURRENT_VERSION:
         raise ValueError(
-            f"GUI state version {version} is not supported; expected 2 or {_GUI_STATE_CURRENT_VERSION}."
+            f"GUI state version {version} is not supported; expected {_GUI_STATE_CURRENT_VERSION}."
         )
-    legacy_dynamic_planes = version == 2
-    if not legacy_dynamic_planes and payload.get("spatial_plane_contract") != "fixed_xyz_v1":
+    if payload.get("spatial_plane_contract") != "fixed_xyz_v1":
         raise ValueError("GUI state spatial_plane_contract must be 'fixed_xyz_v1'.")
     unknown_keys = sorted(str(key) for key in payload.keys() if str(key) not in _GUI_STATE_KNOWN_KEYS)
     if unknown_keys:
@@ -13633,12 +13632,6 @@ def _restore_gui_state(
             active_indices = {}
         native_image_plane = session.native_image_plane_for_experiment(str(exp_name))
         active_image_plane = str(state_data.get("active_image_plane") or native_image_plane).lower()
-        if legacy_dynamic_planes:
-            active_image_plane = "axial"
-            _warn_restore(
-                warnings,
-                f"Image plane for '{exp_name}' reset to axial while migrating to fixed x/y/z planes.",
-            )
         if active_image_plane not in {"axial", "coronal", "sagittal"}:
             _warn_restore(
                 warnings,

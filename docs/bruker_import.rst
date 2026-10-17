@@ -21,7 +21,8 @@ prepared measurements. Set ``load_raw_kspace=False`` for image-only import.
 
 Study import warns and skips incomplete or unsupported experiments while retaining
 valid scans. Images remain available when raw data are missing; metadata reports
-raw availability. Unknown layouts are rejected instead of guessed. Supply
+raw availability. ``metadata['import_issues']`` lists skipped scans and their
+failure reasons. Unknown layouts raise an error. Supply
 ``field_strength_mhz`` for models that require the scanner field strength.
 
 Geometry and raw data
@@ -39,9 +40,10 @@ MRI reconstruction. See :doc:`acquisition_reconstruction` for conventions.
 Custom definitions
 ------------------
 
-The TOML library selects storage, event, coordinate and product resolvers from
-acquisition settings. ``definition_paths`` adds definitions; ``profiles`` selects
-a compatible named definition. See :doc:`importer_development` to extend it.
+For acquisition settings outside the built-in profiles, ``definition_paths`` loads
+additional TOML definitions and ``profiles`` selects a compatible named profile.
+The contributor section :doc:`importer_development` describes how these definitions
+are structured.
 
 The GUI reconstructs when a reconstruction view is requested. Scripted and GUI
 workflows both use ``reconstruct_acquisition``.

@@ -597,10 +597,10 @@ def test_gui_state_saves_mrax_version_and_spatial_geometry():
     with pytest.raises(ValueError, match="MRax version incompatibility"):
         _restore_gui_state(session, incompatible, arrays)
 
-    legacy = dict(payload)
-    legacy.pop("mrax_version")
+    untagged = dict(payload)
+    untagged.pop("mrax_version")
     warnings_list: list[str] = []
-    _restore_gui_state(session, legacy, arrays, warnings=warnings_list)
+    _restore_gui_state(session, untagged, arrays, warnings=warnings_list)
     assert any("no 'mrax_version' tag" in message for message in warnings_list)
 
 

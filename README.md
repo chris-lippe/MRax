@@ -2,15 +2,14 @@
 
 # MRax
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21723327.svg)](https://doi.org/10.5281/zenodo.21723327)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21723327.svg)](https://doi.org/10.5281/zenodo.21723327) [![Visit the Docs](https://img.shields.io/badge/Visit%20the%20Docs-1f77b4?logo=readthedocs&logoColor=white)](https://chris-lippe.github.io/MRax/)
 
 MRax is a JAX-based Python library for quantitative MRI research. It provides
 data structures for experiments and studies, differentiable signal models,
-optimization utilities, reconstruction helpers, analysis tools, and ISMRMRD-backed
-storage for images, k-space, and fitted maps.
+optimization utilities, reconstruction helpers, analysis tools, and portable
+`.mrax` study bundles for images, k-space, and fitted maps.
 
-Disclaimer: MRax is intended for research use only. This is an early release, and bugs may occur.
-Coding agents were used to assist in development. Code was manually reviewed and validated on Bruker ParaVision 360 3.5–3.7 data.
+MRax is intended for research use only. Coding agents assisted development.
 
 ## Installation
 
@@ -140,3 +139,14 @@ dataset = DataSet(data=jnp.ones((te.size, 2, 2)), name="demo")
 fields, losses = run_fit(experiment, model, dataset, num_steps=20, step_size=0.03)
 print(fields["t2"].si_unit, losses[-1])
 ```
+
+## How to cite
+
+If you use MRax in your research, please cite the specific release you used. Open
+[MRax on Zenodo](https://doi.org/10.5281/zenodo.21723327), select your release
+under **Versions**, and copy its citation or BibTeX, including the release DOI.
+
+For a general reference to the project, use:
+
+> Lippe, C. *MRax: JAX-based tools for quantitative MRI research* [Computer software].
+> Zenodo. [https://doi.org/10.5281/zenodo.21723327](https://doi.org/10.5281/zenodo.21723327)

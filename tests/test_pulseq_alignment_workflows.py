@@ -235,3 +235,88 @@ def test_executed_echo_times_use_readout_centres_and_preceding_excitation(tmp_pa
     monkeypatch.setattr('mrax.io.pulseq_compat.read_sequence', lambda *args: None)
     info = read_pulseq(sequence_path)
     np.testing.assert_allclose(info.adc_echo_times_ms, [11., 63.], atol=1e-9)
+
+
+@pytest.mark.parametrize('selection', [[4, 1], [4, 3, 2, 1, 0]])
+def test_nifti_selected_pixels_and_timing_are_selected_once(tmp_path, selection):
+    sequence = tmp_path / 'recovery.seq'
+    sequence.write_text('[DEFINITIONS]\nName inversion_recovery\nTI .01 .03 .09 .27 .81\nFREQ 120\n')
+    pixels = np.broadcast_to(np.arange(5, dtype=np.float32), (3, 4, 2, 5)).copy()
+    image = nib.Nifti1Image(pixels, np.eye(4))
+    image.header.set_xyzt_units('mm', 'sec')
+    image.header.set_zooms((1., 1., 1., .5))
+    path = tmp_path / 'recovery.nii.gz'
+    nib.save(image, path)
+    measured = read_pulseq_measurement(path, reader_options={'frame_selection': selection})
+    np.testing.assert_array_equal(measured.image_data[:, 0, 0, 0], selection)
+    np.testing.assert_array_equal(measured.metadata['frame_coordinates']['time'], np.asarray(selection) * .5)
+    np.testing.assert_allclose(measured.normalized_metadata.inversion_times, np.asarray([10., 30., 90., 270., 810.])[selection])
+    experiment, dataset, model, _ = build_measurement_experiment(measured)
+    assert model.name == 't1_ir'
+    experiment.validate(dataset)
+    np.testing.assert_array_equal(np.asarray(dataset.data)[:, 0, 0, 0], np.sort(selection))
+
+
+@pytest.mark.parametrize('raw', [False, True])
+@pytest.mark.parametrize('selection', [[1], [1, 0]])
+def test_mrd_selected_frames_keep_declared_sequence_timing(tmp_path, raw, selection):
+    from test_pulseq_measurement_workflows import _write_mrd
+
+    sequence = tmp_path / 'relaxation.seq'
+    sequence.write_text('[DEFINITIONS]\nName multi_spin_echo\nEchoTimes .009 .041\n')
+    path = tmp_path / 'relaxation.mrd'
+    if raw:
+        _write_mrd(path)
+    else:
+        file = ismrmrd.Dataset(str(path), 'dataset')
+        file.write_xml_header(xsd.ToXML(_header(4, 3)))
+        for i in range(2):
+            image = ismrmrd.Image.from_array(np.full((3, 4), i + 1, np.float32), transpose=False)
+            image.contrast = i
+            image.field_of_view[:] = [40., 30., 4.]
+            image.read_dir[:] = [1., 0., 0.]
+            image.phase_dir[:] = [0., 1., 0.]
+            image.slice_dir[:] = [0., 0., 1.]
+            file.append_image('images', image)
+        file.close()
+    measured = read_pulseq_measurement(path, sequence_path=sequence,
+        reader_options={'frame_selection': selection})
+    np.testing.assert_allclose(measured.normalized_metadata.echo_times, np.asarray([9., 41.])[selection])
+    if not raw:
+        np.testing.assert_array_equal(measured.image_data[:, 0, 0], np.asarray(selection) + 1)
+
+
+def test_parameter_map_does_not_inherit_quantitative_sweep_axes(tmp_path):
+    sequence = tmp_path / 'sequence.seq'
+    sequence.write_text('[DEFINITIONS]\nName multi_spin_echo\nEchoTimes .01 .03 .06 .12\nFREQ 120\n')
+    path = tmp_path / 'relaxation_map.nii'
+    nib.save(nib.Nifti1Image(np.ones((3, 4)), np.eye(4)), path)
+    measured = read_pulseq_measurement(path, sequence_path=sequence)
+    experiment, dataset, model, _ = build_measurement_experiment(measured)
+    assert measured.normalized_metadata.echo_times is None
+    assert model.name == 'identity'
+    assert experiment.frame_count == 1
+    experiment.validate(dataset)
+
+
+@pytest.mark.parametrize('mode', ['auto', 'sampled'])
+def test_missing_trajectory_axis_requires_sequence_and_counter_agreement(quantitative_recording, mode):
+    raw, _, sequence, _, truth, *_ = quantitative_recording
+    with h5py.File(raw, 'r+') as file:
+        records = file['dataset/data'][:]
+        for row in records:
+            row['traj'].reshape(-1, 3)[:, 0] = 0.
+        file['dataset/data'][:] = records
+    with pytest.warns(RuntimeWarning, match='axes recovered'):
+        measured = read_pulseq_measurement(raw, sequence_path=sequence,
+            reader_options={'trajectory_mode': mode, 'density': None})
+    assert measured.metadata['trajectory_axes_from_sequence'] == (0,)
+    assert measured.metadata['cartesian_trajectory_validated']
+    if mode == 'auto':
+        np.testing.assert_allclose(abs(reconstruct_acquisition(measured.acquisition).image), truth, atol=1e-6)
+    with h5py.File(raw, 'r+') as file:
+        records = file['dataset/data'][:]
+        records['head']['idx']['kspace_encode_step_1'] = 0
+        file['dataset/data'][:] = records
+    with pytest.raises(ValueError, match='cannot be verified'):
+        read_pulseq_measurement(raw, sequence_path=sequence)

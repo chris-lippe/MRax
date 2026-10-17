@@ -3,10 +3,8 @@ Roadmap
 
 This is a rough sketch of likely development directions. Priorities may change.
 
-- **Data and GUI:** consistent ``.mrax`` storage and a responsive browser-based GUI.
+- **Data and GUI:** move to a responsive browser-based GUI.
 - **Reference data:** public datasets for examples and benchmarks.
-- **GPU support:** improve documentation, examples, and memory handling for running
-  fitting and reconstruction workflows on accelerators.
 - **Performance optimization:** add benchmarks, speed up computations.
 - **More importers:** add support for more vendor formats and make custom importer
   development easier for lab-specific data.
