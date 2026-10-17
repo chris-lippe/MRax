@@ -75,7 +75,8 @@ extras:
 NVIDIA GPU Development
 ~~~~~~~~~~~~~~~~~~~~~~
 
-The GPU configuration enables ``--gpus=all`` and installs CUDA-enabled JAX:
+The GPU configuration runs MRax in a Linux container, including on Windows through
+WSL 2. It enables ``--gpus=all`` and installs CUDA-enabled JAX:
 
 .. code-block:: bash
 

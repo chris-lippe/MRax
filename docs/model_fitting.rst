@@ -8,6 +8,10 @@ to list only GPUs. Fitting, reconstruction, denoising, drift correction and
 batch entry points accept ``device``. Per-experiment study-plan overrides take
 precedence over the plan default.
 
+Selecting ``device="gpu"`` requires a Linux environment with GPU-enabled JAX.
+On Windows, run MRax inside WSL 2; native Windows installations are CPU-only due
+to JAX's platform restrictions. See :doc:`windows_setup` and :doc:`docker_setup`.
+
 .. code-block:: python
 
    from mrax import get_available_devices

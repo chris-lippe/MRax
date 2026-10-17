@@ -33,6 +33,14 @@ Getting Started
 3. Follow :doc:`gui` for interactive analysis, or :doc:`guides` for Python workflows.
    The :doc:`notebooks` provide worked examples with synthetic data.
 
+.. note::
+
+   **GPU acceleration requires a Linux environment** with CUDA-enabled JAX.
+   Windows users can run the Linux installation inside WSL 2 or a Linux container
+   through WSL 2. Native Windows installations run calculations on CPU because
+   JAX has no native Windows GPU backend. See :doc:`windows_setup` and
+   :doc:`docker_setup`.
+
 For editable installations, containers and contributor checks, see :doc:`setup`.
 
 Key Modules

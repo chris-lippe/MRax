@@ -243,6 +243,6 @@ def test_import_overview_shows_vendor_and_corresponding_options(tmp_path, monkey
         return QtWidgets.QDialog.Accepted
 
     window._exec_dialog = choose_folder
-    assert window._get_existing_directory('Import', str(tmp_path)) == str(tmp_path)
+    assert Path(window._get_existing_directory('Import', str(tmp_path))) == tmp_path
     window.close()
     qt_app.processEvents()

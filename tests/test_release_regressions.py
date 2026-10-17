@@ -34,7 +34,12 @@ def test_global_mrax_version_is_the_packaging_and_file_tag_source():
 
 def test_release_citation_and_distribution_exclusions_are_current():
     root = Path(__file__).parents[1]
-    assert f'version: {MRAX_VERSION}\n' in (root / 'CITATION.cff').read_text()
+    citation = (root / 'CITATION.cff').read_text()
+    assert '\ndoi: 10.5281/zenodo.21723327\n' in citation
+    assert not any(
+        line.startswith(('version:', 'date-released:')) for line in citation.splitlines()
+    )
+    assert 'version-specific DOI' in citation
     manifest = (root / 'MANIFEST.in').read_text()
     assert 'prune data\n' in manifest
     assert 'prune local_testing\n' in manifest

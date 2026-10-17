@@ -1,6 +1,15 @@
 Windows setup
 =============
 
+.. note::
+
+   Native Windows installations use CPU only:
+   JAX does not provide a native Windows GPU backend. GPU calculations require
+   the Linux version of MRax inside WSL 2, optionally in a Linux Docker container,
+   with CUDA-enabled JAX. JAX lists NVIDIA GPU support under WSL 2 as experimental;
+   see `JAX platform support
+   <https://docs.jax.dev/en/latest/installation.html#supported-platforms>`_.
+
 Minimal WSL 2 and Docker Setup
 ------------------------------
 
@@ -71,7 +80,5 @@ GUI, registration, reconstruction, denoising, and importer workflows may have
 platform-specific requirements. WSL 2 plus Docker is the documented Windows
 development path for those workflows.
 
-Non-Cartesian reconstruction uses JAX on CPU or supported GPUs. Native Windows
-supports CPU; NVIDIA GPU execution requires WSL 2 or Linux. The optional
-``mrax[denoise-external]`` extra installs upstream BM3D/BM4D packages whose licenses
-permit non-commercial use only.
+The optional ``mrax[denoise-external]`` extra installs upstream BM3D/BM4D packages
+whose licenses permit non-commercial use only.
