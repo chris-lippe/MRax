@@ -185,7 +185,7 @@ def test_fista_acceleration_uses_parameter_real_precision(dtype):
     try:
         optimizer = make_optimizer("fista", 0.1, regularizer_weight=0.2)
         state = optimizer.init({"p": jnp.ones(2, dtype=dtype)})
-        assert state["t"].dtype == jnp.float64
+        assert state["solver"]["t"].dtype == jnp.float64
     finally:
         jax.config.update("jax_enable_x64", previous)
 
@@ -202,22 +202,20 @@ def test_proximal_schedule_tracks_gradient_step_count(name):
     for _ in range(2):
         updates, state = optimizer.update({"p": jnp.zeros(())}, state, params)
         params = optax.apply_updates(params, updates)
-    assert int(state["count"]) == 2
-    if name == "split_bregman":
-        assert float(params["p"]) == pytest.approx(0.98)
-    else:
-        assert float(state["x"]["p"]) == pytest.approx(0.97)
+    assert int(state["solver"]["count"]) == 2
+    # A feasible initial multiplier removes the previous Bregman transient.
+    assert float(params["p"]) == pytest.approx(0.97)
 
 
 def test_zero_weight_bregman_keeps_its_state_custom_prox_and_bounds():
     plain = make_optimizer("split_bregman", 0.1)
     params = {"p": jnp.asarray(1.0)}
-    assert "split" in plain.init(params) and "breg" in plain.init(params)
+    assert "splits" in plain.init(params)['solver'] and "duals" in plain.init(params)['solver']
     custom = make_optimizer("split_bregman", 0.1, regularizer_prox=lambda value, weight: jnp.maximum(value, 0),
                             base_optimizer_factory=optax.sgd)
     negative = {"p": jnp.asarray(-1.)}
     _, state = custom.update({"p": jnp.zeros(())}, custom.init(negative), negative)
-    assert float(state["split"]["p"]) == 0
+    assert float(state["solver"]["splits"]["0"][0][..., 0]) == 0
     bounded = make_optimizer("split_bregman", 0.1, box_constraints=(0.0, 0.5))
     updates, _ = bounded.update({"p": jnp.zeros(())}, bounded.init(params), params)
     assert float(optax.apply_updates(params, updates)["p"]) == pytest.approx(0.5)

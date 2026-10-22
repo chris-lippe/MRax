@@ -139,6 +139,35 @@ class L1Operator:
         return value * scale[..., None]
 
 
+@dataclass(frozen=True)
+class CallbackOperator:
+    """Identity splitting for an application-supplied convex proximal map.
+
+    The callback owns its penalty definition; its value is unavailable. Thus
+    fitting uses smooth majorization and residual checks, not a composite-value
+    monotonicity claim. Thresholds retain the public scalar/array/tree semantics.
+    """
+    weights: jax.Array
+    callback: object
+    axes: tuple[int, ...] = (0,)
+    norm_bound_squared: float = 1.
+
+    def gradient(self, value):
+        return value[..., None]
+
+    def adjoint(self, dual):
+        return dual[..., 0]
+
+    def prox(self, value, multiplier):
+        return self.callback(value[..., 0], multiplier * self.weights)[..., None]
+
+    def project_dual(self, dual, multiplier=1.):
+        return dual - multiplier * self.prox(dual / multiplier, 1 / multiplier)
+
+    def value(self, value, smoothed=False):
+        return jnp.asarray(0., jnp.real(value).dtype)
+
+
 def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_steps=512):
     """Solve prox(rate * weighted TV + box indicator) with a checked dual gap.
 
@@ -156,6 +185,37 @@ def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_s
     active = tuple(op for op in operators if op.axes)
     if not active:
         return project(value), (), jnp.asarray(0.0, dtype=jnp.real(value).dtype), jnp.asarray(0)
+    if len(active) == 1 and isinstance(active[0], CallbackOperator):
+        op = active[0]
+        # Dykstra computes prox(g + box), including nonseparable custom proxs;
+        # a simple clip(prox(g)) is generally not that proximal map.
+        def body(state):
+            x, p, q, count, _ = state
+            y = op.prox((x + p)[..., None], rate)[..., 0]
+            p = x + p - y
+            candidate = project(y + q)
+            q = y + q - candidate
+            error = jnp.maximum(jnp.max(jnp.abs(candidate - x)),
+                                jnp.max(jnp.abs(candidate - y)))
+            return candidate, p, q, count + 1, error
+        zero = jnp.zeros_like(value)
+        x, p, _, count, error = jax.lax.while_loop(
+            lambda s: (s[3] < max_steps) & (s[4] > tolerance * (1 + jnp.max(jnp.abs(s[0])))),
+            body, (value, zero, zero, jnp.asarray(0), jnp.asarray(jnp.inf, jnp.real(value).dtype)))
+        valid = error <= tolerance * (1 + jnp.max(jnp.abs(x)))
+        # This is a fixed-point certificate, not a dual objective gap.
+        return x, (op.project_dual(p[..., None], rate),), jnp.where(valid, 0., jnp.inf), count
+    if len(active) == 1 and isinstance(active[0], L1Operator):
+        # Exact separable solution avoids an unnecessary iterative inner solve
+        # and its sqrt(tolerance) error near an L1 kink.
+        radius = rate * active[0].weights
+        if jnp.iscomplexobj(value):
+            norm = jnp.abs(value)
+            result = value * jnp.maximum(1 - radius / jnp.where(norm > 0, norm, 1), 0)
+        else:
+            result = project(jnp.sign(value) * jnp.maximum(jnp.abs(value) - radius, 0))
+        dual = active[0].project_dual((value - result)[..., None], rate)
+        return result, (dual,), jnp.asarray(0., jnp.real(value).dtype), jnp.asarray(0)
     duals = (tuple(jnp.zeros_like(op.gradient(value)) for op in active)
              if duals is None else tuple(op.project_dual(p, rate) for op, p in zip(active, duals, strict=True)))
     norm_bound = sum(op.norm_bound_squared for op in active)

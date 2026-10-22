@@ -969,8 +969,14 @@ def run_fit(
     proximal_tolerance: float = 1e-10,
     proximal_max_steps: int = 4096,
     bregman_penalty: float = 1.0,
-    bregman_inner_steps: int = 5,
+    bregman_inner_steps: int = 1,
+    balance_physical_parameters: bool = True,
+    physical_metric: str = "curvature",
+    proximal_max_step_size: float | None = None,
+    grad_clip_norm: float | None = None,
     data_normalization: str = "roi",
+    parameter_space: str = "auto",
+    fit_active_only: bool = False,
     device: DeviceLike = "cpu",
     reference_image: object | None = None,
 ):
@@ -1005,6 +1011,18 @@ def run_fit(
     Nonfinite fits raise :class:`mrax.core.fit_execution.FitError` with the last valid chunk checkpoint.
     ``data_normalization="roi"`` uses retained observations for RMS scaling;
     select ``"full"`` to reproduce the previous finite-image normalization.
+    ``physical_metric`` selects a fixed curvature or initial-gradient block
+    metric for true-TV fitting; coordinates, boxes and TV weights are rescaled
+    together. ``balance_physical_parameters=False`` disables this balancing.
+    ``proximal_max_step_size`` optionally caps line-search step growth.
+    ``parameter_space="physical"`` also permits affine coordinates with smooth
+    model penalties; ``"auto"`` retains the default optimizer-dependent choice.
+    ``fit_active_only=True`` packs the positive mask support and native TV graph
+    while retaining the original forward-model geometry and output fields.
+    ``grad_clip_norm`` optionally clips gradients of built-in optimizers;
+    proximal convergence checks still use the unmodified gradient.
+    Split Bregman uses one linearized inner update by default; increase
+    ``bregman_inner_steps`` explicitly when additional inner work is intended.
     """
     from mrax.opt.optimizers import make_optimizer
 
@@ -1031,13 +1049,20 @@ def run_fit(
     has_tv = any(hasattr(fn, "tv_order") for entries in unpack._mrax_reg_terms.values() for _, fn in entries)
     selected = (optimizer_name or "auto").lower()
     custom_optimizer = optimizer is not None or optimizer_factory is not None
+    if custom_optimizer and grad_clip_norm is not None:
+        raise ValueError("Configure clipping in an injected optimizer or optimizer_factory")
     if selected == "auto":
         selected = "fista" if has_tv and not custom_optimizer else "adam"
     if selected == "bregman":
         selected = "split_bregman"
+    if parameter_space not in ("auto", "raw", "physical"):
+        raise ValueError("parameter_space must be auto, raw or physical")
     true_tv = has_tv and selected in ("fista", "split_bregman") and not custom_optimizer
+    physical = true_tv or parameter_space == "physical"
+    if physical and (selected not in ("fista", "split_bregman") or custom_optimizer):
+        raise ValueError("Explicit physical coordinates require FISTA or split Bregman")
     parameter_space, regularization_mode = "raw", "none"
-    if true_tv:
+    if physical:
         if regularizer_prox is not None or any(np.any(np.asarray(w) != 0) for w in jax.tree.leaves(regularizer_weight)) or box_constraints is not None:
             raise ValueError("TV map fitting uses physical parameter_specs bounds; separate raw-parameter proximal penalties are unsupported")
         if optimizer_base_factory is not None:
@@ -1047,7 +1072,7 @@ def run_fit(
         loss_fn, default_params, unpack = build_loss(
             experiment, model, dataset, parameter_space="physical", balance_parameters=False,
             physical_scales=getattr(initial_state, "parameter_scales", None), **loss_kwargs)
-        parameter_space, regularization_mode = "physical", "proximal_tv"
+        parameter_space, regularization_mode = "physical", "proximal_tv" if has_tv else "smooth"
     elif has_tv:
         warnings.warn(f"Optimizer '{'custom' if custom_optimizer else selected}' with TV uses smoothed TV gradients; "
                       "choose FISTA or split_bregman for true TV proximal fitting.", RuntimeWarning, stacklevel=2)
@@ -1093,24 +1118,47 @@ def run_fit(
         if initial_state.optimizer_name is not None and initial_state.optimizer_name != state_optimizer:
             raise ValueError("initial_state belongs to a different optimizer")
         initial_params = initial_state.params
-    elif initial_params is not None and true_tv:
+    elif initial_params is not None and physical:
         initial_params = _collapse_params_for_constant_dims(initial_params, constant_param_axes)
         initial_params = unpack._mrax_from_raw(initial_params)
-    params = _validate_init(default_params, initial_params)
+    # A resumed active state is already packed. Reconstruct full coordinates
+    # only to build the same objective/metric; validate its layout before use.
+    if initial_state is not None and initial_state.active_layout is not None:
+        if not fit_active_only:
+            raise ValueError("Resuming an active state requires fit_active_only=True")
+        params = default_params
+    else:
+        params = _validate_init(default_params, initial_params)
 
-    if true_tv and initial_state is None:
+    if physical and initial_state is None:
         from .physical_parameters import balance_physical_coordinates
         params = balance_physical_coordinates(unpack._mrax_smooth_loss, params, unpack,
-            unpack._mrax_tv_operators, balance=num_steps != 0)
-    coordinate_scales = dict(unpack._mrax_physical_scales) if true_tv else None
+            unpack._mrax_tv_operators, balance=balance_physical_parameters and num_steps != 0, metric=physical_metric)
+    coordinate_scales = dict(unpack._mrax_physical_scales) if physical else None
+
+    active_layout = None
+    if fit_active_only:
+        support = getattr(unpack, "_mrax_mask_fields", None)
+        if support is None:
+            raise ValueError("fit_active_only requires an explicit or finite-data mask")
+        if regularizer_prox is not None or box_constraints is not None or any(np.any(np.asarray(w) != 0) for w in jax.tree.leaves(regularizer_weight)):
+            raise ValueError("Use model field bounds and regularizers with active packing")
+        from .active_parameters import pack_problem
+        loss_fn, params, unpack = pack_problem(loss_fn, params, unpack, support)
+        active_layout = unpack._mrax_active_layout
+        if initial_state is not None:
+            if initial_state.active_layout != active_layout:
+                raise ValueError("initial_state has a different active-mask layout")
+            params = initial_state.params
 
     step_function = convergence_check = None
-    if true_tv:
-        from .tv_fit import make_tv_steps
-        opt, step_function, convergence_check = make_tv_steps(
-            loss_fn, unpack._mrax_smooth_loss, unpack._mrax_physical_bounds, unpack._mrax_tv_operators,
-            selected, step_size, tolerance=proximal_tolerance, max_prox_steps=proximal_max_steps,
-            penalty=bregman_penalty, inner_steps=bregman_inner_steps, device=device)
+    if physical:
+        opt = make_optimizer(selected, step_size, device=device,
+            proximal_context=(loss_fn, unpack._mrax_smooth_loss,
+                unpack._mrax_physical_bounds, unpack._mrax_tv_operators),
+            proximal_tolerance=proximal_tolerance, proximal_max_steps=proximal_max_steps,
+            bregman_penalty=bregman_penalty, bregman_inner_steps=bregman_inner_steps,
+            proximal_max_step_size=proximal_max_step_size, grad_clip_norm=grad_clip_norm)
     elif optimizer is not None:
         opt = optimizer
     elif optimizer_factory is not None:
@@ -1124,6 +1172,11 @@ def run_fit(
             base_optimizer_factory=optimizer_base_factory,
             box_constraints=box_constraints,
             bregman_penalty=bregman_penalty,
+            bregman_inner_steps=bregman_inner_steps,
+            proximal_tolerance=proximal_tolerance,
+            proximal_max_steps=proximal_max_steps,
+            proximal_max_step_size=proximal_max_step_size,
+            grad_clip_norm=grad_clip_norm,
             device=device,
         )
     try:
@@ -1138,12 +1191,14 @@ def run_fit(
     except FitError as error:
         if error.last_valid_state is not None:
             error.last_valid_state = replace(error.last_valid_state, parameter_space=parameter_space,
-                                             optimizer_name=state_optimizer, parameter_scales=coordinate_scales)
+                                             optimizer_name=state_optimizer, parameter_scales=coordinate_scales,
+                                             active_layout=active_layout)
         raise
     fit_info = replace(fit_info, optimizer_name=state_optimizer,
                        parameter_space=parameter_space, regularization_mode=regularization_mode,
                        state=replace(fit_info.state, parameter_space=parameter_space,
-                                     optimizer_name=state_optimizer, parameter_scales=coordinate_scales))
+                                     optimizer_name=state_optimizer, parameter_scales=coordinate_scales,
+                                     active_layout=active_layout))
 
     fitted_fields_raw = unpack(params)
     fitted_fields_raw = _broadcast_fields_to_field_shape(

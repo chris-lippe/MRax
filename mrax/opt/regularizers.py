@@ -103,8 +103,59 @@ def higher_order_total_variation_penalty(
     return TVOperator.create(field.shape, axes, order, mask, dtype=jnp.real(field).dtype).value(field, smoothed)
 
 
-def make_regularizer_fn(reg_type: str, axes: tuple[int, ...] | None = None, *, smoothed_tv=False):
+def masked_mean_smoothed_tv_penalty(
+    field: jnp.ndarray, axes: tuple[int, ...] | None = None, mask: jnp.ndarray | None = None
+) -> jnp.ndarray:
+    """Isotropic TV penalty across selected axes."""
+    axes = _normalize_axes(field, axes)
+    axes = tuple(ax for ax in axes if field.shape[ax] > 1)
+    if not axes:
+        return jnp.array(0.0, dtype=field.dtype)
+
+    weight_mask = None
+    if mask is not None:
+        weight_mask = jnp.asarray(mask)
+        weight_mask = jnp.broadcast_to(weight_mask, field.shape)
+
+    grads = []
+    weights = []
+    for axis in axes:
+        grad = _forward_diff_with_pad(field, axis)
+        grads.append(grad)
+        if weight_mask is not None:
+            slicer0 = [slice(None)] * weight_mask.ndim
+            slicer0[axis] = slice(0, -1)
+            slicer1 = [slice(None)] * weight_mask.ndim
+            slicer1[axis] = slice(1, None)
+            w = weight_mask[tuple(slicer0)] * weight_mask[tuple(slicer1)]
+            weights.append(_pad_weight_for_grad(w, axis))
+
+    if len(grads) == 1:
+        grad = jnp.abs(grads[0])
+        if weight_mask is None:
+            return jnp.mean(grad)
+        denom = jnp.sum(weights[0]) + 1e-8
+        return jnp.sum(weights[0] * grad) / denom
+
+    stacked = jnp.stack(grads, axis=-1)
+    norm = _euclidean_norm_zero_at_origin(stacked)
+    if weight_mask is None:
+        return jnp.mean(norm)
+
+    weight_stack = jnp.stack(weights, axis=-1)
+    weight_mean = jnp.mean(weight_stack, axis=-1)
+    denom = jnp.sum(weight_mean) + 1e-8
+    return jnp.sum(weight_mean * norm) / denom
+
+
+def make_regularizer_fn(reg_type: str, axes: tuple[int, ...] | None = None, *, smoothed_tv=False, formulation="native"):
     reg_type = reg_type.lower()
+    if formulation not in ("native", "masked_mean_smoothed"):
+        raise ValueError("Unknown regularizer formulation")
+    if formulation == "masked_mean_smoothed":
+        if reg_type != "tv":
+            raise ValueError("masked_mean_smoothed supports first-order TV only")
+        return lambda field, mask=None: masked_mean_smoothed_tv_penalty(field, axes, mask)
     if reg_type.startswith("tv"):
         suffix = reg_type[2:]
         order = 1

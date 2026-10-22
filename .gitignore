@@ -208,12 +208,17 @@ __marimo__/
 
 # Output files
 /data/
-/local_testing/
+tmp/
 *.png
 !MRax_logo.png
 !docs/_static/MRax_logo*
 *.mp4
 *.pkl
 *.mrd
+*.mat
+*.h5
+*.dcm
 *.nii
-tmp/
+*.nii.gz
+*.csv
+*.mrax

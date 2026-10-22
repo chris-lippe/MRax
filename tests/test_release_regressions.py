@@ -23,7 +23,7 @@ from mrax.versioning import versioned_payload
 def test_global_mrax_version_is_the_packaging_and_file_tag_source():
     project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
 
-    assert MRAX_VERSION == __version__ == "0.3.0"
+    assert MRAX_VERSION == __version__ == "0.3.1"
     assert MRAX_VERSION_TAG == "mrax_version"
     assert project["project"]["dynamic"] == ["version"]
     assert project["tool"]["setuptools"]["dynamic"]["version"] == {

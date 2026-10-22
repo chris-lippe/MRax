@@ -62,7 +62,8 @@ def test_proximal_optimizers_recover_penalized_scalar_optimum(backend, name):
         def update(carry, _):
             params, state = carry
             grads = {"x": params["x"] - 2}
-            updates, state = optimizer.update(grads, state, params)
+            updates, state = optimizer.update(grads, state, params,
+                value_fn=lambda p: .5 * (p['x'] - 2)**2)
             return (optax.apply_updates(params, updates), state), None
         return jax.lax.scan(update, (params, optimizer.init(params)), None, length=1000)[0][0]
 
@@ -77,7 +78,7 @@ def test_adam_bases_are_rejected_and_zero_weight_keeps_named_solver(name):
         make_optimizer(name, .1, base_optimizer_factory=optax.adam)
     optimizer = make_optimizer(name, .1)
     state = optimizer.init({"x": jnp.asarray(0.)})
-    assert "x" in state if name == "fista" else "split" in state
+    assert "y" in state['solver'] if name == "fista" else "splits" in state['solver']
 
 
 @pytest.mark.parametrize("weight", [-.1, np.inf, np.nan])

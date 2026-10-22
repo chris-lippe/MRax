@@ -56,7 +56,6 @@ AB-MT+n model
 - Observables: ``freq_offsets`` (ppm), ``sat_b1`` (uT), ``sat_time`` (ms), ``TR`` (ms),
   plus a study-wide ``field_strength_mhz``.
 - Optional maps: ``r1_map`` or ``t1_map`` (required), ``b0_map``/``b1_map`` for B0/B1 corrections.
-- Default ``t_delay`` bounds are ``[12.5, 100]`` ms with a 56.25 ms physical-unit initialization.
 - Use :func:`mrax.data_struct.join_experiments` to stack multiple sat_trans scans with
   different ``sat_b1``/``sat_time`` into a single fit. Repeated acquisitions (``t``)
   expand parameter maps, so a single ``run_fit`` returns ``(t, x, y)`` fields

@@ -1,6 +1,25 @@
 Release Notes
 =============
 
+Version 0.3.1
+-------------
+
+Highlights
+~~~~~~~~~~
+
+- Improved FISTA and split Bregman fitting and reconstruction stability.
+- Added optional active-ROI parameter packing,
+  gradient clipping and an explicit ``masked_mean_smoothed`` TV formulation.
+- Improved custom proximal callbacks with box constraints, mixed-precision
+  fitting and checkpoint continuation.
+
+Compatibility notes
+~~~~~~~~~~~~~~~~~~~
+
+- Direct Optax callers should pass the smooth objective as ``value_fn`` to
+  ``update``. FISTA returns the accepted iterate; without ``value_fn``, evaluate
+  gradients at ``state["solver"]["y"]``. ``run_fit`` supplies the callback automatically.
+
 Version 0.3.0
 -------------
 

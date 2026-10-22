@@ -136,13 +136,17 @@ def bind_device(function, device):
 
 def place_optimizer(optimizer, device):
     """Place initialization and updates, including custom Optax transforms."""
-    def place(function):
+    def place(function, *, extra=False):
         original = getattr(function, "_mrax_optimizer_function", function)
-        wrapped = bind_device(jit_on_device(original, device), device)
+        # Callable ExtraArgs are bound by the outer fitting JIT, not traced as
+        # dynamic array arguments by a redundant nested JIT.
+        compiled = original if extra else jit_on_device(original, device)
+        wrapped = bind_device(compiled, device)
         wrapped._mrax_optimizer_function = original
         return wrapped
-
-    return optax.GradientTransformation(place(optimizer.init), place(optimizer.update))
+    extra = isinstance(optimizer, optax.GradientTransformationExtraArgs)
+    cls = optax.GradientTransformationExtraArgs if extra else optax.GradientTransformation
+    return cls(place(optimizer.init), place(optimizer.update, extra=extra))
 
 
 def jit_on_device(function, device):

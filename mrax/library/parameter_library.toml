@@ -110,7 +110,7 @@ pools = ["mt"]
 a = { transform = "bounded", bounds = [-0.1, 0.1], unit = "1", init = 0.0 }
 b = { transform = "bounded", bounds = [0.0, 0.2], unit = "ppm", init = 0.1 }
 t_delay = { transform = "bounded", bounds = [12.5, 100.0], unit = "ms", init = 56.25 }
-sin_a_eff = { transform = "bounded", bounds = [0.6, 1.0], unit = "1", init = 0.8 }
+sin_a_eff = { transform = "bounded", bounds = [0.6, 0.9999], unit = "1", init = 0.8 }
 
 [models.ab_mt_n.pools.mt]
 rate_key = "r2"

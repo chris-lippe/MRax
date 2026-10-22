@@ -70,7 +70,7 @@ def physical_parametrization(model, raw_params, raw_unpack):
     return params, unpack
 
 
-def balance_physical_coordinates(smooth_loss, params, unpack, operators, *, stored_scales=None, balance=True):
+def balance_physical_coordinates(smooth_loss, params, unpack, operators, *, stored_scales=None, balance=True, metric="curvature"):
     """Choose a fixed block metric from initial smooth curvature, then backtrack.
 
     The metric stays fixed throughout fitting. It rescales physical coordinates
@@ -81,12 +81,25 @@ def balance_physical_coordinates(smooth_loss, params, unpack, operators, *, stor
         return jax.jvp(jax.grad(smooth_loss), (point,), (direction,))[1]
 
     factors = {}
+    if metric not in ("curvature", "initial_gradient"):
+        raise ValueError("Unknown fixed physical coordinate metric")
     if stored_scales is not None:
         if set(stored_scales) != set(params) or any(not np.isfinite(value) or value <= 0 for value in stored_scales.values()):
             raise ValueError("Stored physical coordinate scales do not match this model")
         factors = {key: stored_scales[key] / unpack._mrax_physical_scales[key] for key in params}
     elif not balance:
         factors = {key: 1.0 for key in params}
+    if not factors and metric == "initial_gradient":
+        gradient = jax.grad(smooth_loss)(params)
+        # A fixed block metric with an initial RMS displacement equal to that
+        # of a midpoint bounded transform. This is NOT an adaptive Adam step:
+        # it is selected once, then the usual certified TV prox is used.
+        for key, value in params.items():
+            current = unpack._mrax_physical_scales[key]
+            physical_rms = float(jnp.sqrt(jnp.mean(jnp.abs(gradient[key] / current)**2)))
+            displacement = current / (2 * prod(value.shape)**.5)
+            scale = (displacement / max(physical_rms, 1e-20))**.5
+            factors[key] = min(max(scale / current, 1e-3), 1e3)
     for key, value in (() if factors else params.items()):
         parity = jnp.zeros(value.shape, dtype=jnp.int32)
         for axis, size in enumerate(value.shape):

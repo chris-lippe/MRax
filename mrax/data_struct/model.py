@@ -177,7 +177,8 @@ class Model:
                         continue
                     reg_type = cfg.get("type", "smoothness")
                     axes = cfg.get("axes")
-                    fn = make_regularizer_fn(reg_type, axes, smoothed_tv=smoothed_tv)
+                    fn = make_regularizer_fn(reg_type, axes, smoothed_tv=smoothed_tv,
+                                             formulation=cfg.get("formulation", "native"))
                     if fn is None:
                         continue
                     entries.append((weight, fn))

@@ -29,6 +29,7 @@ class FitState:
     parameter_space: str = "raw"
     optimizer_name: str | None = None
     parameter_scales: dict[str, float] | None = None
+    active_layout: str | None = None
 
 
 @dataclass(frozen=True)
@@ -129,8 +130,11 @@ def execute_optimizer(
     expected_state = optimizer.init(params)
     opt_state = expected_state
     if initial_state is not None:
-        _validate_optimizer_state(expected_state, initial_state.optimizer_state)
         opt_state = initial_state.optimizer_state
+        restore_state = getattr(optimizer.update, '_mrax_restore_state', None)
+        if restore_state is not None:
+            opt_state = restore_state(opt_state)
+        _validate_optimizer_state(expected_state, opt_state)
     total = max(1, num_steps)
     if progress_callback is not None:
         progress_callback(0, total, "Preparing optimizer")
@@ -145,7 +149,16 @@ def execute_optimizer(
             FitState(params, opt_state, start_step), 0, False, "no_steps", None, devices
         )
 
-    evaluate_loss = jax.jit(loss_fn)
+    if convergence_check is None:
+        check = getattr(optimizer.update, "_mrax_convergence", None)
+        if check is not None:
+            def convergence_check(p, s, t):
+                return check(p, s, t, value_fn=loss_fn)
+    manages_gradient = getattr(optimizer.update, "_mrax_manages_gradient", False)
+    accepted_state = getattr(optimizer.update, "_mrax_accepted_state", False)
+    extra_optimizer = optax.with_extra_args_support(optimizer)
+    objective = getattr(optimizer.update, '_mrax_objective', lambda fn: fn)(loss_fn)
+    evaluate_loss = jax.jit(objective)
     initial_loss = evaluate_loss(params)
     if not bool(_tree_finite((params, opt_state))) or not np.isfinite(float(initial_loss)):
         raise FitError("Initial fit loss, parameters or optimizer state are nonfinite", None, [])
@@ -164,24 +177,36 @@ def execute_optimizer(
 
             def update(_):
                 if step_function is None:
-                    value, grads = jax.value_and_grad(loss_fn)(current)
-                    grads = jax.tree.map(jnp.conj, grads)
-                    updates, proposal_state = optimizer.update(grads, state, current)
-                    proposal = optax.apply_updates(current, updates)
-                    solver_status = jnp.asarray(0, dtype=jnp.int32)
-                    finite = jnp.isfinite(value) & _tree_finite((grads, proposal, proposal_state))
+                    if manages_gradient:
+                        updates, proposal_state = extra_optimizer.update(None, state, current, value_fn=loss_fn)
+                        value, solver_status = proposal_state["value"], proposal_state["status"]
+                        grads = ()
+                    else:
+                        value, grads = jax.value_and_grad(loss_fn)(current)
+                        grads = jax.tree.map(jnp.conj, grads)
+                        updates, proposal_state = extra_optimizer.update(grads, state, current, value_fn=loss_fn)
+                        solver_status = jnp.asarray(0, dtype=jnp.int32)
+                    proposal = proposal_state["accepted"] if accepted_state else optax.apply_updates(current, updates)
+                    finite = (solver_status == 0) & jnp.isfinite(value) & _tree_finite((grads, proposal, proposal_state))
                 else:
                     value, proposal, proposal_state, solver_status = step_function(current, state)
                     finite = (solver_status == 0) & jnp.isfinite(value) & _tree_finite((proposal, proposal_state))
+                value = value.astype(previous.dtype)
                 next_count = stable_count
                 converged = jnp.asarray(False)
                 if convergence_tolerance is not None:
                     change = jnp.abs(value - previous) / (1.0 + jnp.abs(previous))
-                    small = (change <= convergence_tolerance) & (
-                        _relative_update(current, proposal) <= parameter_tolerance
+                    small = jax.lax.cond(
+                        change <= convergence_tolerance,
+                        lambda _: _relative_update(current, proposal) <= parameter_tolerance,
+                        lambda _: jnp.asarray(False), None,
                     )
                     if convergence_check is not None:
-                        small = small & convergence_check(proposal, proposal_state, parameter_tolerance)
+                        small = jax.lax.cond(
+                            small,
+                            lambda _: convergence_check(proposal, proposal_state, parameter_tolerance),
+                            lambda _: jnp.asarray(False), None,
+                        )
                     next_count = jnp.where(small, stable_count + 1, 0)
                     converged = (done + 1 >= min_steps) & (next_count >= convergence_patience)
                 chosen, chosen_state = jax.lax.cond(
