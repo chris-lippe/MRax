@@ -22,7 +22,7 @@ from mrax.library.default_experiments import default_model_for_type
 
 @dataclass(frozen=True)
 class MeasurementData:
-    """Images and/or prepared measurements, without running reconstruction."""
+    """Images and prepared measurements at the import boundary."""
 
     image_data: np.ndarray | None = None
     acquisition: AcquisitionData | None = None
@@ -39,7 +39,7 @@ _READERS: dict[str, tuple[tuple[str, ...], Callable[..., MeasurementData], Calla
 
 
 def register_measurement_reader(name: str, extensions, reader, *, inspector=None, replace=False):
-    """Register a file adapter; adapters must not reconstruct or change source files."""
+    """Register a file adapter that reads source files and prepares import data."""
     if name in _READERS and not replace:
         raise ValueError(f"Measurement reader already registered: {name}")
     _READERS[name] = (tuple(str(x).lower() for x in extensions), reader, inspector)
@@ -61,7 +61,7 @@ def read_measurement(path: str | Path, *, format: str | None = None, **options) 
 
 
 def measurement_entries(path: str | Path, *, format=None):
-    """Inspect groups/series without loading pixels; each entry is read separately."""
+    """Inspect group/series metadata for separately readable entries."""
     path = Path(path)
     matches = [name for name, (extensions, _, _) in _READERS.items()
                if any(path.name.lower().endswith(ext) for ext in extensions)]

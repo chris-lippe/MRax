@@ -2,8 +2,8 @@ Pulseq import
 =============
 
 MRax reads extracted ISMRMRD/HDF5 (including ``.mrd``), Siemens ``.dat``, NIfTI and DICOM
-measurements. A Pulseq ``.seq`` describes the executed sequence, not the measured
-signal. Pair it with the measurement using ``sequence_path`` or a matching
+measurements. A Pulseq ``.seq`` describes the executed sequence;
+the paired measurement file supplies the signal. Pair it with the measurement using ``sequence_path`` or a matching
 filename. Archives must be extracted first.
 
 Read, reconstruct and save
@@ -33,11 +33,11 @@ For files containing reconstructed images, call
 ``group`` through ``reader_options`` when the file contains several products.
 Use ``import_pulseq_study(directory)`` to import all discoverable image series.
 Its metadata contains ``raw_measurements`` for recordings awaiting reconstruction
-and ``import_issues`` for skipped inputs. Invalid files warn without blocking
-other experiments. ``sequence_map`` and per-file options use relative paths.
+and ``import_issues`` for skipped inputs. Valid experiments continue importing
+when another input produces a warning. ``sequence_map`` and per-file options use relative paths.
 
 ``read_pulseq_acquisition(sequence, samples, coil_axis=0)`` accepts serial arrays
-with an explicit receiver axis. Without ``coil_axis``, leading axes are frames.
+with an explicit receiver axis. With ``coil_axis=None``, leading axes are frames.
 For DICOM-only workflows, ``load_dicom_series`` and ``load_dicom_study`` are also
 available. Compressed DICOM transfer syntaxes require ``pip install "mrax[dicom-codecs]"``.
 For sweeps stored as separate DICOM series, pass
@@ -46,7 +46,7 @@ For sweeps stored as separate DICOM series, pass
 Selected series must share physical geometry and study; relaxation frames are
 sorted by their timing. Unlisted series remain separate.
 MATLAB input uses ``read_measurement(..., image_key=..., axes=...)``
-or explicit raw-array keys and encoding geometry; variable names are not guessed.
+or explicit raw-array keys and encoding geometry.
 
 Metadata and units
 ------------------
@@ -61,7 +61,8 @@ Magnitude inversion-recovery imports estimate the initial T1 from the recovery
 curve to avoid starting on the wrong side of the signal null.
 
 Missing acquisition parameters must be supplied before quantitative fitting.
-An anatomical image alone cannot determine a T1, T2 or diffusion model.
+Quantitative T1, T2 and diffusion fitting require the corresponding acquisition
+observables.
 ``metadata_overrides`` accepts :class:`mrax.io.import_definitions.NormalizedMetadata`
 fields, with times in milliseconds and flip angles in degrees.
 For DICOM preparation sweeps, ``import_pulseq_study`` accepts
@@ -74,13 +75,13 @@ are used only when they match the contrast counters.
 
 A JSON sidecar alongside the measurement can provide ``sequence_path``,
 ``reader_options`` and ``normalized_metadata``. Alongside a sequence,
-``sequence_definitions`` can declare missing matrix, FOV or unit conventions
-without editing the sequence file. Unknown normalized fields raise an error.
+``sequence_definitions`` supplies matrix, FOV or unit conventions as import options. Unknown normalized fields raise an error.
 Compact 2D NIfTI echo stacks use matching MRD counters and raw-data energies to
 verify frame order. Ambiguous stacks require ``reader_options`` with
 ``spatial_ndim=2`` and ``frame_order`` (source indices in acquisition order).
 ``spatial_unit`` can declare missing NIfTI units. Phase images and parameter maps
-remain viewable without automatically selecting a magnitude-fitting model.
+remain viewable as their declared image types. Select a fitting model explicitly
+for these products.
 
 Raw reconstruction
 ------------------
@@ -98,8 +99,8 @@ column.
 Missing patient orientation remains marked as partial geometry. Supply
 ``density`` explicitly to override sampled quadrature.
 The default sampled preview estimates
-quadrature on a sampling mesh; these weights do not alter an iterative solver's
-statistical data term. ``frame_selection`` limits raw/image loading. FFT
+quadrature on a sampling mesh; iterative solvers use separately specified
+statistical weights. ``frame_selection`` limits raw/image loading. FFT
 reconstruction automatically batches large recordings before device placement;
 ``frame_batch_size`` overrides the batch size while retaining complete slice and
 repeat groups. Batched coil images stay in host memory; the combined image uses
@@ -119,7 +120,7 @@ stop]`` trims imaging readouts and ``center_sample`` sets their zero-frequency
 sample in original readout coordinates. ``trajectory_mode="cartesian"`` uses
 declared Cartesian counters instead of stored trajectories, with a warning;
 the default retains supplied trajectories. These controls require knowledge of
-the conversion and never modify input files.
+the conversion. Input files remain intact.
 
 ``prewhiten_acquisition`` in ``mrax.reco`` uses attached or explicit noise samples
 before any reconstruction method and returns the transformed acquisition and
@@ -140,8 +141,8 @@ axes to patient LPS directions. Otherwise orientation stays unknown with a warni
 Complete, uniformly spaced parallel slice sets become volumes; incomplete sets
 retain separate frame affines. If an interpreter repeats one prototype plane,
 explicit sequence ``SlicePositions`` resolve slice offsets in metres
-(``SlicePositionsUnit = mm`` declares millimetres). Without them, slice positions
-remain uncertain and geometry is marked partial.
+(``SlicePositionsUnit = mm`` declares millimetres). Unspecified slice offsets
+produce partial geometry.
 
 For an array-based example, see :doc:`notebooks/pulseq_import_demo`. Adding file
 readers or sequence metadata mappings is covered in the contributor section

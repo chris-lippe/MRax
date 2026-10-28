@@ -11,7 +11,7 @@ Development workflow:
       python -m pip install -e ".[all,dev,docs,notebooks]"
 
 3. Add tests for public APIs, importer output, storage contracts, or numerical
-   conventions. Use synthetic inputs, not local scanner data or private files.
+   conventions. Use independently generated synthetic inputs.
 4. Update the affected docs page when units, shapes, model assumptions, dependencies,
    or validation status change.
 
@@ -28,8 +28,8 @@ Run these checks from the repository root before opening a pull request:
    git diff --check
 
 For documentation-only changes, run the Sphinx build and ``git diff --check``. For code
-changes, run the test suite. If a check cannot run in your environment, mention it in
-the pull request.
+changes, run the test suite. Report each check's outcome and any environment
+requirements in the pull request.
 
 Docs changes:
 

@@ -200,11 +200,19 @@ def test_proximal_schedule_tracks_gradient_step_count(name):
     params = {"p": jnp.asarray(1.0)}
     state = optimizer.init(params)
     for _ in range(2):
-        updates, state = optimizer.update({"p": jnp.zeros(())}, state, params)
+        updates, state = optimizer.update({"p": jnp.zeros(())}, state, params,
+                                         gradient_at_extrapolated=name == "fista",
+                                         **({"value_fn": lambda p: jnp.asarray(0.)}
+                                            if name == "split_bregman" else {}))
         params = optax.apply_updates(params, updates)
     assert int(state["solver"]["count"]) == 2
-    # A feasible initial multiplier removes the previous Bregman transient.
-    assert float(params["p"]) == pytest.approx(0.97)
+    if name == "fista":
+        assert float(params["p"]) == pytest.approx(0.97)
+    else:
+        # Split Bregman starts with zero multipliers; the first primal solve
+        # leaves a constant data term unchanged, then shrinkage creates b.
+        assert int(state["status"]) == 0
+        assert float(params["p"]) < 1.
 
 
 def test_zero_weight_bregman_keeps_its_state_custom_prox_and_bounds():
@@ -214,10 +222,12 @@ def test_zero_weight_bregman_keeps_its_state_custom_prox_and_bounds():
     custom = make_optimizer("split_bregman", 0.1, regularizer_prox=lambda value, weight: jnp.maximum(value, 0),
                             base_optimizer_factory=optax.sgd)
     negative = {"p": jnp.asarray(-1.)}
-    _, state = custom.update({"p": jnp.zeros(())}, custom.init(negative), negative)
+    _, state = custom.update({"p": jnp.zeros(())}, custom.init(negative), negative,
+                             value_fn=lambda p: jnp.asarray(0.))
     assert float(state["solver"]["splits"]["0"][0][..., 0]) == 0
     bounded = make_optimizer("split_bregman", 0.1, box_constraints=(0.0, 0.5))
-    updates, _ = bounded.update({"p": jnp.zeros(())}, bounded.init(params), params)
+    updates, _ = bounded.update({"p": jnp.zeros(())}, bounded.init(params), params,
+                                value_fn=lambda p: jnp.asarray(0.))
     assert float(optax.apply_updates(params, updates)["p"]) == pytest.approx(0.5)
 
 

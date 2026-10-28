@@ -1,4 +1,4 @@
-"""Decode delayed radial readouts without synthesizing unmeasured k-space."""
+"""Decode delayed radial readouts on their measured k-space support."""
 from __future__ import annotations
 
 from pathlib import Path

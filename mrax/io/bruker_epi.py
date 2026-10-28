@@ -1,4 +1,4 @@
-"""EPI event decoding and measured calibration, without image reconstruction."""
+"""EPI event decoding and measured calibration for explicit reconstruction."""
 from __future__ import annotations
 
 import numpy as np

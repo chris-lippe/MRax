@@ -60,7 +60,7 @@ VS Code Dev Container
 
 Choose a dev container configuration, both using ``docker/Dockerfile.dev``:
 
-- **CPU (default):** ``.devcontainer/devcontainer.json``; no GPU required.
+- **CPU (default):** ``.devcontainer/devcontainer.json``; standard CPU JAX.
 - **NVIDIA GPU:** ``.devcontainer/gpu/devcontainer.json``; GPU passthrough and
   CUDA 12-enabled JAX.
 

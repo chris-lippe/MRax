@@ -45,7 +45,7 @@ def _resolve_globals(experiment, model, explicit):
 
 
 def _prepare_reference_image(reference_image, experiment):
-    """Validate a fixed spatial reference without dividing observations by it."""
+    """Validate a fixed spatial reference for signal-domain forward fitting."""
     if reference_image is None:
         return None
     shape, _ = _extract_spatial_metadata(experiment)
@@ -262,9 +262,8 @@ def _mask_for_regularized_field(
 def _masked_rms(data: jnp.ndarray, mask: jnp.ndarray) -> jnp.ndarray:
     """Compute the root-mean-square magnitude over finite masked entries.
 
-    RMS scaling remains well conditioned for constant non-zero images.  Standard
-    deviation scaling does not: a constant image has zero variance and used to
-    amplify residuals by 10,000 in :func:`build_loss`.
+    RMS scaling remains well conditioned for constant non-zero images, including
+    those with zero standard deviation.
     """
     data_arr = jnp.asarray(data)
     mask_arr = jnp.asarray(mask)
@@ -384,7 +383,7 @@ def _has_per_frame_observables(experiment: Experiment) -> bool:
 
 
 def _unexplained_dim_names(experiment: Experiment, model: Model | None = None) -> list[str]:
-    """Return non-spatial dims without explicit observables (e.g., repeats like 't')."""
+    """Return implicit non-spatial parameter axes, such as repeats named 't'."""
     dim_map = _dim_map_for_experiment(experiment, model=model)
     has_frame_observables = _has_per_frame_observables(experiment)
     unexplained: list[str] = []
@@ -673,6 +672,8 @@ def build_loss(
     data_normalization: str = "roi",
     device: DeviceLike = "cpu",
     reference_image: object | None = None,
+    *,
+    data_loss: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray] | None = None,
 ) -> Tuple[Callable[[dict], jnp.ndarray], dict, Callable[[dict], dict]]:
     """Build loss(params) combining data misfit and model regularization.
 
@@ -680,9 +681,8 @@ def build_loss(
     per-frame array, spatial array, or array broadcastable to the data. Pass
     ``"auto"`` to robustly estimate per-frame variances before constructing the
     loss. The data misfit is an inverse-variance-weighted mean of RMS-scaled
-    squared residuals. Consequently, multiplying every variance by the same
-    constant does not change the loss, and ``None`` is equivalent to uniform
-    variance.
+    squared residuals. The loss is invariant to a common variance multiplier;
+    ``None`` selects uniform variance.
 
     ``reference_image`` multiplies relative model predictions by a fixed spatial
     reference. Supply measured signal intensities as the data in this mode.
@@ -691,9 +691,15 @@ def build_loss(
     finite-data, observable, ROI and frame masks. ``"full"`` retains the previous
     finite-image normalization. Fractional masks weight residuals; their positive
     support determines the RMS sample set.
+
+    ``data_loss`` optionally maps RMS-scaled residuals and their nonnegative
+    weights to a scalar differentiable data misfit. It is independent of the
+    optimizer; model regularizers are still added by this function.
     """
     if data_normalization not in ("roi", "full"):
         raise ValueError("data_normalization must be 'roi' or 'full'")
+    if data_loss is not None and not callable(data_loss):
+        raise TypeError("data_loss must be callable or None")
     experiment.validate(dataset)
     spatial_shape, spatial_dim_names = _extract_spatial_metadata(experiment)
     field_shape, field_dim_names, extra_dim_names = _field_metadata(experiment, model=model)
@@ -842,8 +848,14 @@ def build_loss(
         predicted = model_fn(fields, offsets_array, observable_arrays)
         predicted = _align_predicted(jnp.asarray(predicted), experiment)
         residual = (predicted - data_flat) * scale
-        squared_residual = jnp.abs(residual) ** 2
-        misfit = jnp.sum(weights_flat * squared_residual) / (jnp.sum(weights_flat) + 1e-8)
+        if data_loss is None:
+            # Preserve the quadratic complex Hessian at a zero residual.
+            squared_residual = jnp.real(residual * jnp.conj(residual))
+            misfit = jnp.sum(weights_flat * squared_residual) / (jnp.sum(weights_flat) + 1e-8)
+        else:
+            misfit = jnp.asarray(data_loss(residual, weights_flat))
+            if misfit.ndim != 0 or jnp.iscomplexobj(misfit):
+                raise ValueError("data_loss must return a real scalar")
 
         reg_term = 0.0
         for key, field in fields.items():
@@ -917,7 +929,7 @@ def make_model_callable(
             reference_values = previous_reference.values if isinstance(previous_reference, Quantity) else previous_reference
             adjusted = _rescale_previous_signal(previous_values, reference_values, reference)
             merged["z_prev"] = previous.with_values(adjusted) if isinstance(previous, Quantity) else adjusted
-        # A leading frame axis in dynamic fields is not another spatial axis.
+        # Dynamic fields retain a leading frame axis alongside the spatial axes.
         merged["_mrax_spatial_ndim"] = len(experiment.spatial_shape)
         prediction = base_apply(fields_for_model, offs, merged)
         if extra_dim_names or reference is not None:
@@ -966,8 +978,8 @@ def run_fit(
     convergence_patience: int = 5,
     min_steps: int = 0,
     return_fit_info: bool = False,
-    proximal_tolerance: float = 1e-10,
-    proximal_max_steps: int = 4096,
+    proximal_tolerance: float | None = None,
+    proximal_max_steps: int | None = None,
     bregman_penalty: float = 1.0,
     bregman_inner_steps: int = 1,
     balance_physical_parameters: bool = True,
@@ -979,6 +991,10 @@ def run_fit(
     fit_active_only: bool = False,
     device: DeviceLike = "cpu",
     reference_image: object | None = None,
+    *,
+    fista_restart: str = "gradient",
+    fista_backtracking: str = "full",
+    data_loss: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray] | None = None,
 ):
     """Fit the model to data for a given experiment.
 
@@ -993,7 +1009,8 @@ def run_fit(
     optimization; ``None`` (the default) gives every included sample uniform
     variance.
     ``reference_image`` fits measured signal intensities by multiplying relative
-    model predictions by a fixed spatial reference, without dividing the data.
+    model predictions by a fixed spatial reference. Observations retain their
+    measured signal scale.
     ``variance_estimation_mask`` optionally identifies a background/noise-only
     region for automatic estimation and is independent of the fitting ``mask``.
     ``mask_fill_value`` controls how masked output fields are filled (use ``None`` to skip masking).
@@ -1021,8 +1038,10 @@ def run_fit(
     while retaining the original forward-model geometry and output fields.
     ``grad_clip_norm`` optionally clips gradients of built-in optimizers;
     proximal convergence checks still use the unmodified gradient.
-    Split Bregman uses one linearized inner update by default; increase
-    ``bregman_inner_steps`` explicitly when additional inner work is intended.
+    Split Bregman uses one safeguarded Newton/CG primal iteration by default;
+    ``bregman_inner_steps`` controls additional primal work before shrinkage
+    and the Bregman multiplier update. ``proximal_max_steps`` bounds each CG
+    solve. Named, injected and factory-based proximal fits share defaults.
     """
     from mrax.opt.optimizers import make_optimizer
 
@@ -1042,6 +1061,7 @@ def run_fit(
         variance_estimation_mask_dims=variance_estimation_mask_dims,
         auto_mask_nan_observables=auto_mask_nan_observables,
         data_normalization=data_normalization,
+        data_loss=data_loss,
         device=device,
         reference_image=reference_image,
     )
@@ -1049,17 +1069,32 @@ def run_fit(
     has_tv = any(hasattr(fn, "tv_order") for entries in unpack._mrax_reg_terms.values() for _, fn in entries)
     selected = (optimizer_name or "auto").lower()
     custom_optimizer = optimizer is not None or optimizer_factory is not None
+    if optimizer is None and optimizer_factory is not None:
+        optimizer = optimizer_factory(step_size)
+    native_name = getattr(getattr(optimizer, "update", None), "_mrax_proximal_name", None)
+    if native_name is not None:
+        selected = native_name
+    elif custom_optimizer and selected == "fista":
+        raise ValueError("Injected FISTA must retain its native fitting interface; use make_optimizer "
+                         "directly or an optimizer_factory, not an Optax chain wrapper for field TV")
     if custom_optimizer and grad_clip_norm is not None:
         raise ValueError("Configure clipping in an injected optimizer or optimizer_factory")
     if selected == "auto":
         selected = "fista" if has_tv and not custom_optimizer else "adam"
     if selected == "bregman":
         selected = "split_bregman"
+    if proximal_tolerance is None:
+        proximal_tolerance = 1e-8 if selected in ("fista", "split_bregman") else 1e-10
+    if proximal_max_steps is None:
+        proximal_max_steps = 2048 if selected in ("fista", "split_bregman") else 4096
     if parameter_space not in ("auto", "raw", "physical"):
         raise ValueError("parameter_space must be auto, raw or physical")
-    true_tv = has_tv and selected in ("fista", "split_bregman") and not custom_optimizer
+    true_tv = has_tv and selected in ("fista", "split_bregman") and (not custom_optimizer or native_name is not None)
+    if true_tv and selected == "fista" and parameter_space == "raw":
+        raise ValueError("Native field TV FISTA requires physical or auto parameter_space; "
+                         "a nonlinear raw transform does not preserve its convex TV proximal problem")
     physical = true_tv or parameter_space == "physical"
-    if physical and (selected not in ("fista", "split_bregman") or custom_optimizer):
+    if physical and (selected not in ("fista", "split_bregman") or (custom_optimizer and native_name is None)):
         raise ValueError("Explicit physical coordinates require FISTA or split Bregman")
     parameter_space, regularization_mode = "raw", "none"
     if physical:
@@ -1078,7 +1113,7 @@ def run_fit(
                       "choose FISTA or split_bregman for true TV proximal fitting.", RuntimeWarning, stacklevel=2)
         loss_fn, default_params, unpack = build_loss(experiment, model, dataset, smoothed_tv=True, **loss_kwargs)
         regularization_mode = "smoothed_tv"
-    state_optimizer = "custom" if custom_optimizer else selected
+    state_optimizer = "custom" if custom_optimizer and native_name is None else selected
     constant_param_axes = getattr(unpack, "_mrax_constant_param_axes", {})
     full_spatial_shape = getattr(unpack, "_mrax_full_spatial_shape", None)
     if full_spatial_shape is None:
@@ -1152,13 +1187,17 @@ def run_fit(
             params = initial_state.params
 
     step_function = convergence_check = None
-    if physical:
+    if physical and native_name is not None:
+        opt = optimizer.update._mrax_bind_context((loss_fn, unpack._mrax_smooth_loss,
+            unpack._mrax_physical_bounds, unpack._mrax_tv_operators))
+    elif physical:
         opt = make_optimizer(selected, step_size, device=device,
             proximal_context=(loss_fn, unpack._mrax_smooth_loss,
                 unpack._mrax_physical_bounds, unpack._mrax_tv_operators),
             proximal_tolerance=proximal_tolerance, proximal_max_steps=proximal_max_steps,
             bregman_penalty=bregman_penalty, bregman_inner_steps=bregman_inner_steps,
-            proximal_max_step_size=proximal_max_step_size, grad_clip_norm=grad_clip_norm)
+            proximal_max_step_size=proximal_max_step_size, grad_clip_norm=grad_clip_norm,
+            fista_restart=fista_restart, fista_backtracking=fista_backtracking)
     elif optimizer is not None:
         opt = optimizer
     elif optimizer_factory is not None:
@@ -1177,6 +1216,8 @@ def run_fit(
             proximal_max_steps=proximal_max_steps,
             proximal_max_step_size=proximal_max_step_size,
             grad_clip_norm=grad_clip_norm,
+            fista_restart=fista_restart,
+            fista_backtracking=fista_backtracking,
             device=device,
         )
     try:

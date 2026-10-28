@@ -41,7 +41,7 @@ def _sequence_values(info):
 
 
 def plan_pulseq_import(source, measurement_source=None):
-    """Inspect extracted neighbours; never infer pairings between unrelated sequences."""
+    """Inspect extracted neighbours and require unambiguous sequence pairing."""
     source = Path(source)
     root = source if source.is_dir() else source.parent
     sequences = tuple(sorted(p for p in root.rglob('*') if p.is_file() and p.suffix.lower() == '.seq')) if source.is_dir() else (source,)
@@ -63,7 +63,7 @@ def plan_pulseq_import(source, measurement_source=None):
             return exact
         neighbours = [p for p in infos if p.parent == path.parent.resolve()]
         if len(neighbours) == 1:
-            # Do not pair another sequence's same-folder products by accident.
+            # Require a unique sequence before pairing same-folder products.
             other = [p for p in path.parent.iterdir() if p.suffix.lower() == '.seq']
             if len(other) == 1:
                 return neighbours[0]

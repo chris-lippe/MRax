@@ -47,7 +47,7 @@ register_measurement_reader('siemens', ('.dat',), _read_twix)
 def discover_pulseq_measurements(root: str | Path, *, recursive=True):
     """Discover extracted measurement files; archives and analysis files are ignored.
 
-    MATLAB variables have no standard meaning and require an explicit reader call.
+    MATLAB variables require an explicit reader mapping.
     DICOM series use MRax's existing ``discover_dicom_series/load_dicom_study``.
     """
     root = Path(root)
@@ -76,7 +76,7 @@ def _resolve_sequence(path, sequence_path, sidecar):
     exact = path.with_name(path.name[:-7] + '.seq') if path.name.lower().endswith('.nii.gz') else path.with_suffix('.seq')
     if exact.exists():
         return exact
-    # Filenames with a vendor prefix are deliberately not matched by substring.
+    # Require exact format names for vendor-prefixed filenames.
     return None
 
 
@@ -86,7 +86,7 @@ def read_pulseq_measurement(path: str | Path, *, sequence_path=None, format=None
                             definition_paths=()) -> MeasurementData:
     """Read extracted pixels/raw data and optional Pulseq sequence metadata.
 
-    MRD/NIfTI images and MRD encoded samples can be read without a descriptor.
+    MRD/NIfTI images and MRD encoded samples support descriptor-free reading.
     Siemens streams require a matching descriptor. Explicit overrides use the
     normalized schema: timing in ms, flip angles in degrees.
     """
@@ -171,9 +171,9 @@ def import_pulseq_study(root: str | Path, *, sequence_map=None, image_data=None,
                         definition_paths=(), dicom_series_groups=None):
     """Import extracted images; return raw-only entries for explicit reconstruction.
 
-    Per-file mappings use paths relative to ``root``. Invalid files warn and do
-    not prevent other experiments importing. Raw-only entries remain available
-    as ``metadata['raw_measurements']`` and are never fitted as dummy images.
+    Per-file mappings use paths relative to ``root``. Valid experiments continue
+    importing when another input produces a warning. Raw-only entries remain
+    available for explicit reconstruction as ``metadata['raw_measurements']``.
     """
     root = Path(root)
     entries, raw, issues = [], {}, []

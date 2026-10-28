@@ -781,8 +781,8 @@ def import_pulseq_experiment(
 ) -> tuple[Experiment, DataSet, Model, dict]:
     """Build MRax containers from a Pulseq sequence and optional acquired data.
 
-    Pulseq files define the sequence and ADC trajectory, but not measured signal
-    samples. Supply ``image_data`` for the experiment and optionally ``kspace``.
+    Pulseq files define the sequence and ADC trajectory; measured signal samples
+    come from the paired recording. Supply ``image_data`` for the experiment and optionally ``kspace``.
     Raw-only workflows use ``read_pulseq_acquisition`` and reconstruct separately.
     """
 
@@ -944,7 +944,7 @@ def _canonical_acquisition(values, shape, *, trajectory=None, density=None, acqu
 
 def read_pulseq_acquisition(seq_path, samples, *, spatial_shape=None, density=None,
                             sequence_type=None, rare_slice_order=None, sample_axis=-1, coil_axis=None):
-    """Prepare measured samples without creating a reconstructed image."""
+    """Prepare measured samples for explicit image reconstruction."""
     info = read_pulseq(seq_path)
     shape = spatial_shape or info.spatial_shape
     if shape is None:

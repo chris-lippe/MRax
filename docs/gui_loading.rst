@@ -53,6 +53,6 @@ The viewer supports:
 - per-experiment view state for display-only masks, stored transforms, color
   channels, and opacity.
 
-View-state changes are cached per experiment and can be reset. They do not modify
-source arrays, maps, k-space, or ROI masks. The Fit page uses view-state masks or
+View-state changes are cached per experiment and can be reset. Source arrays,
+maps, k-space and ROI masks remain intact. The Fit page uses view-state masks or
 transforms only when ``Use view-state masks/transforms`` is enabled.

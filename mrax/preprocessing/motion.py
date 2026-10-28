@@ -284,8 +284,7 @@ def register_image(
 ) -> ImageRegistrationResult:
     """Register one moving image to one fixed image with SimpleITK.
 
-    Without ``registration_method`` this uses a rigid Mattes mutual-information
-    registration. Pass a configured ``SimpleITK.ImageRegistrationMethod`` or a
+    The default is rigid Mattes mutual-information registration. Pass a configured ``SimpleITK.ImageRegistrationMethod`` or a
     factory accepting ``(fixed_image, moving_image)`` to use any SimpleITK
     registration configuration. ``initial_transform`` can likewise be a
     transform or a factory when it should be set by the wrapper.

@@ -14,7 +14,6 @@ from mrax.core.loss_builder import (
     _reduce_mask_to_field,
     make_model_callable,
 )
-from mrax.core.tv_fit import make_tv_steps
 from mrax.core.variance import _prepare_mask
 from mrax.data_struct import DataSet, Experiment, Model, Quantity
 from mrax.library.default_models import _inverse_transform
@@ -89,9 +88,9 @@ def test_objective_aware_steps_are_invariant_to_loss_scaling(name, scale):
     def loss(params):
         return scale * .5 * jnp.sum(jnp.abs(params['level']-target)**2)
     initial = {'level': jnp.zeros_like(target)}
-    optimizer, step, _ = make_tv_steps(loss, loss, {'level': (-np.inf, np.inf)},
-        {'level': ()}, name, .9/scale, penalty=scale)
-    result, _, info = execute_optimizer(loss, initial, optimizer, num_steps=40, step_function=step)
+    optimizer = make_optimizer(name, .9/scale, bregman_penalty=scale,
+        proximal_context=(loss, loss, {'level': (-np.inf, np.inf)}, {'level': ()}))
+    result, _, info = execute_optimizer(loss, initial, optimizer, num_steps=40)
     np.testing.assert_allclose(result['level'], target, rtol=2e-5, atol=2e-9)
     assert float(info.final_loss) < float(loss(initial)) * 1e-8
 
@@ -102,9 +101,9 @@ def test_backtracking_rejects_overshoot_for_small_signal_losses(name):
     def loss(params):
         return .5 * jnp.sum((params['level']-target)**2)
     params = {'level': jnp.zeros_like(target)}
-    optimizer, step, _ = make_tv_steps(loss, loss, {'level':(-np.inf,np.inf)},
-        {'level':()}, name, 256.)
-    result, _, info = execute_optimizer(loss, params, optimizer, num_steps=1, step_function=step)
+    optimizer = make_optimizer(name, 256.,
+        proximal_context=(loss, loss, {'level': (-np.inf, np.inf)}, {'level': ()}))
+    result, _, info = execute_optimizer(loss, params, optimizer, num_steps=1)
     assert float(info.final_loss) <= float(loss(params))
     assert np.linalg.norm(np.asarray(result['level'])-target) < np.linalg.norm(target)
 
@@ -126,7 +125,7 @@ def test_weak_signal_3d_sense_removes_aliasing_and_matches_hybrid_factorization(
     full = solve_variational(samples, spatial_shape=(nz,ny,nx),
         sensitivities=sensitivities, mask=mask, **options)
     np.testing.assert_allclose(full[0], image, rtol=2e-3, atol=2e-8)
-    # A fully sampled axis is diagonal in its image representation; no ROI is used.
+    # A fully sampled axis is diagonal in its full-image representation.
     hybrid_samples = jnp.transpose(ifftnc(samples,axes=(2,))[0], (1,0,2,3))
     hybrid_sensitivities = sensitivities.transpose(1,0,2,3)
     hybrid = solve_variational(hybrid_samples, spatial_shape=(ny,nx),
@@ -333,11 +332,12 @@ def test_softplus_inverse_handles_large_finite_initial_values():
     np.testing.assert_allclose(jax.nn.softplus(raw), [100.0, 1000.0])
 
 
-@pytest.mark.parametrize("options", [{"tolerance": np.nan}, {"max_prox_steps": 1.5}, {"inner_steps": 0}, {"penalty": np.inf}])
+@pytest.mark.parametrize("options", [{"proximal_tolerance": np.nan}, {"proximal_max_steps": 1.5}, {"bregman_inner_steps": 0}, {"bregman_penalty": np.inf}])
 def test_tv_solver_rejects_invalid_inner_options(options):
     with pytest.raises((ValueError, TypeError)):
-        make_tv_steps(lambda p: p["level"] ** 2, lambda p: p["level"] ** 2,
-                      {"level": (-2.0, 2.0)}, {}, "fista", 0.1, **options)
+        make_optimizer("fista", 0.1, proximal_context=(
+            lambda p: p["level"] ** 2, lambda p: p["level"] ** 2,
+            {"level": (-2.0, 2.0)}, {}), **options)
 
 
 @pytest.mark.parametrize("name", ["fista", "split_bregman"])

@@ -12,7 +12,7 @@ from .geometry import SpatialGeometry
 
 @dataclass(frozen=True)
 class ReconstructionRecipe:
-    """Numerical operations expressed without source-format metadata."""
+    """Numerical operations expressed through the acquisition contract."""
 
     image_shift: tuple[float, ...] = ()
     frame_image_shifts: tuple[tuple[float, ...], ...] = ()
@@ -123,8 +123,7 @@ class ReadoutModel:
     Consecutive samples contain one profile, possibly including both gradient
     polarities. Coordinates are cycles per pixel of ``image_points``. The
     target trajectory explicitly describes the samples synthesized for a
-    gridding initialization. Synthesized samples never replace measurements in
-    an iterative data term.
+    gridding initialization. Iterative data terms retain the measured samples.
     """
 
     coordinates: np.ndarray
@@ -157,8 +156,8 @@ class AcquisitionData:
     use cycles/pixel of the explicitly declared encoding grid. This normalized
     coordinate view is independent of the source's physical coordinate units.
     Validity is separate from signal values and from quadrature/statistical
-    weights. Source paths and original vendor dictionaries are not part of this
-    numerical contract.
+    weights. The numerical contract contains normalized arrays and geometry;
+    import metadata retains source paths and vendor dictionaries.
     """
 
     samples: np.ndarray
@@ -299,8 +298,8 @@ class AcquisitionData:
 
         Encoding coordinates and calibration streams remain unchanged. Arrays
         with an explicit acquisition-frame axis follow the selection; shared
-        masks and weights remain shared. Selection never infers frames from a
-        spatial dimension with a coincidentally equal size.
+        masks and weights remain shared. Selection follows the explicitly declared
+        acquisition-frame axis.
         """
         from dataclasses import replace
 

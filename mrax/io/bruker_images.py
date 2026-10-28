@@ -164,7 +164,7 @@ def _visu_fg_count(visu: dict, token: str) -> int | None:
 
 
 def _bruker_has_mixed_slice_geometry(visu: dict, frame_count: int) -> bool:
-    """Detect 2D frame groups whose frames do not share one slice-stack geometry."""
+    """Detect 2D frame groups with mixed slice-stack geometry."""
 
     if int(frame_count) <= 1 or not _contains_token(visu.get("VisuFGOrderDesc"), "FG_SLICE"):
         return False
@@ -327,7 +327,7 @@ def bruker_spatial_geometry(
     *,
     spatial_shape: Sequence[int] | None = None,
 ) -> SpatialGeometry:
-    """Return Bruker image geometry without changing native image/k-space axes."""
+    """Return Bruker geometry expressed alongside native image and k-space axes."""
 
     vendor_voxel_sizes = _bruker_voxel_sizes(visu)
     first_axis, second_axis = _bruker_decoded_in_plane_axis_order(visu)

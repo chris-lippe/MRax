@@ -164,7 +164,7 @@ def unwrap_phase_image(
     data use direct Itoh integration.
 
     The result differs from ``phase`` only by integer multiples of ``period``.
-    Leading frame, echo, observable, and coil axes are never connected.
+    Leading frame, echo, observable and coil axes remain independent.
 
     Parameters
     ----------

@@ -44,8 +44,8 @@ def image_to_encoding(image, acquisition: AcquisitionData):
     """Undo slice grouping, permutations and cropping, retaining native axes.
 
     The reverse of a crop pads with zeros: a model defined on the output FOV
-    explicitly assumes no object outside that FOV. Gridding deapodization,
-    visualization support and intensity calibration are not encoding operators.
+    assumes zero object signal outside that FOV. Gridding deapodization,
+    visualization support and intensity calibration are separate processing steps.
     """
     recipe = acquisition.recipe
     ndim = len(acquisition.encoding_shape)

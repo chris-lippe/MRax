@@ -10,7 +10,7 @@ from scipy.sparse.csgraph import connected_components, minimum_spanning_tree
 
 
 def quality_guided_unwrap(phase, *, spatial_ndim, mask=None, weights=None, period=2 * np.pi):
-    """Unwrap spatial neighbours without connecting masked or leading axes.
+    """Unwrap valid spatial neighbours within each independent leading index.
 
     A curvature reliability measure ranks edges; a maximum-reliability spanning
     forest chooses integration paths. Each connected component starts at its

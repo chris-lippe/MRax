@@ -12,7 +12,7 @@ from mrax.core.fit_execution import execute_optimizer
 from mrax.core.loss_builder import run_fit
 from mrax.data_struct import Quantity
 from mrax.library.default_models import make_AB_MT_n_model
-from mrax.opt._proximal import make_proximal_kernel
+from mrax.opt._fista import make_fista_kernel
 from mrax.opt.optimizers import make_optimizer
 from mrax.opt.tv import TVOperator
 
@@ -24,7 +24,7 @@ def test_extraargs_known_convex_optimum_and_resume(name, scale):
     def loss(p):
         return scale * .5 * jnp.sum((p['x']-target)**2)
     # Scaling the entire objective also scales an absolute augmented penalty.
-    # Keeping rho fixed would change conditioning, not the minimizer.
+    # rho tunes conditioning while the objective defines the minimizer.
     options=dict(regularizer_weight=.5*scale, box_constraints=(-2., 2.), bregman_penalty=scale)
     # Deliberately unsafe initial rate must be reduced by line search.
     opt=make_optimizer(name, 20./scale, **options)
@@ -195,8 +195,8 @@ def test_fista_reuses_trial_objective():
         return smooth(params)
 
     params = {'x': jnp.zeros(2)}
-    optimizer, step, _ = make_proximal_kernel(objective, smooth, {'x': (-np.inf, np.inf)},
-                                             {'x': ()}, 'fista', .1)
+    optimizer, step, _ = make_fista_kernel(objective, smooth, {'x': (-np.inf, np.inf)},
+        {'x': ()}, .1, restart="gradient", backtracking="full")
     _, _, _, status = jax.jit(step)(params, optimizer.init(params))
     jax.effects_barrier()
     assert int(status) == 0

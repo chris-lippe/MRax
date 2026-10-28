@@ -60,7 +60,7 @@ def prewhiten_acquisition(acquisition, *, noise=None, noise_coil_axis=1, eigenva
 
     Apply W to externally supplied sensitivities as well. Calibrate sensitivities
     after whitening when using attached calibration data. Receiver-dependent
-    sampling masks or statistical weights cannot be mixed by this operation.
+    sampling masks and statistical weights must match across mixed receivers.
     Raw auxiliary roles use (record, receiver, sample) axes; prepared calibration
     grids and EPI navigators use receiver axes 0 and 2, respectively. Supply
     ``auxiliary_coil_axes`` for custom role layouts.

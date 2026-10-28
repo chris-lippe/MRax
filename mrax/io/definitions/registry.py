@@ -1,4 +1,4 @@
-"""Small, deterministic profile registry; configuration never executes code."""
+"""Small, deterministic registry of declarative profiles."""
 from __future__ import annotations
 
 import re

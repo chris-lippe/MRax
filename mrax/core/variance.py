@@ -207,8 +207,8 @@ def estimate_data_variance(
 
     ``method="auto"`` first looks for a low-signal background region. Nonnegative
     magnitude data uses the Rayleigh-background median-square estimator; signed
-    real or complex data uses a median-absolute-deviation estimate. When no clear
-    background exists, automatic mode falls back to ``"wavelet_mad"``, which
+    real or complex data uses a median-absolute-deviation estimate. Ambiguous
+    background support selects ``"wavelet_mad"``, which
     applies a normalized diagonal Haar high-pass transform over the two largest
     spatial axes. Supplying ``mask`` explicitly defines the noise-sampling region
     rather than a fitting or tissue mask.

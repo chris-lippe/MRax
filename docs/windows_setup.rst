@@ -3,8 +3,7 @@ Windows setup
 
 .. note::
 
-   Native Windows installations use CPU only:
-   JAX does not provide a native Windows GPU backend. GPU calculations require
+   Native Windows installations use CPU JAX. GPU calculations require
    the Linux version of MRax inside WSL 2, optionally in a Linux Docker container,
    with CUDA-enabled JAX. JAX lists NVIDIA GPU support under WSL 2 as experimental;
    see `JAX platform support
@@ -67,8 +66,8 @@ filesystem, for example under ``~/code/``, instead of editing it from
 Native Windows Pip Installs
 ---------------------------
 
-Developing MRax in a Linux container does not make the Python package
-Linux-only. The base release package is tested with native ``pip`` installations when
+MRax supports Linux development containers and native Windows installations.
+The base release package is tested with native ``pip`` installations when
 its dependencies provide Windows wheels:
 
 .. code-block:: powershell

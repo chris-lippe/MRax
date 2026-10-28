@@ -618,8 +618,8 @@ def linear_drift_correct_framestack(
 ) -> FrameStackLinearDriftResult:
     """Fit and apply a global linear transform-parameter drift to a frame stack.
 
-    The JAX optimizer does not fit one transform per frame. It optimizes the
-    coefficients of ``identity + design(time) @ coefficients`` and evaluates
+    The JAX optimizer fits the coefficients of the shared transform curve
+    ``identity + design(time) @ coefficients`` and evaluates
     the chosen image transform and similarity metric for each frame under that
     shared model. By default the line is anchored at identity for the reference
     frame or the first frame; set ``fit_intercept=True`` to fit a free line.

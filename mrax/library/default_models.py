@@ -39,7 +39,7 @@ def _normalize_abmt_line_shape_name(line_shape: object) -> str:
 
 
 def _build_super_lorentzian_lookup() -> tuple[np.ndarray, np.ndarray]:
-    """Prepare the semisolid lookup on the host without initializing a device."""
+    """Prepare the semisolid lookup with host-side NumPy."""
     # The ideal super-Lorentzian diverges at zero offset around the magic angle.
     # We tabulate a regularized kernel once and reuse it through interpolation so
     # the model stays finite and reasonably fast during iterative fitting.
@@ -1258,8 +1258,7 @@ def make_AB_MT_n_model(
         If ``None``, this is enabled when ``param_overrides`` defines
         ``dw_water``.
     water_offset_bounds : tuple[float, float]
-        Default bounded range for ``dw_water`` when no explicit override is
-        provided.
+        Default bounded range for ``dw_water`` before explicit overrides.
     enable_water_offset_linear_drift : bool
         Add a trainable ``dw_water_drift`` slope in ppm/min. The measured
         ``b0_map`` observable remains the fixed intercept, so the modeled

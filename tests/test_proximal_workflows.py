@@ -7,7 +7,6 @@ import pytest
 from mrax.core import build_loss, run_fit
 from mrax.core.fit_execution import execute_optimizer
 from mrax.core.fit_sanity import debug_fit_prototype
-from mrax.core.tv_fit import make_tv_steps
 from mrax.data_struct import DataSet, Experiment, Model
 from mrax.opt.optimizers import make_optimizer
 from mrax.opt.tv import TVOperator, tv_prox
@@ -33,11 +32,10 @@ def test_proximal_fitting_preserves_mixed_parameter_dtypes(backend, name, use_tv
 
         operators = {key: (TVOperator.create(value.shape, weight=.001, dtype=value.dtype),)
                      if use_tv else () for key, value in params.items()}
-        optimizer, step, convergence = make_tv_steps(loss, loss,
-            {key: (np.float64(-10), np.float64(10)) for key in params},
-            operators, name, .1, device=device)
+        optimizer = make_optimizer(name, .1, device=device, proximal_context=(loss, loss,
+            {key: (np.float64(-10), np.float64(10)) for key in params}, operators))
         fitted, _, _ = execute_optimizer(loss, params, optimizer, num_steps=40,
-            step_function=step, convergence_check=convergence, device=device)
+            device=device)
         for key, target in [("single", 1.), ("double", 2.)]:
             assert fitted[key].dtype == params[key].dtype
             np.testing.assert_allclose(fitted[key], target, atol=3e-4)

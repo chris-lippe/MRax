@@ -10,9 +10,8 @@ def triangulated_density(trajectory, *, spatial_shape):
     """Barycentric quadrature on a 2D/3D sampling mesh in cycles/pixel.
 
     Each simplex contributes its area/volume equally to its vertices. Repeated
-    coordinates share their cell weight. The convex hull bounds support; no
-    unmeasured frequencies are extrapolated. These initialization weights never
-    replace statistical noise weights in an iterative data term.
+    coordinates share their cell weight. The convex hull bounds quadrature support.
+    Iterative data terms use separately defined statistical noise weights.
     """
     from scipy.spatial import Delaunay, QhullError
 
@@ -45,10 +44,10 @@ def radial_cell_density(trajectory, *, points_per_readout, angular_weights=None,
     are solid angles per readout, defaulting to equal angular coverage of the
     circle or sphere. Unequal direction coverage needs explicit angular weights.
 
-    Without ``target_sum`` the result retains geometric units inherited from
+    With ``target_sum=None``, the result retains geometric units inherited from
     the trajectory; an explicit positive target requests a global normalization.
     These quadrature weights are separate from statistical noise weights. The
-    function does not infer sequence names, scanner versions or sample roles.
+    function operates on the supplied numerical geometry.
     """
     points = index(points_per_readout)
     coordinates = np.asarray(trajectory, dtype=float)
@@ -82,8 +81,7 @@ def radial_profile_density(trajectory, *, points_per_readout, center_out=True, n
     """Radial volume increments per profile, relative to a Nyquist-radius ball.
 
     This convention integrates to one for a centre-out profile reaching the
-    declared radius, or two for a full opposing profile. It does not include an
-    angular average. Use geometric solid-angle quadrature for volume integration.
+    declared radius, or two for a full opposing profile. Use geometric solid-angle quadrature for volume integration.
     """
     coordinates = np.asarray(trajectory, float)
     points = index(points_per_readout)

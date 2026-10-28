@@ -56,7 +56,7 @@ def apply_channel_scale_phase(
     Returns
     -------
     np.ndarray
-        Corrected array. Inputs are not modified in-place.
+        Corrected copy of the input array.
 
     Notes
     -----
@@ -251,7 +251,7 @@ def fid_profiles_to_kspace(
 
     Notes
     -----
-    This is not Bruker-specific. It is useful whenever a sequence stores raw FIDs or
+    This applies to sequences that store raw FIDs or
     oversampled readouts that must be Fourier-transformed, cropped, and phase shifted
     before samples are paired with a trajectory.
     """

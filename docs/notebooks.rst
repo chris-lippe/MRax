@@ -2,7 +2,7 @@ Notebook Gallery
 ================
 
 The demo notebooks synthesize their own inputs and write temporary outputs under
-``tmp/`` or notebook-local demo folders. They do not require bundled datasets.
+``tmp/`` or notebook-local demo folders.
 
 Notebooks are rendered inline via ``nbsphinx`` with execution disabled during docs
 builds. The downloads import the installed ``mrax`` package and therefore work outside

@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import warnings
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -72,7 +73,7 @@ assert os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] == expected
 
 @pytest.fixture
 def roi_editor():
-    # Exercise controller edits and real session masks without a Qt event loop.
+    # Exercise controller edits and real session masks directly.
     editor = object.__new__(_MainWindowMixin)
     editor.session = GuiSession()
     editor.session.create_empty_study("synthetic", field_strength_mhz=100)
@@ -225,6 +226,76 @@ def test_roi_preview_renders_fair_axes_and_preserves_frame_selection():
     np.testing.assert_allclose(result["predicted"], expected.reshape(-1), rtol=2e-6, atol=2e-7)
     assert len(result["x"]) == len(result["predicted"]) == 10
     assert np.isfinite(result["loss_history"]).all()
+
+
+@pytest.fixture
+def signal_plot():
+    pg = pytest.importorskip("pyqtgraph")
+    app = pg.mkQApp()
+    plot = pg.PlotWidget()
+    yield plot
+    plot.close()
+    app.processEvents()
+
+
+@pytest.mark.parametrize("excluded", [False, True])
+def test_new_empty_roi_signal_plot_stays_clear_until_drawing(roi_editor, signal_plot, excluded):
+    editor = roi_editor
+    editor.last_preview_fit_result = None
+    editor._plot_dimension = lambda: "frame"
+    editor._roi_name_dialog = lambda *args: "empty"
+    editor.update_view = lambda **kwargs: editor._draw_signal_plot(signal_plot)
+    if excluded:
+        editor.session.frame_mask.exclude(0, 1)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", RuntimeWarning)
+        editor.add_empty_roi()
+        signal_plot.autoRange()
+        for item in signal_plot.listDataItems():
+            item.scatter.dataBounds(0)
+            item.scatter.dataBounds(1)
+    assert not [warning for warning in caught if issubclass(warning.category, RuntimeWarning)]
+    assert signal_plot.listDataItems() == []
+    roi = editor.session.roi()
+    assert roi is not None and roi.name == "empty"
+    assert not np.any(roi.mask)
+    editor.brush_mode = "brush"
+    editor._apply_brush_at(1, 1, editor._displayed_image.shape)
+    editor._draw_signal_plot(signal_plot)
+    assert np.any(editor.session.roi().mask)
+    assert sum(len(item.xData) for item in signal_plot.listDataItems()) == 2
+
+
+@pytest.mark.parametrize("preview", [False, True])
+def test_signal_plot_keeps_finite_pairs_and_frame_selection(roi_editor, signal_plot, monkeypatch, preview):
+    editor = roi_editor
+    observed = np.asarray([1., 2., np.nan, np.inf, 5., 6.])
+    coordinates = np.asarray([0., np.nan, 2., 3., 4., 5.])
+    editor.session.add_experiment(
+        "profile", np.broadcast_to(observed[:, None, None], (6, 7, 11)), dims={"frame": 6, "x": 7, "y": 11},
+    )
+    editor.session.frame_mask.exclude(3, 4)
+    editor.last_preview_fit_result = ({
+        "model": "synthetic", "observed": observed, "predicted": np.arange(6.),
+        "included": editor.session.frame_mask.as_array(),
+    } if preview else None)
+    editor._plot_dimension = lambda: "frame"
+    monkeypatch.setattr("mrax.gui.app.axis_coordinates", lambda *args, **kwargs: ("frame", coordinates))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", RuntimeWarning)
+        editor._draw_signal_plot(signal_plot)
+        signal_plot.autoRange()
+    assert not [warning for warning in caught if issubclass(warning.category, RuntimeWarning)]
+    items = signal_plot.listDataItems()
+    assert len(items) == (3 if preview else 2)
+    np.testing.assert_array_equal(items[0].xData, [0., 5.])
+    np.testing.assert_array_equal(items[0].yData, [1., 6.])
+    assert items[0].opts["symbol"] == "o"
+    np.testing.assert_array_equal(items[1].xData, [4.])
+    np.testing.assert_array_equal(items[1].yData, [5.])
+    assert items[1].opts["symbol"] == "x"
+    if preview:
+        np.testing.assert_array_equal(items[2].yData, np.arange(6.))
 
 
 def test_gui_prepares_reconstruction_as_a_separate_requested_view():

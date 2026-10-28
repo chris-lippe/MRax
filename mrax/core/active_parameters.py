@@ -1,8 +1,8 @@
 """Optional active-ROI coordinates with original-grid TV topology.
 
-Only parameter/state buffers are packed. Arbitrary model forward evaluations
-retain their original geometry (including nonlocal models); this does not claim
-to skip all forward-model arithmetic outside an ROI.
+Parameter/state buffers are packed. Model forward evaluations retain their
+original geometry, including nonlocal models, and their corresponding
+full-domain arithmetic.
 """
 from dataclasses import dataclass
 from hashlib import sha256

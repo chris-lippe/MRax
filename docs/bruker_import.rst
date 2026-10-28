@@ -2,7 +2,7 @@ Bruker import
 =============
 
 Import ParaVision images, raw acquisitions, geometry and experiment observables
-without scanner software. Raw reconstruction is a separate operation.
+with MRax's Python readers. Raw reconstruction is a separate operation.
 
 .. code-block:: python
 

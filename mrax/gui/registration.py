@@ -1,8 +1,7 @@
 """Registration helpers for the MRax GUI.
 
-The functions in this module intentionally avoid importing Qt. SimpleITK is
-imported lazily so the GUI package can still be inspected without optional
-registration dependencies installed.
+The functions in this module operate independently of Qt. Lazy SimpleITK
+imports keep registration dependencies local to the registration workflow.
 """
 
 from __future__ import annotations

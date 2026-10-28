@@ -1,4 +1,4 @@
-"""Prepare ADC streams using sequence coordinates, without reconstructing images."""
+"""Prepare ADC streams on sequence coordinates for explicit reconstruction."""
 from __future__ import annotations
 
 import numpy as np
@@ -11,7 +11,7 @@ def prepare_pulseq_samples(info, samples, *, spatial_shape=None, frame_indices=N
     """Map coil-first serial ADC samples to explicit Fourier coordinates.
 
     Repeated visits to a Cartesian location remain distinct frames. Coordinates
-    that cannot be represented on the declared lattice remain sampled data.
+    outside the declared lattice remain sampled data.
     """
     samples = np.asarray(samples)
     samples = samples.astype(np.result_type(samples.dtype, np.complex64), copy=False)
@@ -22,7 +22,7 @@ def prepare_pulseq_samples(info, samples, *, spatial_shape=None, frame_indices=N
     fov = np.asarray(info.definitions.get('FOV', info.definitions.get('fov', [])), float).reshape(-1).copy()
     shape = tuple(spatial_shape or info.spatial_shape or ())
     if physical is None or not shape or len(fov) < len(shape):
-        # ADC recordings without a proven spatial encoding are not MRI k-space.
+        # Retain ADC-domain recordings until spatial encoding is established.
         return AcquisitionData(samples.reshape((samples.shape[0], -1))[None], (sample_count,), ('sample',), domain='adc')
     if axis_order is not None and sorted(axis_order) != list(range(len(shape))):
         raise ValueError("axis_order must permute the physical encoding axes")
@@ -104,7 +104,7 @@ def prepare_pulseq_samples(info, samples, *, spatial_shape=None, frame_indices=N
             ('partition', 'phase', 'read')[-len(shape):], acquired=counts.reshape((frame_count, 1) + shape) > 0,
             auxiliary_samples=auxiliary or {}, statistical_weights=counts.reshape((frame_count, 1) + shape) if np.any(counts > 1) else None,
             recipe=ReconstructionRecipe(output_shape=output_shape, output_scale=float(np.sqrt(np.prod(output_shape) / np.prod(shape)))))
-    # Do not round ramp sampling, half-sample shifts, radial or spiral coordinates.
+    # Preserve ramp sampling, half-sample shifts, radial and spiral coordinates.
     if frame_indices is None and len(set(info.adc_counts)) == 1:
         n = int(info.adc_counts[0])
         readouts = normalized.reshape((-1, n, len(shape)))

@@ -48,7 +48,7 @@ class FitInfo:
 
 
 class FitError(FloatingPointError):
-    """A nonfinite fit with its last valid chunk-boundary checkpoint, if available."""
+    """Fit failure with the latest verified chunk-boundary checkpoint, if available."""
 
     def __init__(self, message: str, state: FitState | None, losses: list[float]):
         super().__init__(message)
@@ -106,8 +106,8 @@ def execute_optimizer(
 
     Convergence requires both scaled objective changes and relative raw-parameter
     updates to meet their tolerances for consecutive updates. Stopping counters
-    start afresh when resuming. Nonfinite proposals are never accepted; errors
-    retain the last verified chunk-boundary checkpoint rather than partial results.
+    start afresh when resuming. Accepted proposals are finite; errors retain the
+    last verified chunk-boundary checkpoint.
     ``device`` defaults to CPU and also places resumed parameters and moments.
     """
     optimizer = place_optimizer(optimizer, device)
@@ -213,7 +213,8 @@ def execute_optimizer(
                     finite, lambda _: (proposal, proposal_state), lambda _: (current, state), None
                 )
                 next_status = jnp.where(finite, jnp.where(converged, 1, 0),
-                                        jnp.where(solver_status == 3, 3, 2)).astype(jnp.int32)
+                                        jnp.where(solver_status == 3, 3,
+                                                  jnp.where(solver_status == 4, 4, 2))).astype(jnp.int32)
                 next_carry = (
                     chosen, chosen_state, value, next_count, done + finite.astype(jnp.int32),
                     next_status,
@@ -244,9 +245,10 @@ def execute_optimizer(
         )
         params, opt_state, previous_loss, stable, count, status = carry
         history, executed, count_host, status_host = jax.device_get((*values, count, status))
-        if int(status_host) in (2, 3):
+        if int(status_host) in (2, 3, 4):
             raise FitError(
-                ("TV proximal solve or backtracking failed" if int(status_host) == 3 else
+                ("Floating-point resolution exhausted in a nonstationary proximal step" if int(status_host) == 4 else
+                 "TV proximal solve or backtracking failed" if int(status_host) == 3 else
                  "Nonfinite optimizer loss, gradient or update") + f" at step {start_step + int(count_host) + 1}",
                 checkpoint, checkpoint_losses,
             )

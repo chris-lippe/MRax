@@ -7,8 +7,7 @@ pixel scaling, acquisition timings and physical geometry.
 Loading a series or study
 -------------------------
 
-Use :func:`mrax.io.discover_dicom_series` to inspect a source without decoding all pixel
-data. A source can be one file, a folder containing multiple files, a folder tree, or a
+Use :func:`mrax.io.discover_dicom_series` for metadata-only source inspection. A source can be one file, a folder containing multiple files, a folder tree, or a
 sequence of paths. Patient-identifying attributes are omitted from discovery summaries.
 
 .. code-block:: python
@@ -39,8 +38,8 @@ a generic ``frame`` axis.
 
 MRax arrays keep fixed ``x/y/z`` spatial semantics. DICOM patient orientation, origin,
 and voxel spacing are stored separately as :class:`mrax.data_struct.SpatialGeometry`.
-This geometry controls anatomical plane labels, display aspect ratio, and NIfTI affine
-conversion, but does not reorder inputs to reconstruction or quantitative fitting.
+This geometry controls anatomical plane labels, display aspect ratio and NIfTI affine
+conversion. Reconstruction and quantitative fitting retain native array order.
 When valid orientation metadata is unavailable, MRax retains the native array order and
 uses explicit fallback geometry rather than guessing anatomy from image dimensions.
 

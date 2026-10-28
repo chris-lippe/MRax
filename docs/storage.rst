@@ -2,8 +2,8 @@ MRax Study Storage
 ==================
 
 A ``.mrax`` bundle is the standard portable study file. It contains images,
-prepared raw acquisitions, fitted maps, units and geometry. GUI state is optional;
-saves from the Python API do not include it.
+prepared raw acquisitions, fitted maps, units and geometry. GUI saves may also
+include view state; Python API saves contain the study data.
 
 Saving and loading
 ------------------

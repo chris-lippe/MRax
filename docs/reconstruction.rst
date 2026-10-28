@@ -31,7 +31,7 @@ Variational reconstruction minimizes
 
 ``A`` encodes measured support, receiver sensitivities and Fourier coordinates;
 ``W`` holds statistical weights. Density weights initialize reconstruction;
-completed samples do not count as new measurements. L1/TV penalties and their
+completed samples serve initialization. L1/TV penalties and their
 proximal weights use the same mean-over-image normalization.
 
 Model-based reconstruction applies this encoding to a signal model. Supply
@@ -42,7 +42,7 @@ Adam uses smoothed TV with a warning. See :doc:`model_fitting` for fitting contr
 Model-based fitting uses RMS-normalized mean squared error, with the same
 prefactor as image fitting. ``reference_image`` multiplies a relative signal
 model by a fixed spatial reference. ``roi_mask`` controls regularizers and output;
-it does not discard exterior k-space signal. ``object_support_mask`` instead
+Fourier encoding retains the full signal, including exterior contributions. ``object_support_mask`` instead
 declares physical object support. Comparisons require matching likelihoods,
 support, references and regularizer weights.
 Model-based encoding uses batches of up to 32 frames with rematerialized
@@ -50,12 +50,12 @@ gradients, retaining the complete time model and temporal regularizers.
 ``encoding_batch_size`` changes this bound; ``None`` uses a single batch.
 
 Paired-echo frequency maps are ambiguous by integer multiples of ``1 / delta_TE``
-Hz, with ``delta_TE`` in seconds. Phase unwrapping cannot establish an absolute
-frequency reference. Reliability masks can also differ between reconstruction methods.
+Hz, with ``delta_TE`` in seconds. An absolute frequency reference requires
+additional calibration. Reliability masks can also differ between reconstruction methods.
 
 ``solve_variational`` and ``solve_model_based`` expose low-level solvers;
 ``build_operator`` exposes forward/adjoint encoding. Non-Cartesian encoding uses
-the built-in JAX NUFFT on the selected CPU or GPU, without an additional backend.
+the built-in JAX NUFFT on the selected CPU or GPU.
 Its fixed trajectory uses cycles per pixel in spatial-axis order. Reusable
 ``prepare_nufft(shape, trajectory)`` plans support batches, JIT and image/model
 gradients; trajectory gradients are unsupported. Prepare plans outside JIT.

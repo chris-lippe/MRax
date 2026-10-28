@@ -107,7 +107,7 @@ def test_pulseq_overview_cancellation_and_existing_bruker_routing(tmp_path):
     bruker = tmp_path / 'bruker'
     bruker.mkdir()
     _write_minimal_bruker_scan(bruker)
-    # A nearby descriptor must never override a recognized Bruker study.
+    # A recognized Bruker study takes precedence over a nearby descriptor.
     _sequence(bruker / 'unrelated.seq')
     assert _detect_import_vendor(bruker) == 'Bruker'
     controller = _controller(bruker)

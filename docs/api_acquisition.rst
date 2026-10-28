@@ -8,8 +8,8 @@ for Cartesian data or ``(frame, coil, sample)`` for trajectories.
 
 - Trajectory columns follow ``encoding_axes``, in cycles per pixel of the encoding
   grid. Cartesian DC is at ``size // 2``; the inverse FFT is centered and orthonormal.
-- ``acquired`` marks measured support, including measured zeros. Interpolated or
-  completed samples do not enter iterative objectives as new measurements.
+- ``acquired`` marks measured support, including measured zeros. Iterative
+  objectives use this measured support; completed samples serve initialization.
 - ``density`` supplies quadrature weights for initialization;
   ``statistical_weights`` supplies confidence in the likelihood. Sampling masks
   are binary.
@@ -27,7 +27,7 @@ calibration. Recipes specify image permutations, flips and cropping.
 ``stack_slices`` and ``average_repeats`` map native readouts to output frames;
 model-based encoding reverses this layout. Sensitivities may be shared or vary
 by frame, with an explicit receiver axis. Acquisition archives use arrays and
-JSON without pickle.
+JSON with explicit numeric arrays.
 
 Readouts can carry nonuniform coordinates and polarity. FFT initialization uses
 direct Fourier quadrature by default; linear and windowed-sinc interpolation are

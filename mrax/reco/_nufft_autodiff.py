@@ -2,7 +2,7 @@
 
 The primitive lowers entirely to the portable JAX implementation. Explicit
 linear rules prevent autodiff from saving sample-by-neighbour scan residuals.
-No native extension or platform-specific lowering is used.
+The implementation uses portable JAX primitives.
 """
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from jax.interpreters import ad, batching, mlir
 def _implementation(values, indices, weights, *deapodization, configuration):
     from .nufft import NUFFTPlan
 
-    # Large constant cotangents must not run FFT/spreading in XLA's constant
-    # folder. Linear differentiation is defined explicitly below.
+    # Explicit linear differentiation keeps large FFT/spreading cotangents
+    # in runtime evaluation.
     values = jax.lax.optimization_barrier(values)
     shape, grid, count, width, chunk, batch, cached, beta, wide, adjoint = configuration
     plan = NUFFTPlan(shape, grid, count, width, chunk, batch, indices, weights,

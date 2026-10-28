@@ -51,7 +51,7 @@ def sequence_slice_positions(labels, positions, normals, definitions):
 
     Existing distinct scanner positions take precedence. Pulseq slice offsets
     are relative to the prototype centre, in metres unless SlicePositionsUnit
-    declares millimetres. Without offsets, repeated planes stay unresolved.
+    declares millimetres. Unspecified offsets leave repeated planes unresolved.
     """
     import warnings
 

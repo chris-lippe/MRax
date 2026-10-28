@@ -22,7 +22,7 @@ _ROLES = {"noise": 19, "calibration": 20, "navigation": 23, "phase_correction": 
 
 
 def _read_header(xml):
-    """Accept an incomplete optional information section without inventing posture."""
+    """Read available header information and retain explicit posture provenance."""
     xml = xml.decode() if isinstance(xml, bytes) else xml
     tree = ET.fromstring(xml)
     for section in list(tree):
@@ -57,7 +57,7 @@ def _flag(values, number):
 
 
 def _metadata_template(path, group, heads):
-    """Use explicitly paired acquisition metadata without replacing sample headers."""
+    """Combine explicitly paired metadata with authoritative sample headers."""
     with h5py.File(path, 'r') as file:
         source = file[group]
         template = source['data'].fields('head')[:]
@@ -88,7 +88,7 @@ def _phase_index(value, limit, size):
         return shifted
     if not (int(limit.minimum) <= value <= int(limit.maximum)) or int(limit.maximum) - int(limit.minimum) > size:
         raise ValueError("ISMRMRD encoding indices fall outside the declared grid")
-    # Fourier bins are periodic; a declared origin need not be the middle bin.
+    # Fourier bins are periodic around the declared origin.
     return shifted % size
 
 
@@ -224,7 +224,7 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
                             load_auxiliary=True, sequence_info=None, density="auto", metadata_template=None,
                             trajectory_mode="auto", noise_records=(), exclude_records=(),
                             sample_window=None, center_sample=None):
-    """Read MRD acquisitions or one image series without reconstructing.
+    """Read MRD acquisitions or one image series for the import stage.
 
     Trajectory coordinates default to cycles/pixel. Files using another convention
     must declare ``trajectory_units`` (cycles/fov, cycles/m, radians/pixel).
@@ -436,7 +436,7 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
                 and trajectory_axes is not None and trajectory_axes != list(range(ndim))):
             directions = np.stack([np.column_stack([h[k] for k in ('read_dir', 'phase_dir', 'slice_dir')]) for h in frame_heads])
             if np.allclose(directions, np.eye(3), atol=1e-6):
-                # Placeholder MRD directions cannot establish patient posture.
+                # Patient posture requires informative MRD direction metadata.
                 # The matched sequence still establishes scanner gradient axes.
                 order = list(trajectory_axes) + list(range(ndim, 3))
                 for i, key in enumerate(('read_dir', 'phase_dir', 'slice_dir')):

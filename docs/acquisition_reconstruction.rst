@@ -53,30 +53,28 @@ Algorithm choices
 **Partial Fourier:** homodyne uses central phase estimation with step/ramp
 weighting; POCS restores measured samples between phase projections. The phase
 window and convergence tolerance are configurable. See
-`Noll (1991) <https://doi.org/10.1109/42.79473>`_ and
-`Haacke (1991) <https://doi.org/10.1016/0022-2364(91)90253-P>`_.
+[Noll1991]_ and [Haacke1991]_.
 
 **Gridding:** Kaiser--Bessel width, shape, oversampling and deapodization are
 editable. ``deapodization_normalization="relative"`` gives unit correction at DC;
 ``"inverse_fft"`` inverts the absolute kernel response, including its ``1/N``
 factor per axis. ``output_scale`` calibrates FFT images; ``encoding_scale`` sets
 image units for iterative encoding. See
-`Beatty (2005) <https://doi.org/10.1109/TMI.2005.848376>`_.
+[Beatty2005]_.
 
 ``radial_cell_density`` integrates radial cells and solid angles, assuming equal
 angular coverage unless weights are supplied; ``target_sum`` sets normalization.
 ``radial_profile_density`` integrates profiles relative to a Nyquist radius
-without angular averaging. These conventions have different image units.
+with geometric solid-angle quadrature supplied separately. These conventions have different image units.
 For iterative density design, see
-`Pipe and Menon (1999) <https://pubmed.ncbi.nlm.nih.gov/10025627/>`_.
+[PipeMenon1999]_.
 
 **EPI:** timed three-echo navigators interpolate the outer echoes to the middle
 TE before fitting a linear phase in readout hybrid space. Entropy fitting
 searches phase offset and slope. The entropy method needs a
 phase prior or navigators to resolve half-FOV ambiguity. Calibration uses a
-common phase across receivers. See
-`Poser (2013) <https://doi.org/10.1002/mrm.24222>`_ and
-`Skare (2006) <https://cds.ismrm.org/protected/06MProceedings/PDFfiles/02349.pdf>`_.
+common phase across receivers. See [Skare2006]_ for entropy-based correction
+and [Poser2013]_ for EPI acquisition context.
 
 **Windows:** sine, squared-sine, Hann and Hamming windows use the centered Fourier
 grid; per-axis powers compose serial applications. Iterative data terms retain

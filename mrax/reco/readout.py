@@ -13,7 +13,7 @@ from .variational import fftnc
 def invert_readout_profiles(samples, model: ReadoutModel):
     """Synthesize a uniform full profile using a truncated-SVD Fourier inverse.
 
-    This is a linear band-limited reconstruction, with no real-image assumption.
+    This linear band-limited reconstruction supports complex images.
     Both gradient polarities and acquisition delays are represented by measured
     coordinates. Singular values below the explicit relative cutoff are removed.
     The returned conditioning diagnostics describe the retained subspace.

@@ -8,7 +8,7 @@ GUI_INSTALL_HINT = "Install MRax with `pip install mrax`."
 
 
 class MissingGuiDependencyError(RuntimeError):
-    """Raised when the required GUI stack cannot be imported."""
+    """Raised after an import failure in the required GUI stack."""
 
 
 def _dependency_error(message: str, exc: BaseException) -> MissingGuiDependencyError:
@@ -36,7 +36,7 @@ def import_qt():
 
     try:
         from qtpy import QtCore, QtGui, QtWidgets
-    except Exception as exc:  # pragma: no cover - exercised when Qt cannot import.
+    except Exception as exc:  # pragma: no cover - Qt import failure
         probe = _qt_probe_details()
         detail = f" Underlying Qt errors: {probe}" if probe else f" Underlying error: {_format_exc(exc)}"
         raise _dependency_error(
@@ -54,7 +54,7 @@ def import_pyqtgraph():
 
     try:
         import pyqtgraph as pg
-    except Exception as exc:  # pragma: no cover - exercised when pyqtgraph cannot import.
+    except Exception as exc:  # pragma: no cover - pyqtgraph import failure
         raise _dependency_error(
             "MRax GUI could not import pyqtgraph. "
             f"{GUI_INSTALL_HINT} "

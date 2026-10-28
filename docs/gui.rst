@@ -3,8 +3,8 @@ Desktop GUI
 
 MRax includes a Qt desktop GUI for inspecting saved MRax studies, drawing ROIs,
 running fits, and exporting maps or masks. It uses the same ``Study``,
-``Experiment``, ``DataSet``, and ``Model`` objects as the Python API. GUI actions
-do not change source Bruker files.
+``Experiment``, ``DataSet`` and ``Model`` objects as the Python API. Imported
+source Bruker files remain intact.
 
 .. toctree::
    :maxdepth: 1
@@ -34,7 +34,7 @@ still need native libraries such as ``libglib-2.0.so.0`` or ``libGL.so.1``:
    apt-get update
    apt-get install -y libglib2.0-0 libgl1
 
-Without root access, place extracted native libraries in
+For a user-local installation, place extracted native libraries in
 ``~/.local/mrax-gui-libs`` or set ``MRAX_GUI_LOCAL_LIB_DIR``.
 
 The GUI can also be launched from Python:
