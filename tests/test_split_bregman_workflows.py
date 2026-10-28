@@ -1,4 +1,5 @@
-"""Independent split-Bregman recurrence, proximal, API and failure checks."""
+"""Synthetic split bregman contracts and numerical references."""
+
 import copy
 
 import jax
@@ -145,7 +146,7 @@ def test_missing_objective_rejected_and_nonfinite_trial_preserves_checkpoint():
     np.testing.assert_array_equal(updates["x"], 0)
 
 
-def test_old_split_bregman_states_are_not_silently_reinterpreted():
+def test_split_bregman_rejects_incompatible_state_schema():
     optimizer = make_optimizer("split_bregman", .1)
     state = optimizer.init({"x": jnp.asarray(0.)})
     state["solver"].pop("layout_version")

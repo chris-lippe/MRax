@@ -1,33 +1,148 @@
+"""Synthetic core contracts and numerical references."""
+
+import inspect
 import json
+from functools import partial
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 
 import mrax.core.study_runner as study_runner
 from mrax import __version__
 from mrax.analysis.dti import dti_design_rank, fit_dti_log_linear
 from mrax.analysis.roi import ROI, collect_roi_stats
+from mrax.core import run_fit
+from mrax.core.data_losses import pseudo_huber_loss
 from mrax.core.loss_builder import build_loss, make_model_callable
 from mrax.core.study_runner import execute_study_plan, plan_study_fits
 from mrax.core.variance import estimate_data_variance
 from mrax.data_struct import (
+    AcquisitionData,
     DataSet,
     Experiment,
     Model,
     Quantity,
+    ReconstructionRecipe,
     SpatialGeometry,
     Study,
+    join_experiments,
     load_study_results,
     save_study_results,
 )
+from mrax.io.study_selection import auto_select_scans, pick_scan_by_type, scan_text
 from mrax.library import build_default_experiment, default_model_for_type, make_t2_se_model
-from mrax.library.default_models import make_dti_tensor_model, make_fair_asl_model
+from mrax.library.default_models import (
+    make_AB_MT_n_model,
+    make_dti_tensor_model,
+    make_fair_asl_model,
+)
 from mrax.opt.regularizers import total_variation_penalty
 from mrax.preprocessing import denoise_filter, regularized_denoise
-from mrax.reco import fftnc, ifftnc, unwrap_phase_image
+from mrax.reco import fftnc, ifftnc, reconstruct_acquisition, unwrap_phase_image
 from mrax.versioning import MRaxVersionIncompatibilityError
+
+
+def _small_t2_study():
+    te = jnp.asarray([8.0, 24.0, 48.0, 96.0], dtype=jnp.float32)
+    model = make_t2_se_model(scale=1.0)
+    experiment = build_default_experiment(
+        "mse",
+        frame_count=int(te.size),
+        spatial_shape=(2, 2),
+        observables={"TE": Quantity(te, "ms")},
+    )
+    truth = {
+        "amplitude": jnp.full((2, 2), 1.2, dtype=jnp.float32),
+        "t2": jnp.full((2, 2), 70.0, dtype=jnp.float32),
+        "bias": jnp.full((2, 2), 0.03, dtype=jnp.float32),
+    }
+    data = make_model_callable(experiment, model)(truth)
+    dataset = DataSet(
+        data=data,
+        name="t2_demo",
+        spatial_geometry=SpatialGeometry(
+            affine=np.diag([0.4, 0.5, 1.0, 1.0]),
+            spatial_shape=(2, 2),
+            voxel_sizes=(0.4, 0.5),
+            source="synthetic",
+            status="known",
+        ),
+    )
+    study = Study(
+        [experiment],
+        [dataset],
+        [model],
+        names=["t2_demo"],
+        study_globals={"field_strength_mhz": Quantity(jnp.asarray(400.0), "MHz")},
+    )
+    return study, model
+
+
+def _constant_signal_problem():
+    experiment = Experiment(
+        dims={"frame": 2, "x": 1, "y": 1},
+        observables={"sample_index": Quantity(jnp.arange(2), "1")},
+    )
+
+    def model_apply(fields, _offsets, _observables=None):
+        return jnp.broadcast_to(fields["level"], experiment.shape)
+
+    def parametrization_factory(spatial_shape):
+        params = {"level": jnp.zeros(spatial_shape)}
+        return params, lambda values: values
+
+    model = Model(
+        name="constant_signal",
+        model_apply=model_apply,
+        parametrization_factory=parametrization_factory,
+        parameter_units={"level": "a.u."},
+    )
+    dataset = DataSet(data=jnp.asarray([0.0, 2.0]).reshape(experiment.shape))
+    return experiment, model, dataset
+
+
+def _problem():
+    values = jnp.asarray([1., 1.1, .9, 15.]).reshape(4, 1, 1)
+    exp = Experiment(dims={"frame": 4, "x": 1, "y": 1})
+    exp.observables["offsets"] = Quantity(jnp.arange(4), "1")
+    exp._mrax_dim_observables = {"frame": "offsets"}
+    model = Model(name="synthetic_location", parameter_units={"level": "1"},
+                  parametrization_factory=lambda shape: ({"level": jnp.full(shape, .5)}, lambda p: p),
+                  model_apply=lambda fields, offsets, observables=None: jnp.broadcast_to(fields["level"], exp.shape))
+    return exp, model, DataSet(values)
+
+
+def test_models_dimensions_reconstruction_and_preprocessing_workflow():
+    assert default_model_for_type('mse').name == 't2_se'
+    assert default_model_for_type('mge').name == 't2star_se'
+    offsets = Quantity(jnp.asarray([1.0, 2.0, 1.0, 2.0], dtype=jnp.float32), 'ppm')
+    experiment = build_default_experiment('sat_trans', frame_count=4, spatial_shape=(2, 2), observables={'freq_offsets': offsets})
+    assert experiment.dims['offset'] == 2
+    assert experiment.dims['t'] == 2
+    image = jnp.arange(16, dtype=jnp.float32).reshape((4, 4))
+    kspace = fftnc(image)
+    assert np.allclose(np.asarray(ifftnc(kspace)), np.asarray(image), atol=1e-05)
+    assert np.allclose(np.asarray(ifftnc(kspace)), np.asarray(image), atol=1e-05)
+    noisy = jnp.ones((5, 5), dtype=jnp.float32).at[2, 2].set(5.0)
+    filtered = denoise_filter(noisy, method='gaussian', sigma=0.8)
+    denoised, history = regularized_denoise(noisy, regularizer='tv', weight=0.01, num_steps=3, step_size=0.05, return_history=True)
+    assert float(total_variation_penalty(jnp.ones((4, 4), dtype=jnp.float32))) == pytest.approx(0.0)
+    assert filtered.shape == noisy.shape
+    assert denoised.shape == noisy.shape
+    assert len(history) == 3
+    assert np.isfinite(np.asarray(denoised)).all()
+    experiment = build_default_experiment('mse', 1, (2, 2), {})
+    help_text = experiment.help()
+    assert '\\n' not in help_text
+    assert len(help_text.splitlines()) > 3
+    from mrax import library
+
+    assert library.make_dti_tensor_model().name == 'dti'
+    assert library.make_dki_kurtosis_model().name == 'dki'
 
 
 def test_lorentzian_pool_overrides_enable_centres_and_keep_initialization_inside_bounds():
@@ -127,65 +242,6 @@ def test_model_callable_expands_independent_observable_axes(order, storage, n_ti
     np.testing.assert_allclose(predict(fields), expected, rtol=2e-6, atol=2e-7)
     gradient = jax.grad(lambda values: jnp.sum(predict(values)))(fields)
     assert all(np.isfinite(value).all() for value in gradient.values())
-
-
-def _small_t2_study():
-    te = jnp.asarray([8.0, 24.0, 48.0, 96.0], dtype=jnp.float32)
-    model = make_t2_se_model(scale=1.0)
-    experiment = build_default_experiment(
-        "mse",
-        frame_count=int(te.size),
-        spatial_shape=(2, 2),
-        observables={"TE": Quantity(te, "ms")},
-    )
-    truth = {
-        "amplitude": jnp.full((2, 2), 1.2, dtype=jnp.float32),
-        "t2": jnp.full((2, 2), 70.0, dtype=jnp.float32),
-        "bias": jnp.full((2, 2), 0.03, dtype=jnp.float32),
-    }
-    data = make_model_callable(experiment, model)(truth)
-    dataset = DataSet(
-        data=data,
-        name="t2_demo",
-        spatial_geometry=SpatialGeometry(
-            affine=np.diag([0.4, 0.5, 1.0, 1.0]),
-            spatial_shape=(2, 2),
-            voxel_sizes=(0.4, 0.5),
-            source="synthetic",
-            status="known",
-        ),
-    )
-    study = Study(
-        [experiment],
-        [dataset],
-        [model],
-        names=["t2_demo"],
-        study_globals={"field_strength_mhz": Quantity(jnp.asarray(400.0), "MHz")},
-    )
-    return study, model
-
-
-def _constant_signal_problem():
-    experiment = Experiment(
-        dims={"frame": 2, "x": 1, "y": 1},
-        observables={"sample_index": Quantity(jnp.arange(2), "1")},
-    )
-
-    def model_apply(fields, _offsets, _observables=None):
-        return jnp.broadcast_to(fields["level"], experiment.shape)
-
-    def parametrization_factory(spatial_shape):
-        params = {"level": jnp.zeros(spatial_shape)}
-        return params, lambda values: values
-
-    model = Model(
-        name="constant_signal",
-        model_apply=model_apply,
-        parametrization_factory=parametrization_factory,
-        parameter_units={"level": "a.u."},
-    )
-    dataset = DataSet(data=jnp.asarray([0.0, 2.0]).reshape(experiment.shape))
-    return experiment, model, dataset
 
 
 def test_loss_combines_inverse_variance_weighting_with_rms_scaling():
@@ -449,42 +505,6 @@ def test_execute_study_plan_preserves_dict_run_fit_kwargs(monkeypatch):
     assert "t2" in field_cache["t2_demo"]
 
 
-def test_models_dimensions_reconstruction_and_preprocessing_workflow():
-    assert default_model_for_type("mse").name == "t2_se"
-    assert default_model_for_type("mge").name == "t2star_se"
-
-    offsets = Quantity(jnp.asarray([1.0, 2.0, 1.0, 2.0], dtype=jnp.float32), "ppm")
-    experiment = build_default_experiment(
-        "sat_trans",
-        frame_count=4,
-        spatial_shape=(2, 2),
-        observables={"freq_offsets": offsets},
-    )
-    assert experiment.dims["offset"] == 2
-    assert experiment.dims["t"] == 2
-
-    image = jnp.arange(16, dtype=jnp.float32).reshape((4, 4))
-    kspace = fftnc(image)
-    assert np.allclose(np.asarray(ifftnc(kspace)), np.asarray(image), atol=1e-5)
-    assert np.allclose(np.asarray(ifftnc(kspace)), np.asarray(image), atol=1e-5)
-
-    noisy = jnp.ones((5, 5), dtype=jnp.float32).at[2, 2].set(5.0)
-    filtered = denoise_filter(noisy, method="gaussian", sigma=0.8)
-    denoised, history = regularized_denoise(
-        noisy,
-        regularizer="tv",
-        weight=0.01,
-        num_steps=3,
-        step_size=0.05,
-        return_history=True,
-    )
-    assert float(total_variation_penalty(jnp.ones((4, 4), dtype=jnp.float32))) == pytest.approx(0.0)
-    assert filtered.shape == noisy.shape
-    assert denoised.shape == noisy.shape
-    assert len(history) == 3
-    assert np.isfinite(np.asarray(denoised)).all()
-
-
 def test_non_cartesian_reconstruction_can_return_complex_coil_images():
     trajectory = np.asarray(
         [[-0.5, -0.5], [-0.5, 0.0], [0.0, -0.5], [0.0, 0.0]],
@@ -499,8 +519,6 @@ def test_non_cartesian_reconstruction_can_return_complex_coil_images():
         ],
         dtype=np.complex64,
     )
-    from mrax.data_struct import AcquisitionData, ReconstructionRecipe
-    from mrax.reco import reconstruct_acquisition
 
     result = reconstruct_acquisition(AcquisitionData(samples, (2, 2), ("x", "y"),
         kind="sampled", trajectory=trajectory, density=np.ones(4),
@@ -592,3 +610,175 @@ def test_dti_log_linear_workflow_recovers_tensor_maps():
     for key, value in truth.items():
         assert np.allclose(fields[key], value, atol=1e-6)
     assert float(np.nanmean(fields["fa"])) > 0.25
+
+
+def test_joint_experiment_and_scan_selection_workflow():
+    exp_a = Experiment(
+        {"echo": 2, "x": 2, "y": 2},
+        {"TE": Quantity(jnp.asarray([10.0, 20.0]), "ms")},
+        "mse",
+    )
+    exp_b = Experiment(
+        {"echo": 1, "x": 2, "y": 2},
+        {"TE": Quantity(jnp.asarray([30.0]), "ms")},
+        "mse",
+    )
+    joined = join_experiments(
+        [exp_a, exp_b],
+        [DataSet(jnp.ones((2, 2, 2)), "a"), DataSet(jnp.full((1, 2, 2), 2.0), "b")],
+        names=["a", "b"],
+    )
+    selected_exp, selected_ds = joined.select("b")
+    assert joined.experiment.frame_count == 3
+    assert selected_exp.frame_count == 1
+    np.testing.assert_allclose(np.asarray(selected_ds.data), 2.0)
+
+    metadata = {
+        "experiments": {
+            "1": {"exp_type": "mse", "method": {"Method": "MSME"}},
+            "2": {"exp_type": "dce", "method": {"ProtocolName": "contrast"}},
+        }
+    }
+    study = SimpleNamespace(names=["1", "2"], experiments=[exp_a, Experiment({"t": 2, "x": 2, "y": 2}, exp_type="dce")])
+    assert pick_scan_by_type(study, "mse") == "1"
+    fair, t2, wasabi, saturation = auto_select_scans(study, metadata)
+    assert (fair, t2, wasabi, saturation) == (None, "1", None, [])
+    assert "msme" in scan_text(metadata["experiments"]["1"])
+
+
+def test_group_pseudo_huber_bounds_spectral_influence_and_ignores_missing():
+    weights = jnp.ones((8, 2))
+    baseline = jnp.zeros((8, 2))
+    def f(r):
+        return pseudo_huber_loss(r, weights, delta=.1, group_size=4)
+    gradient = jax.jit(jax.grad(f))
+    norm = []
+    for amplitude in (1., 100., 10000.):
+        r = baseline.at[:4, 0].set(amplitude)
+        norm.append(float(jnp.linalg.norm(gradient(r)[:4, 0])))
+    assert max(norm) / min(norm) < 1.01
+    r = jnp.asarray([[.01, jnp.nan], [.02, jnp.inf]])
+    w = jnp.asarray([[1., 0.], [1., 0.]])
+    assert np.isfinite(float(pseudo_huber_loss(r, w, delta=.1, group_size=2)))
+
+
+def test_pseudo_huber_quadratic_limit_and_zero_gradient():
+    r = jnp.asarray([[.01, -.02], [.03, .04]])
+    w = jnp.asarray([[1., .5], [0., 2.]])
+    actual = pseudo_huber_loss(r, w, delta=100., group_size=2)
+    expected = jnp.sum(w * r*r) / jnp.sum(w)
+    np.testing.assert_allclose(actual, expected, rtol=1e-6)
+    zero = jax.grad(lambda x: pseudo_huber_loss(x, w, delta=.1, group_size=2))(jnp.zeros_like(r))
+    np.testing.assert_array_equal(zero, jnp.zeros_like(r))
+
+
+@pytest.mark.parametrize("optimizer", ["adam", "fista", "injected_adam"])
+def test_custom_data_loss_reaches_named_and_injected_optimizers(optimizer):
+    exp, model, data = _problem()
+    extra = {"optimizer": optax.adam(.1)} if optimizer == "injected_adam" else {"optimizer_name": optimizer}
+    result = run_fit(exp, model, data, num_steps=200, step_size=.1,
+                     data_loss=partial(pseudo_huber_loss, delta=.1), **extra)
+    # Public run_fit returns fields first; robust fitting should resist the
+    # independently generated fourth observation instead of reaching mean 4.5.
+    fields = result[0]
+    value = np.asarray(fields["level"].values if hasattr(fields["level"], "values") else fields["level"])
+    assert np.isfinite(value).all() and float(value.mean()) < 2.
+
+
+def test_custom_data_loss_contract_is_checked():
+    exp, model, data = _problem()
+    with pytest.raises(TypeError, match="callable"):
+        build_loss(exp, model, data, data_loss=2.)
+    loss, p, _ = build_loss(exp, model, data, data_loss=lambda r, w: r)
+    with pytest.raises(ValueError, match="real scalar"):
+        loss(p)
+
+
+def test_new_objective_option_preserves_positional_device_arguments():
+    for function in (build_loss, run_fit):
+        signature = inspect.signature(function)
+        assert signature.parameters['data_loss'].kind == inspect.Parameter.KEYWORD_ONLY
+        for name in ('device', 'reference_image'):
+            assert signature.parameters[name].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+    # Preserve the original public positional device/reference-image slots;
+    # the additional FISTA choices belong after the keyword-only boundary.
+    signature = inspect.signature(run_fit)
+    positional = [p.name for p in signature.parameters.values()
+                  if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD]
+    assert positional[-3:] == ['fit_active_only', 'device', 'reference_image']
+    for name in ('fista_restart', 'fista_backtracking'):
+        assert signature.parameters[name].kind == inspect.Parameter.KEYWORD_ONLY
+
+
+def test_constant_data_fit_uses_bounded_rms_scaling():
+    echo_times = jnp.asarray([8.0, 24.0, 48.0, 96.0])
+    experiment = build_default_experiment(
+        "mse",
+        frame_count=4,
+        spatial_shape=(2, 2),
+        observables={"TE": Quantity(echo_times, "ms")},
+    )
+    fields, losses = run_fit(
+        experiment,
+        make_t2_se_model(scale=1.0),
+        DataSet(jnp.ones((4, 2, 2)), name="constant"),
+        num_steps=20,
+        step_size=0.03,
+    )
+
+    assert losses[0] < 1.0
+    assert losses[-1] < losses[0]
+    assert np.isfinite(losses).all()
+    assert np.isfinite(np.asarray(fields["t2"].values)).all()
+
+
+@pytest.mark.parametrize('spin_lock,expected,expected_gradient', [
+    (False, [0.9581428766, 0.1448954195, 0.3239752054],
+     [-1.3465567827, -1.0522072315, -1.1726071835]),
+    (True, [1.0181690454, 0.5023628473, 0.3643416464],
+     [-1.4368637800, -4.2174105644, -1.3498690128]),
+])
+def test_ab_mt_signal_and_gradient_reference(spin_lock, expected, expected_gradient):
+    # Reference signal and derivatives for independent synthetic inputs.
+    model = make_AB_MT_n_model(pools=[])
+    params, unpack = model.parametrization_factory((1, 1))
+    fields = {**unpack(params), 'a': jnp.full((1, 1), .01), 'b': jnp.full((1, 1), .04),
+              'sin_a_eff': jnp.full((1, 1), .8), 't_delay': jnp.full((1, 1), 20.)}
+    observations = {
+        'freq_offsets': Quantity(jnp.array([-2., .5, 3.]), 'ppm'),
+        'field_strength_mhz': Quantity(120., 'MHz'),
+        'sat_time': Quantity(jnp.array([200., 100., 300.]), 'ms'),
+        'sat_b1': Quantity(jnp.array([1.5, 2.5, 3.5]), 'uT'),
+        'TR': Quantity(jnp.array([900., 1000., 1100.]), 'ms'),
+        'r1_map': Quantity(jnp.ones((1, 1)), '1/s'),
+        'spin_lock': spin_lock,
+    }
+
+    def signal(b):
+        return model.model_apply({**fields, 'b': b}, None, observations, _allow_direct=True)
+
+    np.testing.assert_allclose(signal(fields['b']).reshape(-1), expected, rtol=3e-6)
+    np.testing.assert_allclose(jax.jacrev(signal)(fields['b']).reshape(-1), expected_gradient,
+                               rtol=3e-6)
+
+
+def test_ab_mt_default_bound_keeps_saturated_parameter_gradients_finite():
+    model = make_AB_MT_n_model(pools=[])
+    params, unpack = model.parametrization_factory((1, 1))
+    params['sin_a_eff_raw'] = jnp.full_like(params['sin_a_eff_raw'], 50.)
+    observations = {
+        'freq_offsets': Quantity(jnp.array([-1., 1.]), 'ppm'),
+        'field_strength_mhz': Quantity(120., 'MHz'),
+        'sat_time': Quantity(jnp.array([100., 100.]), 'ms'),
+        'sat_b1': Quantity(jnp.array([3., 3.]), 'uT'),
+        'TR': Quantity(jnp.array([1000., 1000.]), 'ms'),
+        'r1_map': Quantity(jnp.ones((1, 1)), '1/s'),
+    }
+
+    def signal(raw):
+        return jnp.sum(model.model_apply(unpack(raw), None, observations, _allow_direct=True))
+
+    value, gradients = jax.value_and_grad(signal)(params)
+    assert np.isfinite(value)
+    assert all(np.isfinite(gradient).all() for gradient in jax.tree.leaves(gradients))
+    assert bool(jnp.all(unpack(params)['sin_a_eff'] < 1.))

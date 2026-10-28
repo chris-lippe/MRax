@@ -1,18 +1,22 @@
+"""Synthetic gui contracts and numerical references."""
+
 import json
 import os
 import subprocess
 import sys
 import warnings
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import jax.numpy as jnp
+import nibabel as nib
 import numpy as np
 import pytest
 
 from mrax import __version__
 from mrax.analysis import ROI
-from mrax.core.loss_builder import make_model_callable
+from mrax.core.loss_builder import make_model_callable, run_fit
 from mrax.data_struct import DataSet, Quantity, Study, save_study_results
 from mrax.gui import GuiSession, import_mask, load_roi_set, save_roi_set
 from mrax.gui.app import (
@@ -21,6 +25,7 @@ from mrax.gui.app import (
     _apply_observable_dim_compatibility,
     _capture_pyqtgraph_image_view_state,
     _centered_top_left,
+    _detect_import_vendor,
     _experiment_metadata_template_from_session,
     _export_object_records_for_session,
     _fit_settings_from_dict,
@@ -39,36 +44,10 @@ from mrax.gui.app import (
     _workspace_experiment_metadata_template_items,
     _write_single_export_object,
 )
+from mrax.gui.pulseq_import import plan_pulseq_import
 from mrax.io.nifti import load_nifti
 from mrax.library import build_default_experiment, make_t2_se_model
-
-
-@pytest.mark.parametrize("preallocate", [None, "true", "false"])
-def test_gui_allocator_default_precedes_session_import(preallocate):
-    env = dict(os.environ)
-    env["JAX_PLATFORMS"] = "cpu"
-    env.pop("XLA_PYTHON_CLIENT_PREALLOCATE", None)
-    if preallocate is not None:
-        env["XLA_PYTHON_CLIENT_PREALLOCATE"] = preallocate
-    script = """
-import importlib.abc
-import os
-import sys
-
-expected = sys.argv[1]
-class ImportGuard(importlib.abc.MetaPathFinder):
-    seen = False
-    def find_spec(self, fullname, path, target=None):
-        if fullname == 'mrax.gui.session':
-            assert os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] == expected
-            self.seen = True
-guard = ImportGuard()
-sys.meta_path.insert(0, guard)
-import mrax.gui
-assert guard.seen
-assert os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] == expected
-"""
-    subprocess.run([sys.executable, "-c", script, preallocate or "false"], env=env, check=True, capture_output=True, timeout=45)
+from mrax.versioning import versioned_payload
 
 
 @pytest.fixture
@@ -100,6 +79,310 @@ def roi_editor():
         sceneBoundingRect=lambda: SimpleNamespace(contains=lambda point: True),
     ))
     return editor
+
+
+@pytest.fixture
+def signal_plot():
+    pg = pytest.importorskip("pyqtgraph")
+    app = pg.mkQApp()
+    plot = pg.PlotWidget()
+    yield plot
+    plot.close()
+    app.processEvents()
+
+
+def _write_small_manifest(tmp_path):
+    te = jnp.asarray([12.0, 36.0], dtype=jnp.float32)
+    model = make_t2_se_model(scale=1.0)
+    experiment = build_default_experiment(
+        "mse",
+        frame_count=int(te.size),
+        spatial_shape=(2, 2),
+        observables={"TE": Quantity(te, "ms")},
+    )
+    truth = {
+        "amplitude": jnp.full((2, 2), 1.0, dtype=jnp.float32),
+        "t2": jnp.full((2, 2), 60.0, dtype=jnp.float32),
+        "bias": jnp.zeros((2, 2), dtype=jnp.float32),
+    }
+    data = make_model_callable(experiment, model)(truth)
+    study = Study(
+        [experiment],
+        [DataSet(data=data, name="gui_demo", kspace=jnp.fft.fft2(data))],
+        [model],
+        names=["gui_demo"],
+        study_globals={"field_strength_mhz": Quantity(jnp.asarray(400.0), "MHz")},
+    )
+    return save_study_results(
+        study,
+        [{"name": "gui_demo", "model": model.name, "fields": {"t2": Quantity(truth["t2"], "ms")}}],
+        tmp_path / "run",
+        study_name="gui_smoke",
+    )
+
+
+def _sequence(path):
+    path.write_text('[DEFINITIONS]\nName inversion_recovery\nTI 0.03 0.1 0.4\nFREQ 120\n')
+    return path
+
+
+def _images(path):
+    curve = np.abs(1000 * (1 - 2 * np.exp(-np.array([30., 100., 400.]) / 180.)))
+    data = np.broadcast_to(curve, (4, 3, 2, 3)).copy()
+    nib.save(nib.Nifti1Image(data, np.diag([2., 3., 4., 1.])), path)
+
+
+def _controller(source):
+    controller = object.__new__(_MainWindowMixin)
+    controller._task_running = False
+    controller._busy_message = None
+    controller._get_existing_directory = Mock(return_value=str(source))
+    controller._show_import_options_dialog = Mock(return_value={})
+    controller.run_guarded_task = Mock()
+    controller.show_error = Mock()
+    return controller
+
+
+@pytest.mark.parametrize('choose_file', [False, True])
+def test_pulseq_neighbours_import_to_gui_and_fit(tmp_path, choose_file):
+    sequence = _sequence(tmp_path / 'relaxation.seq')
+    _images(tmp_path / 'images.nii.gz')
+    source = sequence if choose_file else tmp_path
+    assert _detect_import_vendor(source) == 'Pulseq'
+    plan = plan_pulseq_import(source)
+    assert len(plan.entries) == 1
+    assert plan.summary[0]['frame_count'] == 3
+    assert plan.summary[0]['detected_type'] == 'ir'
+    session = GuiSession()
+    session.import_pulseq_study(plan)
+    assert session.source_kind == 'pulseq'
+    assert session.image_array.shape == (3, 2, 3, 4)
+    assert session.data['manifest']['source']['kind'] == 'pulseq'
+    experiment, model, dataset = next(iter(session.study.entries_by_name().values()))
+    experiment.validate(dataset)
+    np.testing.assert_array_equal(experiment.observables['TI'].values, [30., 100., 400.])
+    np.testing.assert_allclose(dataset.spatial_geometry.voxel_sizes, [4., 3., 2.])
+    fields, _ = run_fit(experiment, model, dataset, num_steps=1500)
+    np.testing.assert_allclose(fields['t1'].values, 180., atol=.1)
+    prediction = make_model_callable(experiment, model)(fields)
+    np.testing.assert_allclose(prediction, dataset.data, rtol=1e-4, atol=.02)
+    session.save_imported_study(tmp_path / 'result.mrax')
+    reopened = GuiSession.from_manifest(tmp_path / 'result.mrax')
+    np.testing.assert_array_equal(reopened.image_array, session.image_array)
+
+
+def test_pulseq_missing_measurements_reports_error_without_second_picker(tmp_path):
+    _sequence(tmp_path / 'relaxation.seq')
+    controller = _controller(tmp_path)
+    controller.import_study_dialog()
+    controller._get_existing_directory.assert_called_once()
+    controller.show_error.assert_called_once()
+    assert 'selected folder' in controller.show_error.call_args.args[1]
+    controller.run_guarded_task.assert_not_called()
+    controller._show_import_options_dialog.assert_not_called()
+
+
+def test_import_folder_picker_cancellation_is_safe():
+    controller = _controller('')
+    controller.import_study_dialog()
+    controller._get_existing_directory.assert_called_once()
+    controller.run_guarded_task.assert_not_called()
+    controller._show_import_options_dialog.assert_not_called()
+    controller.show_error.assert_not_called()
+
+
+def test_pulseq_external_file_selection_uses_portable_experiment_names(tmp_path):
+    sequences = tmp_path / 'sequences'
+    sequences.mkdir()
+    sequence = _sequence(sequences / 'relaxation.seq')
+    images = tmp_path / 'images.nii.gz'
+    _images(images)
+    plan = plan_pulseq_import(sequence, images)
+    session = GuiSession()
+    session.import_pulseq_study(plan)
+    assert all(not Path(name).is_absolute() and ':' not in name for name in session.experiment_names)
+    np.testing.assert_array_equal(session.study.experiments[0].observables['TI'].values, [30., 100., 400.])
+
+
+def test_pulseq_overview_cancellation_and_existing_bruker_routing(tmp_path):
+    from _synthetic import _write_minimal_bruker_scan
+
+    _sequence(tmp_path / 'relaxation.seq')
+    _images(tmp_path / 'images.nii')
+    controller = _controller(tmp_path)
+    controller._show_import_options_dialog.return_value = None
+    controller.import_study_dialog()
+    controller.run_guarded_task.assert_not_called()
+    bruker = tmp_path / 'bruker'
+    bruker.mkdir()
+    _write_minimal_bruker_scan(bruker)
+    # A recognized Bruker study takes precedence over a nearby descriptor.
+    _sequence(bruker / 'unrelated.seq')
+    assert _detect_import_vendor(bruker) == 'Bruker'
+    controller = _controller(bruker)
+    controller.import_study_dialog()
+    controller._get_existing_directory.assert_called_once()
+    controller._show_import_options_dialog.assert_called_once_with(bruker, 'Bruker')
+    assert controller.run_guarded_task.call_args.args[1] == controller.on_bruker_import_finished
+    controller.show_error.assert_not_called()
+
+
+def test_unknown_import_folder_reports_error_without_another_prompt(tmp_path):
+    controller = _controller(tmp_path)
+    controller.import_study_dialog()
+    controller._get_existing_directory.assert_called_once()
+    controller.show_error.assert_called_once()
+    controller._show_import_options_dialog.assert_not_called()
+    controller.run_guarded_task.assert_not_called()
+
+
+def test_pulseq_multiple_sequences_require_unambiguous_pairs(tmp_path):
+    first = _sequence(tmp_path / 'first.seq')
+    _sequence(tmp_path / 'second.seq')
+    _images(tmp_path / 'unpaired.nii')
+    plan = plan_pulseq_import(tmp_path)
+    assert not plan.entries and plan.issues
+    _images(tmp_path / 'first.nii.gz')
+    plan = plan_pulseq_import(tmp_path)
+    assert len(plan.entries) == 1
+    assert plan.entries[0]['sequence'] == first.resolve()
+
+
+def test_pulseq_auto_discovery_uses_overview_without_second_picker(tmp_path):
+    _sequence(tmp_path / 'relaxation.seq')
+    _images(tmp_path / 'images.nii')
+    controller = _controller(tmp_path)
+    controller.import_study_dialog()
+    controller._get_existing_directory.assert_called_once_with('Choose study folder', str(Path.cwd()))
+    assert controller._show_import_options_dialog.call_args.args == (tmp_path, 'Pulseq')
+    assert controller.run_guarded_task.call_args.args[1] == controller.on_pulseq_import_finished
+
+
+def test_pulseq_dicom_preparation_import_preserves_geometry_and_scanner_frequency(tmp_path):
+    from _synthetic import _write_classic_dicom_slice
+    from pydicom import dcmread
+    from pydicom.uid import generate_uid
+
+    (tmp_path / 'preparation.seq').write_text('[DEFINITIONS]\nName cest\noffsets_ppm -1 0 1\nTsat 0.004\nB1pa 2.4\nFREQ 110\n')
+    uid = generate_uid()
+    for frame in range(3):
+        for plane in range(2):
+            path = tmp_path / f'image_{frame}_{plane}.IMA'
+            _write_classic_dicom_slice(path, series_uid=uid,
+                echo_index=frame, slice_index=plane, description='Synthetic preparation')
+            header = dcmread(path)
+            header.MagneticFieldStrength = 3.
+            header.save_as(path, enforce_file_format=True)
+    plan = plan_pulseq_import(tmp_path)
+    assert len(plan.entries) == 1
+    assert plan.summary[0]['frame_count'] == 3
+    assert plan.summary[0]['field_strength_mhz'] == pytest.approx(3. * 42.57747892)
+    session = GuiSession()
+    session.import_pulseq_study(plan)
+    experiment, _model, dataset = next(iter(session.study.entries_by_name().values()))
+    experiment.validate(dataset)
+    assert dataset.spatial_geometry.status == 'known'
+    np.testing.assert_array_equal(experiment.observables['freq_offsets'].values, [-1., 0., 1.])
+    assert float(experiment.observables['field_strength_mhz'].values) == pytest.approx(3. * 42.57747892)
+
+
+def test_pulseq_raw_only_gui_import_uses_generic_reconstruction_and_retains_raw(tmp_path):
+    from _synthetic import _write_mrd
+
+    (tmp_path / 'sequence.seq').write_text('[DEFINITIONS]\nName multi_spin_echo\nEchoTimes 0.012 0.036\n')
+    _write_mrd(tmp_path / 'raw.mrd')
+    session = GuiSession()
+    session.import_pulseq_study(tmp_path)
+    assert len(session.experiment_names) == 1
+    assert session.raw_data_loaded()
+    assert session.can_reconstruct_raw_data()
+    assert session.study.datasets[0].acquisition is not None
+    np.testing.assert_allclose(session.study.experiments[0].observables['TE'].values, [12., 36.])
+    assert float(session.study.study_globals['field_strength_mhz'].values) == 128.
+    previous = session.study
+    with pytest.raises(ValueError, match='No selected'):
+        session.import_pulseq_study(tmp_path, options={'load_raw_kspace': False})
+    assert session.study is previous
+
+
+@pytest.mark.parametrize('vendor', ['Pulseq', 'Bruker'])
+def test_import_overview_shows_vendor_and_corresponding_options(tmp_path, monkeypatch, vendor):
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'offscreen')
+    QtWidgets = pytest.importorskip('PySide6.QtWidgets')
+    from PySide6 import QtCore
+
+    import mrax.gui.app as app
+
+    monkeypatch.setattr(app, 'QtWidgets', QtWidgets, raising=False)
+    monkeypatch.setattr(app, 'QtCore', QtCore, raising=False)
+    qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class Window(_MainWindowMixin, QtWidgets.QWidget):
+        def __init__(self):
+            QtWidgets.QWidget.__init__(self)
+
+        def closeEvent(self, event):
+            QtWidgets.QWidget.closeEvent(self, event)
+
+    window = Window()
+    summary = [{'scan': 'images', 'method': 'synthetic', 'detected_type': 'ir'}]
+
+    def inspect(dialog):
+        labels = [label.text() for label in dialog.findChildren(QtWidgets.QLabel)]
+        assert ('pdata index' in labels) == (vendor == 'Bruker')
+        assert dialog.findChildren(QtWidgets.QComboBox)[0].currentText() == vendor
+        return QtWidgets.QDialog.Accepted
+
+    window._exec_dialog = inspect
+    options = window._show_import_options_dialog(tmp_path, vendor, summary=summary)
+    assert options['vendor'] == vendor
+    assert options['load_raw_kspace'] == (vendor == 'Pulseq')
+    assert options['selected_scans'] == ['images']
+    if vendor == 'Pulseq':
+        assert not options['model_overrides_by_name']
+        assert not options['type_overrides']
+    else:
+        assert options['type_overrides'] == {'images': 'ir'}
+
+    def choose_folder(dialog):
+        assert isinstance(dialog, QtWidgets.QFileDialog)
+        assert dialog.fileMode() == QtWidgets.QFileDialog.Directory
+        assert dialog.testOption(QtWidgets.QFileDialog.ShowDirsOnly)
+        dialog.selectFile(str(tmp_path))
+        return QtWidgets.QDialog.Accepted
+
+    window._exec_dialog = choose_folder
+    assert Path(window._get_existing_directory('Import', str(tmp_path))) == tmp_path
+    window.close()
+    qt_app.processEvents()
+
+
+@pytest.mark.parametrize("preallocate", [None, "true", "false"])
+def test_gui_allocator_default_precedes_session_import(preallocate):
+    env = dict(os.environ)
+    env["JAX_PLATFORMS"] = "cpu"
+    env.pop("XLA_PYTHON_CLIENT_PREALLOCATE", None)
+    if preallocate is not None:
+        env["XLA_PYTHON_CLIENT_PREALLOCATE"] = preallocate
+    script = """
+import importlib.abc
+import os
+import sys
+
+expected = sys.argv[1]
+class ImportGuard(importlib.abc.MetaPathFinder):
+    seen = False
+    def find_spec(self, fullname, path, target=None):
+        if fullname == 'mrax.gui.session':
+            assert os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] == expected
+            self.seen = True
+guard = ImportGuard()
+sys.meta_path.insert(0, guard)
+import mrax.gui
+assert guard.seen
+assert os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] == expected
+"""
+    subprocess.run([sys.executable, "-c", script, preallocate or "false"], env=env, check=True, capture_output=True, timeout=45)
 
 
 @pytest.mark.parametrize("plane", ["axial", "coronal", "sagittal"])
@@ -175,7 +458,7 @@ def test_roi_brush_edits_native_mask_from_colored_map_view(roi_editor):
 
 def test_gui_bruker_detection_uses_file_based_experiment_discovery(tmp_path):
     pytest.importorskip("PySide6")
-    from test_import_workflows import _write_minimal_bruker_scan
+    from _synthetic import _write_minimal_bruker_scan
 
     from mrax.gui.app import _detect_bruker_import_summary, _looks_like_bruker_study
 
@@ -226,16 +509,6 @@ def test_roi_preview_renders_fair_axes_and_preserves_frame_selection():
     np.testing.assert_allclose(result["predicted"], expected.reshape(-1), rtol=2e-6, atol=2e-7)
     assert len(result["x"]) == len(result["predicted"]) == 10
     assert np.isfinite(result["loss_history"]).all()
-
-
-@pytest.fixture
-def signal_plot():
-    pg = pytest.importorskip("pyqtgraph")
-    app = pg.mkQApp()
-    plot = pg.PlotWidget()
-    yield plot
-    plot.close()
-    app.processEvents()
 
 
 @pytest.mark.parametrize("excluded", [False, True])
@@ -324,36 +597,6 @@ def test_frequency_reconstruction_components_preserve_signed_values():
     frequency = np.asarray([[[-20., 0., 30.], [-5., 4., 12.]]])
     reconstructed = reconstruction_variant({"raw_reconstruction_frequency_hz": frequency}, component="magnitude")
     np.testing.assert_array_equal(reconstructed, frequency)
-
-
-def _write_small_manifest(tmp_path):
-    te = jnp.asarray([12.0, 36.0], dtype=jnp.float32)
-    model = make_t2_se_model(scale=1.0)
-    experiment = build_default_experiment(
-        "mse",
-        frame_count=int(te.size),
-        spatial_shape=(2, 2),
-        observables={"TE": Quantity(te, "ms")},
-    )
-    truth = {
-        "amplitude": jnp.full((2, 2), 1.0, dtype=jnp.float32),
-        "t2": jnp.full((2, 2), 60.0, dtype=jnp.float32),
-        "bias": jnp.zeros((2, 2), dtype=jnp.float32),
-    }
-    data = make_model_callable(experiment, model)(truth)
-    study = Study(
-        [experiment],
-        [DataSet(data=data, name="gui_demo", kspace=jnp.fft.fft2(data))],
-        [model],
-        names=["gui_demo"],
-        study_globals={"field_strength_mhz": Quantity(jnp.asarray(400.0), "MHz")},
-    )
-    return save_study_results(
-        study,
-        [{"name": "gui_demo", "model": model.name, "fields": {"t2": Quantity(truth["t2"], "ms")}}],
-        tmp_path / "run",
-        study_name="gui_smoke",
-    )
 
 
 def test_gui_window_geometry_prefers_majority_screen_and_centers_within_it():
@@ -972,3 +1215,12 @@ def test_experiment_metadata_template_from_metadata_file_and_manifest(tmp_path):
     np.testing.assert_allclose(np.asarray(direct["observables"]["TE"].values), [10.0, 20.0])
     assert from_manifest["name"] == "scan_a"
     assert from_manifest["observables"]["TE"].si_unit == "ms"
+
+
+def test_gui_state_accepts_only_the_current_spatial_schema():
+    from mrax.gui import GuiSession
+    from mrax.gui.app import _restore_gui_state
+
+    payload = versioned_payload({'format': 'mrax.gui.state', 'version': 2})
+    with pytest.raises(ValueError, match='not supported'):
+        _restore_gui_state(GuiSession(), payload, {})

@@ -1,4 +1,4 @@
-"""Synthetic device-selection regressions."""
+"""Synthetic device contracts and numerical references."""
 
 import inspect
 

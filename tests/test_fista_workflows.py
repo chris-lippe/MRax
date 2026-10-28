@@ -1,4 +1,6 @@
-"""Independent convex references for the canonical FISTA and native TV prox."""
+"""Synthetic fista contracts and numerical references."""
+
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -26,6 +28,24 @@ def _paper_reference(matrix, target, initial, weight, rate, steps):
         x, t = new, new_t
         trace.append(x.copy())
     return np.asarray(trace)
+
+
+def _weighted_fista_problem():
+    experiment = Experiment(dims={"frame": 3, "x": 5, "y": 1})
+    experiment.observables["offsets"] = Quantity(jnp.arange(3), "1")
+    experiment._mrax_dim_observables = {"frame": "offsets"}
+    model = Model(name="synthetic_options", parameter_units={"level": "1", "gain": "1"},
+        parameter_specs={"level": {"transform": "bounded", "bounds": (-2., 2.)},
+                         "gain": {"trainable": False, "value": 2.}},
+        parametrization_factory=lambda shape: ({"level": jnp.full(shape, .1)},
+            lambda p: {"level": p["level"], "gain": jnp.full_like(p["level"], 2.)}),
+        model_apply=lambda p, offsets, observables=None: jnp.broadcast_to(
+            p["level"] * p["gain"], experiment.shape))
+    values = jnp.broadcast_to(jnp.asarray([1., 3., 99.])[:, None, None], experiment.shape)
+    return experiment, model, DataSet(values)
+
+
+
 
 
 def test_fista_matches_original_paper_trace():
@@ -448,21 +468,6 @@ def test_zero_schedule_pauses_and_resumes_without_false_convergence(backtracking
     assert int(final["status"]) == 0
 
 
-def _weighted_fista_problem():
-    experiment = Experiment(dims={"frame": 3, "x": 5, "y": 1})
-    experiment.observables["offsets"] = Quantity(jnp.arange(3), "1")
-    experiment._mrax_dim_observables = {"frame": "offsets"}
-    model = Model(name="synthetic_options", parameter_units={"level": "1", "gain": "1"},
-        parameter_specs={"level": {"transform": "bounded", "bounds": (-2., 2.)},
-                         "gain": {"trainable": False, "value": 2.}},
-        parametrization_factory=lambda shape: ({"level": jnp.full(shape, .1)},
-            lambda p: {"level": p["level"], "gain": jnp.full_like(p["level"], 2.)}),
-        model_apply=lambda p, offsets, observables=None: jnp.broadcast_to(
-            p["level"] * p["gain"], experiment.shape))
-    values = jnp.broadcast_to(jnp.asarray([1., 3., 99.])[:, None, None], experiment.shape)
-    return experiment, model, DataSet(values)
-
-
 def test_explicit_fista_fit_rejects_wrappers_that_lose_native_tv_binding():
     experiment, model, data = _weighted_fista_problem()
     with pytest.raises(ValueError, match="native fitting interface"):
@@ -577,3 +582,102 @@ def test_native_tv_resume_schedule_progress_and_convergence(injection):
         progress_callback=lambda step, total, text: progress.append(step), **options)
     assert info.converged and 10 <= info.iterations < 150
     assert progress[0] == 0 and progress[-1] == info.iterations
+
+
+@pytest.mark.parametrize("backtracking", ["classic", "full"])
+def test_domain_restart_retains_certified_curvature(backtracking):
+    def loss(p):
+        return -jnp.log(p["x"][0])
+    p = {"x": jnp.asarray([1e-8])}
+    opt, step, _ = make_fista_kernel(loss, loss, {"x": (1e-12, 1.)}, {"x": ()}, .02,
+                                      restart="gradient", backtracking=backtracking)
+    s = opt.init(p)
+    s.update(previous={"x": jnp.asarray([1.])}, y={"x": jnp.asarray([-1.])},
+             t=jnp.asarray(10.), rate=jnp.asarray(1e-20), safe_rate=jnp.asarray(1e-20),
+             grow=jnp.asarray(True), count=jnp.asarray(10, jnp.int32), cached_loss=loss(p))
+    _, q, ns, status = jax.jit(step)(p, s)
+    assert int(status) == 0 and int(ns["count"]) == 11
+    assert float(loss(q)) < float(loss(p))
+    assert np.isfinite(float(ns["rate"])) and float(ns["rate"]) > 0
+
+
+@pytest.mark.parametrize("backtracking", ["classic", "full"])
+def test_invalid_accepted_domain_preserves_checkpoint(backtracking):
+    def loss(p):
+        return -jnp.log(p["x"][0])
+    p = {"x": jnp.asarray([-1.])}
+    opt, step, _ = make_fista_kernel(loss, loss, {"x": (-2., 2.)}, {"x": ()}, .02,
+                                      restart="gradient", backtracking=backtracking)
+    state = opt.init(p)
+    _, q, new, status = jax.jit(step)(p, state)
+    assert int(status) == 3
+    for a, b in zip(jax.tree.leaves((p, state)), jax.tree.leaves((q, new)), strict=True):
+        np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("backtracking", ["classic", "full"])
+def test_unresolvable_nonstationary_step_is_not_counted(backtracking):
+    def loss(p):
+        return 1e10 * p["x"][0]
+    p = {"x": jnp.asarray([1.], jnp.float32)}
+    opt, step, _ = make_fista_kernel(loss, loss, {"x": (-2., 2.)}, {"x": ()}, .02,
+                                      restart="gradient", backtracking=backtracking)
+    state = opt.init(p)
+    state.update(rate=jnp.asarray(1e-30, jnp.float32), safe_rate=jnp.asarray(1e-30, jnp.float32))
+    _, q, new, status = jax.jit(step)(p, state)
+    assert int(status) == 4
+    for a, b in zip(jax.tree.leaves((p, state)), jax.tree.leaves((q, new)), strict=True):
+        np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("backtracking", ["classic", "full"])
+def test_overflowed_majorization_comparison_is_not_a_certificate(backtracking):
+    def loss(p):
+        return jnp.sum(jnp.sin(1e20 * p['x']))
+    p = {'x': jnp.zeros(4, jnp.float32)}
+    opt, step, _ = make_fista_kernel(loss, loss, {'x': (-np.inf, np.inf)}, {'x': ()}, .02,
+        backtracking=backtracking, max_backtracking=1)
+    state = opt.init(p)
+    _, q, new, status = jax.jit(step)(p, state)
+    assert int(status) == 3
+    for a, b in zip(jax.tree.leaves((p, state)), jax.tree.leaves((q, new)), strict=True):
+        np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("backtracking", ["classic", "full"])
+def test_rounding_guard_uses_least_precise_parameter_dtype(backtracking):
+    enable = getattr(jax, 'enable_x64', None)
+    if enable is None:
+        from jax.experimental import enable_x64
+        enable = enable_x64
+    with enable():
+        def loss(p):
+            return p['single'][0] + p['double'][0]**2
+        p = {'single': jnp.asarray([1.], jnp.float32), 'double': jnp.asarray([0.], jnp.float64)}
+        opt, step, _ = make_fista_kernel(loss, loss, {k: (-2., 2.) for k in p}, {k: () for k in p}, .02,
+            backtracking=backtracking)
+        state = opt.init(p)
+        state.update(rate=jnp.asarray(1e-10, jnp.float64), safe_rate=jnp.asarray(1e-10, jnp.float64))
+        _, q, new, status = jax.jit(step)(p, state)
+        assert int(status) == 4
+        for a, b in zip(jax.tree.leaves((p, state)), jax.tree.leaves((q, new)), strict=True):
+            np.testing.assert_array_equal(a, b)
+
+
+def test_fista_reuses_trial_objective():
+    calls = []
+
+    def smooth(params):
+        return .5 * jnp.sum((params['x'] - 2.)**2)
+
+    def objective(params):
+        jax.debug.callback(lambda: calls.append(1), ordered=True)
+        return smooth(params)
+
+    params = {'x': jnp.zeros(2)}
+    optimizer, step, _ = make_fista_kernel(objective, smooth, {'x': (-np.inf, np.inf)},
+        {'x': ()}, .1, restart="gradient", backtracking="full")
+    _, _, _, status = jax.jit(step)(params, optimizer.init(params))
+    jax.effects_barrier()
+    assert int(status) == 0
+    assert len(calls) == 2
