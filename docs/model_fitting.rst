@@ -1,89 +1,79 @@
 Fitting controls
 ================
 
-Optimization defaults to ``device="cpu"``. Choose ``"gpu"``, ``"gpu:0"`` or a
-local JAX device; unavailable selections raise an error.
-``mrax.get_available_devices()`` lists local devices, CPU first; pass ``"gpu"``
-to list only GPUs. Fitting, reconstruction, denoising, drift correction and
-batch entry points accept ``device``. Per-experiment study-plan overrides take
-precedence over the plan default.
+Use :func:`mrax.core.loss_builder.run_fit` for one experiment, or
+:doc:`studies` for a sequence of dependent fits. The same fitting interface
+supports Optax, FISTA and split Bregman.
 
-Selecting ``device="gpu"`` requires a Linux environment with GPU-enabled JAX.
-On Windows, run MRax inside WSL 2; native Windows installations are CPU-only due
-to JAX's platform restrictions. See :doc:`windows_setup` and :doc:`docker_setup`.
+Choose an optimizer
+-------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 1 3
+
+   * - Optimizer
+     - Typical use
+   * - Optax, such as Adam
+     - Differentiable objectives and smoothed regularization.
+   * - FISTA
+     - Accelerated proximal-gradient fitting with physical bounds and native TV.
+   * - Split Bregman
+     - Augmented-primal, shrinkage and multiplier updates for native TV.
+
+Automatic selection uses FISTA for enabled TV terms and Adam otherwise.
+Explicit Adam uses smoothed TV and emits a warning. FISTA and split Bregman
+use native TV with physical field bounds; temporal smoothness
+remains a squared-difference penalty. Model parameter specifications define
+bounds, constant dimensions and regularizer weights.
 
 .. code-block:: python
 
-   from mrax import get_available_devices
    from mrax.core import run_fit
 
-   print(get_available_devices())
    fields, history, info = run_fit(
-       experiment, model, dataset, device="gpu", return_fit_info=True,
+       experiment, model, dataset,
+       optimizer_name="fista",
+       step_size=0.02,
+       num_steps=200,
+       return_fit_info=True,
    )
+   print(info.optimizer_name, info.termination_reason, info.final_loss)
 
-Normalization and masks
-~~~~~~~~~~~~~~~~~~~~~~~
+Prepare the objective
+---------------------
 
-``data_normalization="roi"`` computes RMS over finite observations retained by
-ROI, frame and observable masks. ``"full"`` uses all finite image data. When
-switching from full-image to ROI normalization, multiply every regularizer weight
-by ``(RMS_full / RMS_roi)**2`` to preserve the relative data/regularization balance.
+Check the model's units, observables, parameter bounds and initialization.
+Use Boolean masks for equal-weight regions or numeric masks for confidence
+weights. ROI normalization uses the retained finite observations; full-image
+normalization uses all finite image data. Adjust regularizer weights consistently
+when changing normalization. See :doc:`variance_weighting` for noise weighting.
 
-Numeric masks are nonnegative confidence weights. Use Boolean masks for equal
-weight across segmentation labels; ``mask_dims`` specifies their axis order.
-Shared parameters remain visible wherever any included observation supports them.
-A fit with no usable observations raises ``ValueError``.
+Weighted least squares is the default data term. The optional ``data_loss``
+callable supports alternatives such as grouped pseudo-Huber loss.
+:ref:`api-fitting` documents normalization, masks, reference-image fitting and
+custom losses.
 
-``reference_image=reference`` in ``run_fit``, ``build_loss`` or
-``make_model_callable`` fits signal intensities as
-:math:`S_{\mathrm{ref}} M(\theta)` without dividing the measurements. Supply a
-finite spatial reference; returned predictions include its scale. The reference
-is fixed, so its measurement uncertainty remains. Uniform signal-domain weights
-and uniform Z-spectrum weights generally give different fits.
+Run and inspect
+----------------
 
-For double precision, set ``JAX_ENABLE_X64=true`` before starting Python and use
-float64 data, observables and initial parameters.
+Fits default to CPU. Select a local device with ``device``; use
+``mrax.get_available_devices()`` to list available devices. GPU setup is covered
+in :doc:`docker_setup` and :doc:`windows_setup`.
 
-Regularization
-~~~~~~~~~~~~~~
+Inspect the loss history, fitted fields and ``FitInfo`` termination reason.
+For nonlinear models, assess stationarity and sensitivity to initialization.
+Early-stopping tolerances, schedules and host-check intervals are described in
+:ref:`api-fitting`.
 
-``optimizer_name=None`` or ``"auto"`` selects FISTA with enabled TV terms and
-Adam otherwise. Explicit Adam with TV warns and uses a smoothed penalty.
-``FitInfo.optimizer_name`` and ``regularization_mode`` record the selection.
+Continue a fit with ``initial_state=info.state`` and the same model, data,
+regularizers and optimizer. Use ``initial_params`` for a fresh optimizer.
 
-FISTA and split Bregman use true proximal TV on physical parameter maps, respect
-bounds and constant dimensions, and avoid coupling across mask boundaries.
-Temporal ``smoothness`` remains a squared-difference penalty. Custom TV models
-must declare separable physical fields and bounds in ``Model.parameter_specs``.
-The proximal optimizers do not accept Adam base factories.
+Further details
+----------------
 
-``proximal_tolerance`` and ``proximal_max_steps`` control inner TV accuracy and
-work; ``bregman_penalty`` and ``bregman_inner_steps`` control split Bregman.
-Invalid weights, parameter names, rates or bounds raise errors.
-Optimizer-level ``regularizer_weight`` supplies gradient decay for ordinary
-Optax optimizers and proximal penalties for FISTA/split Bregman. It accepts a
-scalar or matching parameter tree. AdamW also applies its own decoupled decay.
-
-Stopping and resuming
-~~~~~~~~~~~~~~~~~~~~~
-
-``step_size`` accepts a constant or Optax schedule; true-TV solvers adapt it by
-backtracking. ``chunk_size`` sets the interval between host progress and
-finiteness checks. A progress callback can cancel by raising an exception.
-
-Enable early stopping with ``convergence_tolerance`` and ``parameter_tolerance``;
-``convergence_patience`` and ``min_steps`` control when it takes effect.
-``num_steps`` is the maximum. With ``return_fit_info=True``, the result includes
-the termination reason, completed updates, final objective and ``info.state``.
-History entries precede updates; ``info.final_loss`` evaluates the returned fit.
-With ``return_model_callable=True``, fit information follows the callable.
-
-Resume with ``initial_state=info.state`` and the same model, data, regularizers
-and optimizer. State and schedule counters continue; stopping counters restart.
-``initial_params`` starts a fresh optimizer and cannot accompany ``initial_state``.
-Optimizer states cannot be exchanged between Adam, FISTA and split Bregman.
-
-Nonfinite updates or failed proximal/backtracking steps raise ``FitError``.
-Its ``last_valid_state`` and ``loss_history`` retain the last verified checkpoint
-when one exists.
+- :ref:`api-optim`: algorithm options, proximal accuracy, direct Optax loops and
+  checkpoint compatibility.
+- :ref:`api-fitting`: complete fitting arguments and return values.
+- :doc:`model_parameters`: parameter coordinates and model specifications.
+- :doc:`references`: publications underlying the models and optimizers.

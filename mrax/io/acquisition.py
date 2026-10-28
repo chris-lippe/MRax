@@ -1,4 +1,4 @@
-"""Portable acquisition persistence without executable or source-specific metadata."""
+"""Portable acquisition persistence using normalized arrays and metadata."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,7 @@ from mrax.data_struct.geometry import SpatialGeometry
 
 
 def save_acquisition(path: str | Path, acquisition: AcquisitionData) -> None:
-    """Save the acquisition contract losslessly, without pickling Python objects."""
+    """Save the acquisition contract losslessly as arrays and JSON."""
     arrays = {"samples": acquisition.samples}
     for name in ("acquired", "trajectory", "density", "statistical_weights", "readout_polarity", "readout_coordinates"):
         value = getattr(acquisition, name)

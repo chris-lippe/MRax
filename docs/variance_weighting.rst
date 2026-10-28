@@ -18,7 +18,7 @@ request a robust pre-fit estimate:
 
 ``data_variance="auto"`` estimates one variance per acquisition frame before
 the model optimizer is initialized. The estimate is then fixed throughout the
-fit; variance and model parameters are not jointly optimized.
+fit while the optimizer updates model parameters.
 
 Weighted and scaled objective
 -----------------------------
@@ -49,8 +49,8 @@ The available modes are:
 
 Multiplying every supplied variance by a common constant leaves the objective
 unchanged. Only relative precision affects the fitted optimum. Consequently,
-the normalized loss value is not an absolute Gaussian negative log-likelihood
-and should not be used directly for likelihood-curvature uncertainty estimates.
+the normalized loss measures relative weighted error. Likelihood-curvature
+uncertainty estimates require restoring the absolute noise normalization.
 
 Automatic background selection
 ------------------------------
@@ -72,8 +72,7 @@ MRax then:
 3. accepts the selection only when its median is below 25 percent of the field's
    75th-percentile signal.
 
-If these conditions are not met, automatic mode uses the spatial high-frequency
-fallback described below.
+Other inputs use the spatial high-frequency estimator described below.
 
 Magnitude, signed, and complex data
 -----------------------------------
@@ -110,7 +109,7 @@ separately and added, giving an estimate of :math:`E[|n|^2]`.
 Spatial high-frequency fallback
 -------------------------------
 
-When no convincing background exists, MRax calculates normalized diagonal Haar
+For the spatial high-frequency estimate, MRax calculates normalized diagonal Haar
 coefficients over non-overlapping :math:`2\times2` spatial blocks:
 
 .. math::
@@ -144,7 +143,7 @@ variance:
    \alpha_t = \frac{n_t}{n_t+\lambda},
 
 where :math:`n_t` is the sample count and the default shrinkage strength
-:math:`\lambda` is 32. Frames without enough usable support receive the pooled
+:math:`\lambda` is 32. Frames with insufficient usable support receive the pooled
 variance and report a warning. A small positive floor prevents infinite
 precision.
 
@@ -152,8 +151,8 @@ Noise masks and diagnostics
 ---------------------------
 
 The fitting ``mask`` identifies pixels whose model residuals should contribute
-to the objective. It is deliberately not interpreted as a noise mask. If a
-known background or noise-only region is available, provide it separately:
+to the objective. Provide a known background or noise-only region separately
+for noise estimation:
 
 .. code-block:: python
 

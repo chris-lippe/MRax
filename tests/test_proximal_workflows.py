@@ -1,3 +1,6 @@
+"""Synthetic proximal contracts and numerical references."""
+
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -5,12 +8,34 @@ import optax
 import pytest
 
 from mrax.core import build_loss, run_fit
+from mrax.core.active_parameters import pack_problem
 from mrax.core.fit_execution import execute_optimizer
 from mrax.core.fit_sanity import debug_fit_prototype
-from mrax.core.tv_fit import make_tv_steps
 from mrax.data_struct import DataSet, Experiment, Model
 from mrax.opt.optimizers import make_optimizer
 from mrax.opt.tv import TVOperator, tv_prox
+
+
+def _device(backend):
+    try:
+        return jax.devices(backend)[0]
+    except RuntimeError:
+        pytest.skip(f"{backend} is unavailable")
+
+
+def _image_problem(tv=True):
+    experiment = Experiment(dims={"frame": 1, "x": 2, "y": 1})
+
+    def factory(shape):
+        return {"level_raw": jnp.zeros(shape)}, lambda p: {"level": 2 * jnp.tanh(p["level_raw"] / 2)}
+
+    model = Model(name="synthetic_image", parametrization_factory=factory,
+                  model_apply=lambda fields, offsets, observables=None: fields["level"][None],
+                  parameter_units={"level": "1"},
+                  parameter_specs={"level": {"transform": "bounded", "bounds": (-2., 2.)}})
+    data = DataSet(jnp.asarray([[[-1.], [1.]]]))
+    regularizers = {"level": [{"type": "tv", "axes": (0,), "weight": .5}]} if tv else {}
+    return experiment, model, data, regularizers
 
 
 @pytest.mark.parametrize("backend", ["cpu", "gpu"])
@@ -33,21 +58,13 @@ def test_proximal_fitting_preserves_mixed_parameter_dtypes(backend, name, use_tv
 
         operators = {key: (TVOperator.create(value.shape, weight=.001, dtype=value.dtype),)
                      if use_tv else () for key, value in params.items()}
-        optimizer, step, convergence = make_tv_steps(loss, loss,
-            {key: (np.float64(-10), np.float64(10)) for key in params},
-            operators, name, .1, device=device)
+        optimizer = make_optimizer(name, .1, device=device, proximal_context=(loss, loss,
+            {key: (np.float64(-10), np.float64(10)) for key in params}, operators))
         fitted, _, _ = execute_optimizer(loss, params, optimizer, num_steps=40,
-            step_function=step, convergence_check=convergence, device=device)
+            device=device)
         for key, target in [("single", 1.), ("double", 2.)]:
             assert fitted[key].dtype == params[key].dtype
             np.testing.assert_allclose(fitted[key], target, atol=3e-4)
-
-
-def _device(backend):
-    try:
-        return jax.devices(backend)[0]
-    except RuntimeError:
-        pytest.skip(f"{backend} is unavailable")
 
 
 @pytest.mark.parametrize("backend", ["cpu", "gpu"])
@@ -110,21 +127,6 @@ def test_tv_prox_matches_two_pixel_solution_and_certifies_gap(backend):
     result, _, gap, _ = solve(value)
     np.testing.assert_allclose(result, [-.75, .75], rtol=0, atol=2e-4)
     assert float(gap) <= 1e-8 * 1.5
-
-
-def _image_problem(tv=True):
-    experiment = Experiment(dims={"frame": 1, "x": 2, "y": 1})
-
-    def factory(shape):
-        return {"level_raw": jnp.zeros(shape)}, lambda p: {"level": 2 * jnp.tanh(p["level_raw"] / 2)}
-
-    model = Model(name="synthetic_image", parametrization_factory=factory,
-                  model_apply=lambda fields, offsets, observables=None: fields["level"][None],
-                  parameter_units={"level": "1"},
-                  parameter_specs={"level": {"transform": "bounded", "bounds": (-2., 2.)}})
-    data = DataSet(jnp.asarray([[[-1.], [1.]]]))
-    regularizers = {"level": [{"type": "tv", "axes": (0,), "weight": .5}]} if tv else {}
-    return experiment, model, data, regularizers
 
 
 @pytest.mark.parametrize("backend", ["cpu", "gpu"])
@@ -217,3 +219,25 @@ def test_tv_fit_with_all_fields_fixed_keeps_the_fixed_maps(name):
                                     regularizer_configs=regularizers, return_fit_info=True)
     np.testing.assert_array_equal(fields["level"].values, jnp.zeros((2, 1)))
     assert len(history) == 2 and info.state.params == {}
+
+
+@pytest.mark.parametrize('order',[1,2])
+def test_packed_tv_value_gradient_adjoint_and_no_mask_bridges(order):
+    mask=np.ones((3,7),bool)
+    mask[:,3]=False
+    p={'x':jnp.asarray(np.random.default_rng(4301).normal(size=(3,7)),jnp.float32)}
+    op=TVOperator.create((3,7),order=order,mask=mask,weight=.5)
+    def unpack(x):return x
+    unpack._mrax_smooth_loss=lambda x:jnp.sum(jnp.where(mask,(x['x']-1.)**2,0))
+    unpack._mrax_tv_operators={'x':(op,)}
+    def loss(x):
+        return unpack._mrax_smooth_loss(x)+op.value(x['x'])
+    packed_loss,packed,u=pack_problem(loss,p,unpack,mask)
+    packed_op=u._mrax_tv_operators['x'][0]
+    np.testing.assert_allclose(packed_op.value(packed['x']),op.value(p['x']),rtol=1e-6)
+    np.testing.assert_allclose(packed_loss(packed),loss(p),rtol=1e-6)
+    grad=jax.grad(loss)(p)['x'][mask]
+    np.testing.assert_allclose(jax.grad(packed_loss)(packed)['x'],grad,rtol=1e-6)
+    dual=jnp.ones_like(packed_op.gradient(packed['x']))*.37
+    np.testing.assert_allclose(jnp.vdot(packed_op.gradient(packed['x']),dual),
+                               jnp.vdot(packed['x'],packed_op.adjoint(dual)),atol=1e-6)

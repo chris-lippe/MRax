@@ -22,7 +22,7 @@ class NormalizedMetadata:
     Vendor-specific importers should translate scanner metadata into this schema before
     creating MRax :class:`Experiment` and :class:`DataSet` objects. The fields are limited
     to concepts the internal factory understands; raw scanner dictionaries should remain
-    importer metadata and not leak into downstream model code.
+    importer metadata; normalized concepts define the downstream model contract.
     """
 
     method_name: str = ""
@@ -507,8 +507,8 @@ def reshape_rare_samples(
 ) -> np.ndarray:
     """Reshape serial RARE/TurboSE samples into Cartesian ``(..., ky, kx)`` order.
 
-    RARE acquisitions often acquire k-space lines in an echo-train order that does not
-    match the final ky ordering. This helper uses the ADC trajectory to assign each
+    RARE acquisitions often store k-space lines in echo-train order, requiring
+    a permutation into final ky order. This helper uses the ADC trajectory to assign each
     acquired line to its Cartesian ky index, while preserving repeated occurrences as
     separate frames (for example interleaved slices or repetitions).
     """

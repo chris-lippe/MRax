@@ -8,7 +8,7 @@ Identity model
   frame :math:`j`.  The amplitude map is broadcast across frames; when its leading
   axis already has the frame length, it is returned unchanged.
 - Parameters: ``amplitude`` (unitless).  This is the default placeholder for
-  unsupported experiment types and does not encode acquisition dependence.
+  other experiment types, with a constant signal across acquisition settings.
 
 Using models with importers
 ---------------------------

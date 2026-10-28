@@ -43,8 +43,7 @@ def run_batch_studies(
 ) -> list[dict[str, Any]]:
     """Load studies from a folder, run analysis/fitting, and persist results.
 
-    The batch runner assumes no interdependencies between studies; it simply loops through
-    them. Provide a ``study_loader`` that converts a study folder into a ``Study`` (plus
+    The batch runner processes studies as independent jobs. Provide a ``study_loader`` that converts a study folder into a ``Study`` (plus
     optional metadata), and an optional ``analysis_fn`` to override the default
     Study planner/executor flow. Results are saved under ``output_root/<study_name>`` using
     :func:`save_study_results`.

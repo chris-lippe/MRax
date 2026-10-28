@@ -28,11 +28,11 @@ def _configure_constant_buffers():
 
 
 def get_available_devices(platform: str | None = None) -> list[jax.Device]:
-    """Return local JAX devices, CPU first when no platform is specified.
+    """Return local JAX devices, ordered CPU first by default.
 
     ``platform`` accepts ``"cpu"``, ``"gpu"`` (or ``"cuda"``), and ``"tpu"``.
-    An unavailable backend returns an empty list. Discovery does not change
-    JAX's default backend or precision settings.
+    An unavailable backend returns an empty list. Discovery preserves JAX's
+    default backend and precision settings.
     """
     if platform is not None:
         if not isinstance(platform, str):
@@ -69,7 +69,7 @@ def resolve_device(device: DeviceLike = "cpu") -> jax.Device:
 
 
 def _move(value, device, memo=None):
-    """Move existing JAX buffers and copy containers without mutating callers."""
+    """Move JAX buffers into copies of the caller's containers."""
     memo = {} if memo is None else memo
     if id(value) in memo:
         return memo[id(value)]
@@ -138,8 +138,7 @@ def place_optimizer(optimizer, device):
     """Place initialization and updates, including custom Optax transforms."""
     def place(function, *, extra=False):
         original = getattr(function, "_mrax_optimizer_function", function)
-        # Callable ExtraArgs are bound by the outer fitting JIT, not traced as
-        # dynamic array arguments by a redundant nested JIT.
+        # The outer fitting JIT binds callable ExtraArgs as static functions.
         compiled = original if extra else jit_on_device(original, device)
         wrapped = bind_device(compiled, device)
         wrapped._mrax_optimizer_function = original

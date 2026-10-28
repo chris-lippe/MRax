@@ -28,7 +28,7 @@ def _same_definition(a, b):
 
 
 def image_product_role(path):
-    """Identify conventional image components, not quantitative acquisitions."""
+    """Identify conventional image components by their declared product role."""
     name = path.name.lower().removesuffix('.gz').removesuffix('.nii')
     if name.endswith('_phase'):
         return 'phase'
@@ -104,7 +104,7 @@ def sequence_frame_metadata(info, coordinates, frame_count, *, echo_times=None,
 
 
 def _raw_companion(path, info, *, energies=False):
-    """Use one unambiguous same-folder MRD counter table, never filename ordering."""
+    """Use one unambiguous same-folder MRD counter table to establish frame order."""
     from mrax.io.ismrmrd_measurement import _FRAME_FIELDS, _ROLES, _flag
 
     candidates = []
@@ -228,7 +228,7 @@ def nifti_options(path, info, options):
 
 
 def measurement_overview(path, info, format, options):
-    """Return normalized timing and frame count without reconstructing samples."""
+    """Return normalized import timing and frame count."""
     from mrax.io.ismrmrd_measurement import _FRAME_FIELDS, _ROLES, _flag
 
     coordinates = {}

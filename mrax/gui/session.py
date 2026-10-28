@@ -172,7 +172,7 @@ class Diagnostic:
 
 @dataclass
 class GuiSession:
-    """Manifest-backed GUI session state that does not import Qt."""
+    """Qt-independent, manifest-backed GUI session state."""
 
     manifest_path: Path | None = None
     data: dict[str, Any] | None = None

@@ -72,8 +72,8 @@ class SpatialGeometry:
 
     MRax image and k-space arrays remain in their acquisition/import order. ``affine``
     maps the XYZ array produced by the NIfTI I/O boundary into RAS world coordinates;
-    it must therefore not be applied to raw k-space axes. ``status='unknown'`` is
-    intentionally distinct from an identity affine.
+    raw k-space axes use their encoding geometry. ``status='unknown'`` records
+    unresolved orientation separately from an identity affine.
     """
 
     affine: AffineTuple | np.ndarray | Sequence[Sequence[float]] | None = None

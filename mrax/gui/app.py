@@ -389,7 +389,7 @@ def _apply_local_runtime_env() -> None:
     if not os.environ.get("QT_QPA_PLATFORM"):
         wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
         x11_display = os.environ.get("DISPLAY", "")
-        # VS Code's forwarded Wayland socket does not reliably handle Qt popup
+        # VS Code's forwarded Wayland socket can disrupt Qt popup
         # and transient windows.  Combo menus can remain open, dialogs can stop
         # receiving close events, and creating table editors can crash Qt.  Its
         # forwarded X11 display is stable, so prefer xcb for that specific proxy.
@@ -421,7 +421,7 @@ def _reexec_with_local_lib_bundle_if_needed(argv: list[str] | None = None) -> No
     """Restart with a user-local native library bundle when one is available.
 
     This supports restricted containers where MRax can be installed with
-    pip but Qt's native Debian libraries cannot be installed system-wide.
+    pip, with Qt's native Debian libraries supplied in a user-local directory.
     """
 
     marker = "MRAX_GUI_LOCAL_LIBS_REEXEC"
@@ -465,7 +465,7 @@ def _run_gui(args: argparse.Namespace) -> int:
 
 
 def _install_application_font(QtGui, app) -> None:
-    """Install a known UI font when the host/container has no usable default."""
+    """Ensure a portable application font for the host or container."""
 
     candidates = [
         _local_bundle_root() / "usr" / "share" / "fonts" / "truetype" / "dejavu" / "DejaVuSans.ttf",
@@ -6874,9 +6874,13 @@ class _MainWindowMixin:
                                          roi=self.session.roi(), plane_dims=self.session.image_plane_dims)
                 included = self.session.frame_mask.as_array()[frame_ids] if self.session.frame_mask else np.ones(observed.size, dtype=bool)
             label, coordinates = axis_coordinates(experiment, dimension, indices, geometry=self.session.current_experiment.get("spatial_geometry"))
-            plot.plot(coordinates[included], observed[included], pen=None, symbol="o", symbolBrush="#2563eb")
-            if np.any(~included):
-                plot.plot(coordinates[~included], observed[~included], pen=None, symbol="x", symbolBrush="#dc2626")
+            finite = np.isfinite(coordinates) & np.isfinite(observed)
+            selected = included & finite
+            excluded = ~included & finite
+            if np.any(selected):
+                plot.plot(coordinates[selected], observed[selected], pen=None, symbol="o", symbolBrush="#2563eb")
+            if np.any(excluded):
+                plot.plot(coordinates[excluded], observed[excluded], pen=None, symbol="x", symbolBrush="#dc2626")
             if predicted is not None:
                 plot.plot(coordinates, predicted, pen="#16a34a")
             plot.setLabel("bottom", label)
@@ -10347,8 +10351,7 @@ def _histogram_equalized_unit(image: np.ndarray) -> np.ndarray:
     cumulative_before = np.concatenate([[0], np.cumsum(counts[:-1])]).astype(float)
     ranks_by_value = cumulative_before / max(1.0, float(clipped.size - 1))
     ranks = ranks_by_value[inverse]
-    # Keep a little headroom so the overlay slider changes balance without
-    # driving large flat regions into display clipping.
+    # Keep display headroom for overlay-slider changes across flat regions.
     equalized = 0.96 * ranks
     out[finite] = equalized.astype(np.float32, copy=False)
     return out

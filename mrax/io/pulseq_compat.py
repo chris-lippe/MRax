@@ -12,8 +12,8 @@ def read_sequence(sequence, path):
     """Read with RF-use detection, including pre-1.4 compressed shapes.
 
     Shape decompression requires NumPy arrays rather than Python lists.
-    Clone the reader's globals for this call only;
-    never monkey-patch the installed package or its process-wide functions.
+    Clone the reader's globals for this call, preserving the installed
+    package and its process-wide functions.
     """
     module = importlib.import_module('pypulseq.Sequence.read_seq')
     reader = module.read

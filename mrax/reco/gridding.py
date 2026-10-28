@@ -1,4 +1,4 @@
-"""Convolutional gridding without source-format assumptions."""
+"""Convolutional gridding on numerical sampling geometry."""
 from __future__ import annotations
 
 from itertools import product
@@ -13,8 +13,8 @@ def grid_kaiser_bessel(samples, trajectory, grid_shape, *, density=None,
                        kernel_width=3., shape_parameter=6., chunk_size=16384):
     """Accumulate density-weighted samples with a separable Kaiser-Bessel kernel.
 
-    Coordinates use cycles per grid pixel. Quadrature weights are accumulated,
-    never divided out by the number or weight of samples in a grid cell.
+    Coordinates use cycles per grid pixel. Grid cells accumulate the quadrature-
+    weighted sample contributions.
     Bounded chunks avoid allocating the sample-by-neighbour expansion.
     """
     shape = tuple(int(v) for v in grid_shape)

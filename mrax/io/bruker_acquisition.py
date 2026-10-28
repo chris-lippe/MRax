@@ -29,7 +29,7 @@ def _series(value, count, default=0):
 
 
 def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), profiles=None):
-    """Read prepared samples and geometry without reconstructing images.
+    """Read prepared samples and geometry for explicit reconstruction.
 
     Calibration and source loop interpretation are resolved here; image reconstruction only
     consumes the returned vendor-independent acquisition contract.
@@ -109,7 +109,7 @@ def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), pro
             auxiliary["unmapped_adc"] = records.samples[..., excluded]
     if sorting["ignored_scan_count"]:
         # A reversible raw import is still possible when a reconstruction graph
-        # describes additional profile groups whose roles are not established.
+        # describes additional profile groups with unresolved roles.
         # Preserve every ADC record rather than discarding it or labelling an
         # approximate inverse-FID transform as measured Fourier data.
         return AcquisitionData(records.samples, (records.samples.shape[-1],),
@@ -163,7 +163,7 @@ def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), pro
 
 
 def read_cartesian_acquisition(folder, method, acqp, reco, visu, *, geometry=None, definition_paths=(), profiles=None):
-    """Decode Cartesian imaging without Fourier transforms or image reconstruction."""
+    """Decode Cartesian samples and encoding geometry for later reconstruction."""
     library = DefinitionLibrary(definition_paths)
     ndim = int(acqp.get("ACQ_dim") or len(_numbers(method.get("PVM_EncMatrix"))))
     if ndim not in (1, 2, 3):
@@ -244,8 +244,8 @@ def read_cartesian_acquisition(folder, method, acqp, reco, visu, *, geometry=Non
             acquired[destination, destination_phase, read_slice] = True
     count = samples.shape[0]
     # Both file image formatting and reconstruction presentation are explicit
-    # transformations. Their composition, not either setting in isolation,
-    # maps reconstruction coordinates into the existing image-container layout.
+    # transformations. Compose them to map reconstruction coordinates into
+    # the existing image-container layout.
     reconstruction_transpose = _series(reco.get("RECO_transposition"), count).astype(int)
     image_transpose = _series(visu.get("VisuCoreTransposition"), count).astype(int)
     from .bruker_images import _bruker_decoded_in_plane_axis_order
@@ -283,7 +283,7 @@ def read_cartesian_acquisition(folder, method, acqp, reco, visu, *, geometry=Non
     target_size = tuple(reversed(tuple(int(x) for x in _numbers(reco.get("RECO_size")))[:ndim]))
     if not target_size:
         target_size = grid
-    # A recommended image recipe is optional; no completion occurs during import.
+    # The optional recipe records completion for the reconstruction stage.
     partial = "none"
     half_flags = reco.get("RecoHalfFT", [])
     if isinstance(half_flags, str):

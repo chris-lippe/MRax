@@ -199,7 +199,7 @@ def _sat_trans_enabled(method: dict) -> bool:
 
 
 def _bruker_spin_lock(method: dict) -> bool | None:
-    """Read an optional static spin-lock flag without string truthiness."""
+    """Parse the explicit values of an optional static spin-lock flag."""
     value = method.get("SpinLock")
     if value is None:
         return None

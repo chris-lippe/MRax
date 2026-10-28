@@ -37,9 +37,8 @@ Getting Started
 
    **GPU acceleration requires a Linux environment** with CUDA-enabled JAX.
    Windows users can run the Linux installation inside WSL 2 or a Linux container
-   through WSL 2. Native Windows installations run calculations on CPU because
-   JAX has no native Windows GPU backend. See :doc:`windows_setup` and
-   :doc:`docker_setup`.
+   through WSL 2. Native Windows installations use CPU JAX.
+   See :doc:`windows_setup` and :doc:`docker_setup`.
 
 For editable installations, containers and contributor checks, see :doc:`setup`.
 
@@ -69,8 +68,8 @@ or import ParaVision scans with :func:`mrax.io.bruker_import.import_bruker_study
 Importers map metadata into a shared schema (see :mod:`mrax.io.import_definitions`).
 
 Dimension names follow a consistent convention: ``x/y/z`` are spatial axes and ``t``
-is temporal. Anatomical orientation and voxel spacing are separate geometry metadata,
-so they do not change reconstruction or fitting array order. Other non-spatial axes are
+is temporal. Anatomical orientation and voxel spacing are separate geometry metadata;
+reconstruction and fitting retain native array order. Other non-spatial axes are
 inferred from observables when the metadata is unambiguous. Otherwise, MRax keeps a
 single ``frame`` axis.
 

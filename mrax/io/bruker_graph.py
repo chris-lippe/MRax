@@ -1,4 +1,4 @@
-"""Read numerical hints from declared reconstruction graphs without executing them."""
+"""Read declarative numerical hints from reconstruction graphs."""
 from __future__ import annotations
 
 import re

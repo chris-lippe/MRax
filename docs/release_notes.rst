@@ -1,6 +1,20 @@
 Release Notes
 =============
 
+Version 0.3.2
+-------------
+
+Highlights
+~~~~~~~~~~
+
+- Unified Optax, FISTA and split-Bregman dispatch through the shared fitting
+  executor. FISTA and split Bregman support native TV/box proximal steps.
+- Added certified FISTA backtracking and restart, and augmented-primal split
+  Bregman with safeguarded Newton/CG and L-BFGS subproblem solves.
+- Added optimizer-independent custom data losses and grouped pseudo-Huber loss.
+- Fixed GUI warnings.
+
+
 Version 0.3.1
 -------------
 
@@ -12,13 +26,6 @@ Highlights
   gradient clipping and an explicit ``masked_mean_smoothed`` TV formulation.
 - Improved custom proximal callbacks with box constraints, mixed-precision
   fitting and checkpoint continuation.
-
-Compatibility notes
-~~~~~~~~~~~~~~~~~~~
-
-- Direct Optax callers should pass the smooth objective as ``value_fn`` to
-  ``update``. FISTA returns the accepted iterate; without ``value_fn``, evaluate
-  gradients at ``state["solver"]["y"]``. ``run_fit`` supplies the callback automatically.
 
 Version 0.3.0
 -------------
@@ -61,7 +68,7 @@ Bug fixes
 - Fixed Qt popup and transient-window handling when MRax runs through VS Code's
   forwarded Wayland socket. MRax now uses the accompanying X11/XWayland display
   in that environment, allowing combo-box menus to close normally, dialogs to be
-  dismissed, and parameter-table values to be edited without crashing the GUI.
+  dismissed, and parameter-table values to be edited reliably.
 
 Version 0.2.0
 -------------
@@ -92,10 +99,10 @@ Compatibility notes
 ~~~~~~~~~~~~~~~~~~~
 
 - DICOM import requires ``pydicom``, which is now a base dependency.
-- Producer-version checks diagnose unsupported tagged data-format lines; they do not
-  reject untagged legacy MRax files without first attempting to load them.
-- The DICOM layer imports metadata that was actually exported. Vendor-only acquisition
-  fields absent from a DICOM object cannot be reconstructed from it.
+- Producer-version checks diagnose tagged data-format compatibility and attempt
+  loading untagged legacy MRax files.
+- The DICOM layer imports the exported metadata. Additional vendor acquisition
+  fields require a separate source.
 
 Version 0.1.0
 -------------
@@ -120,9 +127,7 @@ Notes
 ~~~~~
 
 - Bruker import has been tested on ParaVision 360 3.6 data.
-- The Pulseq importer is included for demo workflows and has not been validated on
-  measured scanner data.
-- ``jax-finufft`` currently has no Windows wheel. Install ``mrax[nufft]`` only on a
-  supported platform or in the documented Linux development container.
-- The upstream BM3D/BM4D packages in ``mrax[denoise-external]`` permit
-  non-commercial use only and are not covered by the MRax MIT license.
+- Initial Pulseq coverage used demo workflows.
+- Initial NUFFT support used the optional ``jax-finufft`` backend on Linux;
+  :ref:`api-nufft-plans` describes the current built-in implementation.
+- The upstream BM3D/BM4D packages retain their non-commercial licensing terms.

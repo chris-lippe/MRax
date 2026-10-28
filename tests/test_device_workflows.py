@@ -1,4 +1,4 @@
-"""Synthetic device-selection regressions; no measurement fixtures."""
+"""Synthetic device contracts and numerical references."""
 
 import inspect
 
@@ -19,7 +19,6 @@ from mrax.core import (
 )
 from mrax.core.fit_execution import execute_optimizer
 from mrax.core.loss_builder import build_study_losses
-from mrax.core.tv_fit import make_tv_steps
 from mrax.data_struct import DataSet, Experiment, Model, Quantity, Study
 from mrax.devices import resolve_device
 from mrax.opt import make_optimizer
@@ -68,7 +67,7 @@ def test_device_discovery_returns_local_devices_cpu_first():
 
 
 @pytest.mark.parametrize("entry", [run_fit, build_loss, execute_optimizer, make_optimizer,
-                                     make_tv_steps, debug_fit_prototype, solve_variational,
+                                      debug_fit_prototype, solve_variational,
                                      solve_model_based, regularized_denoise,
                                      linear_drift_correct_framestack, linear_drift_correct_dataset,
                                      execute_study_plan, run_batch_studies, build_study_losses])

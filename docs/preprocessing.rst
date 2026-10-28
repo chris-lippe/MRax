@@ -48,14 +48,15 @@ BM3D and BM4D (optional, non-commercial license)
 ``denoise_bm3d`` and ``denoise_bm4d`` call the ``bm3d`` and ``bm4d`` packages included
 in the optional ``denoise-external`` extra. Install it with
 ``pip install "mrax[denoise-external]"``. The upstream packages allow non-commercial
-use only; they are not covered by MRax's MIT license. BM3D follows Dabov et al.
+use under their own licenses. BM3D follows Dabov et al.
 [Dabov2007]_; BM4D follows Maggioni et al. [Maggioni2013]_.
 
 Drift Correction
 ----------------
 
 The MRax drift optimizer fits one low-dimensional transform-parameter curve over a
-frame stack. It is intended for slow frame-to-frame drift, not arbitrary motion.
+frame stack. It is intended for slow frame-to-frame drift. Use registration
+for broader motion correction.
 
 .. code-block:: python
 

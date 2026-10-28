@@ -18,7 +18,7 @@ def resample_readout(samples, coordinates, target, *, kernel="linear", radius=8)
     """Interpolate complex ADC values at explicit increasing readout coordinates.
 
     Coordinates and targets must share units. Out-of-support values are zero;
-    endpoints are never stretched to manufacture a full acquired readout.
+    resampling retains the original coordinate scale.
     """
     array = jnp.asarray(samples)
     source = np.asarray(coordinates)
@@ -34,7 +34,7 @@ def resample_readout(samples, coordinates, target, *, kernel="linear", radius=8)
         if radius < 2:
             raise ValueError("Windowed-sinc interpolation requires a radius of at least two samples")
         # Interpolate the inverse coordinate map, then resample the band-limited
-        # ADC stream. The window radius is in ADC samples, not Fourier pixels.
+        # ADC stream. The window radius is measured in ADC samples.
         position = np.interp(destination, source, np.arange(len(source)))
         neighbours = np.floor(position).astype(int)[:, None] + np.arange(-radius + 1, radius + 1)[None, :]
         delta = position[:, None] - neighbours
@@ -83,8 +83,8 @@ def regrid_readouts(samples, coordinates, polarity, acquired, *, kernel="adjoint
     """Construct an FFT initializer from explicitly located readouts.
 
     Iterative objectives must retain the original coordinates and samples.
-    Readouts can be stored in any sample order. No endpoint rescaling or
-    extrapolation supplies missing measurements.
+    Readouts can be stored in any sample order. Acquired coordinates and support
+    remain authoritative.
     """
     array = jnp.asarray(samples)
     coordinates = np.asarray(coordinates, dtype=float)
@@ -157,8 +157,8 @@ def correct_epi_entropy(samples, negative_mask, *, spatial_ndim=2, phase_prior=(
     """Estimate a common offset/slope from coil RSS entropy, then correct data.
 
     Input is one frame ``(coil, *encoding_shape)``. The offset search is limited
-    to the pi-wide branch around the supplied prior: entropy alone cannot
-    distinguish the object from a half-FOV translated solution. A navigator or
+    to the pi-wide branch around the supplied prior. Entropy admits both the
+    object and a half-FOV translated solution. A navigator or
     justified phase prior is needed to resolve that ambiguity. This optional
     estimator assumes adequate phase FOV and consistent motion between shots.
     """

@@ -1,13 +1,20 @@
+"""Synthetic import contracts and numerical references."""
+
 import warnings
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
+from _synthetic import (
+    _base_dicom_dataset,
+    _write_classic_dicom_slice,
+    _write_minimal_bruker_scan,
+)
+from pydicom.dataset import Dataset
 from pydicom.sequence import Sequence
 from pydicom.tag import Tag
-from pydicom.uid import EnhancedMRImageStorage, ExplicitVRLittleEndian, MRImageStorage, generate_uid
+from pydicom.uid import EnhancedMRImageStorage, generate_uid
 
 from mrax.core import make_model_callable
 from mrax.data_struct import Quantity
@@ -24,110 +31,6 @@ from mrax.io import (
 from mrax.io.bruker_images import bruker_spatial_geometry
 from mrax.io.bruker_metadata import extract_observables
 from mrax.library.default_models import make_AB_MT_n_model, make_zaiss_full_model
-
-
-def test_bruker_experiment_accepts_string_paths(tmp_path):
-    _write_minimal_bruker_scan(tmp_path)
-    _, dataset, _, _ = import_bruker_experiment(str(tmp_path / "1"))
-    assert dataset.shape == (1, 2, 2)
-
-
-def test_bruker_study_discovers_standalone_exports_and_nonnumeric_experiment_names(tmp_path):
-    _write_minimal_bruker_scan(tmp_path)
-    exported = tmp_path / "exported_scan"
-    (tmp_path / "1").rename(exported)
-    for root in [tmp_path, exported]:
-        study, metadata = import_bruker_study(root, field_strength_mhz=100)
-        assert study.names == ["exported_scan"]
-        assert study.datasets[0].shape == (1, 2, 2)
-        assert not metadata["skipped_experiments"]
-
-
-def test_bruker_study_skips_missing_and_unsupported_acquisitions(tmp_path):
-    import shutil
-
-    _write_minimal_bruker_scan(tmp_path)
-    shutil.copytree(tmp_path / "1", tmp_path / "2")
-    (tmp_path / "2/pdata/1/visu_pars").unlink()
-    shutil.copytree(tmp_path / "1", tmp_path / "3")
-    (tmp_path / "3/acqp").write_text('##$ACQ_dim=2\n##$ACQ_size=( 2 )\n4 2\n##$NI=1\n##$NR=1\n##$GO_raw_data_format=UNSUPPORTED_SCALAR\n')
-    (tmp_path / "3/fid").write_bytes(bytes(16))
-    with pytest.warns(RuntimeWarning, match="skipped Bruker scan"):
-        study, metadata = import_bruker_study(tmp_path, field_strength_mhz=100)
-    assert study.names == ["1"]
-    assert set(metadata["skipped_experiments"]) == {"2", "3"}
-    assert metadata["skipped_experiments"]["2"]["reason"] == "missing_file"
-    assert metadata["skipped_experiments"]["3"]["reason"] == "import_failed"
-
-
-def _base_dicom_dataset(path, *, series_uid, sop_class_uid, instance_number=1):
-    file_meta = FileMetaDataset()
-    file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
-    file_meta.MediaStorageSOPClassUID = sop_class_uid
-    file_meta.MediaStorageSOPInstanceUID = generate_uid()
-    file_meta.ImplementationClassUID = generate_uid()
-    dataset = FileDataset(str(path), {}, file_meta=file_meta, preamble=b"\0" * 128)
-    dataset.SOPClassUID = sop_class_uid
-    dataset.SOPInstanceUID = file_meta.MediaStorageSOPInstanceUID
-    dataset.StudyInstanceUID = generate_uid()
-    dataset.SeriesInstanceUID = series_uid
-    dataset.FrameOfReferenceUID = generate_uid()
-    dataset.Modality = "MR"
-    dataset.Manufacturer = "Synthetic"
-    dataset.SeriesDescription = "Synthetic multi-echo"
-    dataset.ProtocolName = "Synthetic MSME"
-    dataset.InstanceNumber = instance_number
-    dataset.SamplesPerPixel = 1
-    dataset.PhotometricInterpretation = "MONOCHROME2"
-    dataset.Rows = 2
-    dataset.Columns = 3
-    dataset.BitsAllocated = 16
-    dataset.BitsStored = 16
-    dataset.HighBit = 15
-    dataset.PixelRepresentation = 1
-    return dataset
-
-
-def _write_classic_dicom_slice(
-    path,
-    *,
-    series_uid,
-    echo_index,
-    slice_index,
-    description="Synthetic multi-echo",
-    series_number=None,
-):
-    instance_number = echo_index * 10 + slice_index + 1
-    dataset = _base_dicom_dataset(
-        path,
-        series_uid=series_uid,
-        sop_class_uid=MRImageStorage,
-        instance_number=instance_number,
-    )
-    dataset.StudyInstanceUID = "1.2.826.0.1.3680043.10.1000.1"
-    dataset.FrameOfReferenceUID = "1.2.826.0.1.3680043.10.1000.2"
-    dataset.SeriesDescription = description
-    if series_number is not None:
-        dataset.SeriesNumber = int(series_number)
-    dataset.ScanningSequence = "SE"
-    dataset.MagneticFieldStrength = 9.4
-    dataset.EchoTime = float((echo_index + 1) * 10)
-    dataset.RepetitionTime = 1000.0
-    dataset.EchoNumbers = echo_index + 1
-    dataset.PixelSpacing = [2.0, 3.0]
-    dataset.SliceThickness = 2.5
-    dataset.SpacingBetweenSlices = 2.5
-    dataset.ImageOrientationPatient = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
-    dataset.ImagePositionPatient = [0.0, 0.0, float(slice_index) * 2.5]
-    dataset.RescaleSlope = 2.0
-    dataset.RescaleIntercept = 5.0
-    pixels = (
-        np.arange(6, dtype=np.int16).reshape((2, 3))
-        + np.int16(echo_index * 100 + slice_index * 10)
-    )
-    dataset.PixelData = pixels.tobytes()
-    dataset.save_as(path, enforce_file_format=True)
-    return pixels
 
 
 def _write_enhanced_bruker_dicom(path, *, series_uid):
@@ -269,35 +172,6 @@ def _write_enhanced_bruker_quantitative_dicom(
     return np.stack(frames)
 
 
-def _write_minimal_bruker_scan(root):
-    scan = root / "1"
-    pdata = scan / "pdata" / "1"
-    pdata.mkdir(parents=True)
-    (scan / "method").write_text("##TITLE=method\n##$Method=<MSME>\n##END=\n", encoding="utf-8")
-    (scan / "acqp").write_text("##TITLE=acqp\n##$ACQ_dim=2\n##END=\n", encoding="utf-8")
-    (pdata / "reco").write_text("##TITLE=reco\n##$RECO_mode=<USER>\n##END=\n", encoding="utf-8")
-    (pdata / "visu_pars").write_text(
-        "\n".join(
-            [
-                "##TITLE=visu_pars",
-                "##$VisuCoreFrameCount=1",
-                "##$VisuCoreDim=2",
-                "##$VisuCoreSize=( 2 )",
-                "2 2",
-                "##$VisuCoreDataSlope=( 1 )",
-                "2",
-                "##$VisuCoreDataOffs=( 1 )",
-                "10",
-                "##$VisuCoreFrameType=( 1 )",
-                "MAGNITUDE_IMAGE",
-                "##$VisuCoreWordType=_16BIT_SGN_INT",
-                "##$VisuCoreByteOrder=littleEndian",
-                "##END=",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    np.arange(4, dtype=np.int16).tofile(pdata / "2dseq")
 
 
 def _write_multicycle_bruker_slice_scan(root):
@@ -420,6 +294,40 @@ def _write_multicycle_bruker_slice_scan(root):
     interleaved[..., 1] = blocks.imag
     interleaved.reshape((-1,)).tofile(scan / "rawdata.job0")
     return scan, images
+
+
+def test_bruker_experiment_accepts_string_paths(tmp_path):
+    _write_minimal_bruker_scan(tmp_path)
+    _, dataset, _, _ = import_bruker_experiment(str(tmp_path / "1"))
+    assert dataset.shape == (1, 2, 2)
+
+
+def test_bruker_study_discovers_standalone_exports_and_nonnumeric_experiment_names(tmp_path):
+    _write_minimal_bruker_scan(tmp_path)
+    exported = tmp_path / "exported_scan"
+    (tmp_path / "1").rename(exported)
+    for root in [tmp_path, exported]:
+        study, metadata = import_bruker_study(root, field_strength_mhz=100)
+        assert study.names == ["exported_scan"]
+        assert study.datasets[0].shape == (1, 2, 2)
+        assert not metadata["skipped_experiments"]
+
+
+def test_bruker_study_skips_missing_and_unsupported_acquisitions(tmp_path):
+    import shutil
+
+    _write_minimal_bruker_scan(tmp_path)
+    shutil.copytree(tmp_path / "1", tmp_path / "2")
+    (tmp_path / "2/pdata/1/visu_pars").unlink()
+    shutil.copytree(tmp_path / "1", tmp_path / "3")
+    (tmp_path / "3/acqp").write_text('##$ACQ_dim=2\n##$ACQ_size=( 2 )\n4 2\n##$NI=1\n##$NR=1\n##$GO_raw_data_format=UNSUPPORTED_SCALAR\n')
+    (tmp_path / "3/fid").write_bytes(bytes(16))
+    with pytest.warns(RuntimeWarning, match="skipped Bruker scan"):
+        study, metadata = import_bruker_study(tmp_path, field_strength_mhz=100)
+    assert study.names == ["1"]
+    assert set(metadata["skipped_experiments"]) == {"2", "3"}
+    assert metadata["skipped_experiments"]["2"]["reason"] == "missing_file"
+    assert metadata["skipped_experiments"]["3"]["reason"] == "import_failed"
 
 
 def test_synthetic_bruker_study_import_workflow(tmp_path):

@@ -16,7 +16,7 @@ class MRaxVersionIncompatibilityError(MRaxVersionError):
 
 
 class MRaxVersionTagError(MRaxVersionError):
-    """Raised when a producer-version tag exists but cannot be interpreted."""
+    """Raised for a malformed producer-version tag."""
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ def _version_tuple(value: object) -> tuple[int, int, int]:
 
 
 def mrax_versions_are_compatible(producer: object, current: object = MRAX_VERSION) -> bool:
-    """Return compatibility for the persisted-data contract, not package equality.
+    """Return persisted-data contract compatibility across package versions.
 
     Stable releases share a data-compatibility line by major version. While MRax is
     pre-1.0, the minor version identifies that line; patch releases remain compatible.

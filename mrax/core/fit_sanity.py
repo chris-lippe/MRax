@@ -468,10 +468,10 @@ def debug_fit_prototype(
         )
         report.optimizer_name = info.optimizer_name
         if info.parameter_space == "physical":
-            from mrax.core.tv_fit import make_tv_steps
             params = unpack._mrax_from_raw(raw_before)
-            opt, _, _ = make_tv_steps(loss_fn, unpack._mrax_smooth_loss, unpack._mrax_physical_bounds,
-                                       unpack._mrax_tv_operators, info.optimizer_name, step_size, device=device)
+            opt = make_optimizer(info.optimizer_name, step_size, device=device,
+                proximal_context=(loss_fn, unpack._mrax_smooth_loss,
+                                  unpack._mrax_physical_bounds, unpack._mrax_tv_operators))
             gradient_loss = unpack._mrax_smooth_loss
             report.notes.append("TV is applied proximally; gradient summaries describe the smooth objective")
         else:

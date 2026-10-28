@@ -2,7 +2,7 @@ Batch Runs
 ==========
 
 Use :func:`mrax.core.batch.run_batch_studies` when you want to process multiple studies
-back-to-back without any interdependencies between them. The helper:
+as independent jobs. The helper:
 
 - Discovers subfolders under a studies root (or a user-specified subset).
 - Loads each folder into a :class:`mrax.data_struct.study.Study` via a ``study_loader``.

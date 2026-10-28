@@ -3,7 +3,7 @@
 The Kaiser--Bessel convolution and analytic deapodization follow Beatty et al.,
 IEEE TMI 24 (2005), 799--808, doi:10.1109/TMI.2005.848376. Interpolation and
 spreading use the same periodic stencil, making the implemented pair adjoint
-even though each approximates a nonuniform DFT. No density weights are implicit.
+even though each approximates a nonuniform DFT. Density weighting is explicit.
 """
 
 from __future__ import annotations
@@ -76,8 +76,9 @@ class NUFFTPlan:
     """Reusable encoding for fixed coordinates in cycles/pixel, in axis order.
 
     Prepare outside ``jit``/``grad``; transform calls support both and arbitrary
-    leading batch axes. Gradients with respect to trajectories are unsupported.
-    ``eps`` selects interpolation accuracy, not a bound on floating-point error.
+    leading batch axes. Gradients are defined for images and samples at a fixed
+    trajectory. ``eps`` selects interpolation accuracy; floating-point error
+    also depends on dtype and accumulation.
     Sample chunks and batches bound temporary stencil and oversampled-grid memory.
     """
 
@@ -145,8 +146,7 @@ class NUFFTPlan:
         chunks = samples.reshape(samples.shape[0], -1, self.chunk_size).transpose(1, 0, 2)
         grid_size = prod(self.grid_shape)
         long_sum = len(chunks) > 64 and self.sample_count > prod(self.spatial_shape)
-        # CPU double accumulation improves long sums without changing output
-        # dtype. Consumer GPUs use partial float32 sums to avoid slow atomics.
+        # CPU double accumulation improves long sums and preserves output dtype. Consumer GPUs use partial float32 sums to avoid slow atomics.
         grid_dtype = (jnp.complex128 if long_sum and samples.dtype == jnp.complex64
                       and self.prefer_wide_accumulation and jax.config.values["jax_enable_x64"]
                       else samples.dtype)
@@ -204,7 +204,7 @@ class NUFFTPlan:
         return apply_nufft(self, image, adjoint=False)
 
     def adjoint(self, samples):
-        """Apply the conjugate transpose, without density compensation."""
+        """Apply the unweighted conjugate transpose."""
         return apply_nufft(self, samples, adjoint=True)
 
 

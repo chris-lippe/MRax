@@ -29,7 +29,7 @@ def compute_z_spectra(
     *,
     epsilon: float = 1e-6,
 ) -> jnp.ndarray:
-    """Return ``data / reference_image`` without mutating the imported dataset."""
+    """Return ``data / reference_image`` as a derived array."""
 
     arr = np.asarray(data, dtype=np.float32)
     ref = np.asarray(reference_image, dtype=np.float32)
@@ -178,7 +178,7 @@ def prepare_ab_mt_z_spectra(
     reference: str | int | None = None,
     epsilon: float = 1e-6,
 ) -> tuple[Experiment, DataSet, ZSpectraResult]:
-    """Prepare image-domain AB-MT inputs without mutating imported study data."""
+    """Prepare derived image-domain AB-MT inputs from imported study data."""
 
     target_idx = _resolve_study_index(study, target)
     result = get_z_spectra(study, target_idx, reference=reference, epsilon=epsilon)

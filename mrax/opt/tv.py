@@ -44,7 +44,7 @@ def difference_adjoint(values, axis, order):
 
 @dataclass(frozen=True)
 class TVOperator:
-    """Isotropic weighted TV; invalid edges never couple across a mask boundary."""
+    """Isotropic weighted TV on valid within-mask edges."""
     axes: tuple[int, ...]
     order: int
     valid: tuple[jax.Array, ...]
@@ -143,9 +143,9 @@ class L1Operator:
 class CallbackOperator:
     """Identity splitting for an application-supplied convex proximal map.
 
-    The callback owns its penalty definition; its value is unavailable. Thus
-    fitting uses smooth majorization and residual checks, not a composite-value
-    monotonicity claim. Thresholds retain the public scalar/array/tree semantics.
+    The callback owns its penalty definition. Fitting certifies smooth
+    majorization and residual checks. Thresholds retain the public
+    scalar/array/tree semantics.
     """
     weights: jax.Array
     callback: object
@@ -168,11 +168,12 @@ class CallbackOperator:
         return jnp.asarray(0., jnp.real(value).dtype)
 
 
-def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_steps=512):
+def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_steps=512,
+            method="primal_dual"):
     """Solve prox(rate * weighted TV + box indicator) with a checked dual gap.
 
     All TV groups on a field are solved jointly. The gap certifies the inner
-    convex problem; this does not imply global convergence of a nonlinear fit.
+    convex problem. Nonlinear outer fits require separate stationarity assessment.
     """
     lower, upper = bounds
     def project(array):
@@ -183,12 +184,14 @@ def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_s
         return jnp.clip(array, lower, upper).astype(array.dtype)
 
     active = tuple(op for op in operators if op.axes)
+    if method not in ("primal_dual", "fgp"):
+        raise ValueError("TV proximal method must be primal_dual or fgp")
     if not active:
         return project(value), (), jnp.asarray(0.0, dtype=jnp.real(value).dtype), jnp.asarray(0)
     if len(active) == 1 and isinstance(active[0], CallbackOperator):
         op = active[0]
         # Dykstra computes prox(g + box), including nonseparable custom proxs;
-        # a simple clip(prox(g)) is generally not that proximal map.
+        # the correction state makes the composition a joint proximal solve.
         def body(state):
             x, p, q, count, _ = state
             y = op.prox((x + p)[..., None], rate)[..., 0]
@@ -203,7 +206,7 @@ def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_s
             lambda s: (s[3] < max_steps) & (s[4] > tolerance * (1 + jnp.max(jnp.abs(s[0])))),
             body, (value, zero, zero, jnp.asarray(0), jnp.asarray(jnp.inf, jnp.real(value).dtype)))
         valid = error <= tolerance * (1 + jnp.max(jnp.abs(x)))
-        # This is a fixed-point certificate, not a dual objective gap.
+        # The custom-prox certificate uses a fixed-point residual.
         return x, (op.project_dual(p[..., None], rate),), jnp.where(valid, 0., jnp.inf), count
     if len(active) == 1 and isinstance(active[0], L1Operator):
         # Exact separable solution avoids an unnecessary iterative inner solve
@@ -220,6 +223,55 @@ def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_s
              if duals is None else tuple(op.project_dual(p, rate) for op, p in zip(active, duals, strict=True)))
     norm_bound = sum(op.norm_bound_squared for op in active)
     real_dtype = jnp.real(value).dtype
+    if method == "fgp":
+        # Accelerated projected gradient on the smooth box-constrained TV dual.
+        # The primal is reconstructed by the exact box projection at every gap
+        # check within the FGP TV proximal solve.
+        def reconstruct(ps):
+            return project(value - sum(op.adjoint(p) for op, p in zip(active, ps, strict=True)))
+
+        def certificate(ps):
+            x = reconstruct(ps)
+            gap = jnp.asarray(0., real_dtype)
+            penalty = jnp.asarray(0., real_dtype)
+            for op, p in zip(active, ps, strict=True):
+                dx = op.gradient(x)
+                term = rate * op.weights * vector_norm(dx)
+                penalty += jnp.sum(term)
+                gap += jnp.sum(jnp.maximum(term - jnp.real(jnp.sum(jnp.conj(p) * dx, axis=-1)), 0))
+            primal = .5 * jnp.sum(jnp.abs(x - value)**2) + penalty
+            return x, gap, primal
+
+        x, gap, primal = certificate(duals)
+
+        def body(state):
+            ps, extrapolated, t, count, best, best_ps, best_gap, best_primal = state
+
+            def iteration(_, carry):
+                ps, qs, t, count = carry
+                x = reconstruct(qs)
+                new_ps = tuple(op.project_dual(q + op.gradient(x) / norm_bound, rate)
+                               for op, q in zip(active, qs, strict=True))
+                new_t = .5 * (1 + jnp.sqrt(1 + 4 * t**2))
+                momentum = (t - 1) / new_t
+                new_qs = tuple(p + momentum * (p - old) for p, old in zip(new_ps, ps, strict=True))
+                return new_ps, new_qs, new_t, count + 1
+
+            # Gap reductions need several global reductions. Amortize them,
+            # while respecting the caller's exact inner iteration budget.
+            ps, extrapolated, t, count = jax.lax.fori_loop(
+                0, jnp.minimum(8, max_steps - count), iteration, (ps, extrapolated, t, count))
+            x, gap, primal = certificate(ps)
+            better = gap < best_gap
+            best = jnp.where(better, x, best)
+            best_ps = jax.tree.map(lambda new, old: jnp.where(better, new, old), ps, best_ps)
+            return (ps, extrapolated, t, count, best, best_ps,
+                    jnp.minimum(gap, best_gap), jnp.where(better, primal, best_primal))
+
+        state = jax.lax.while_loop(
+            lambda s: (s[3] < max_steps) & (s[6] > tolerance * (1 + s[7])), body,
+            (duals, duals, jnp.asarray(1., real_dtype), jnp.asarray(0), x, duals, gap, primal))
+        return state[4], state[5], state[6], state[3]
     initial_step = jnp.asarray(.99 / norm_bound ** .5, dtype=real_dtype)
     initial = project(value)
 

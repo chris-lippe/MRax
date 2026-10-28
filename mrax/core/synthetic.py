@@ -30,7 +30,7 @@ def _make_truth_maps(nx: int = 16, ny: int = 16):
     xg, yg = jnp.meshgrid(jnp.linspace(0.0, 1.0, nx), jnp.linspace(0.0, 1.0, ny), indexing="ij")
     amp = 0.9 + 0.35 * jnp.sin(2.0 * jnp.pi * xg) * jnp.cos(2.0 * jnp.pi * yg)  # ~[0.55, 1.25]
 
-    # Keep T1/T2 well inside model bounds without clipping by limiting the sinusoid depth.
+    # Limit sinusoid depth to keep T1/T2 well inside model bounds.
     t1_map = 1500.0 + 800.0 * jnp.sin(jnp.pi * xg) * jnp.cos(jnp.pi * yg)  # ~[700, 2300] ms
     t2_map = 70.0 + 40.0 * jnp.cos(jnp.pi * yg)  # ~[30, 110] ms
 

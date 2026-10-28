@@ -11,8 +11,8 @@ Dimension handling
 
 Experiments use named dimensions to describe how non-spatial axes map to observables.
 Spatial axes are always ``x/y/z``. Non-spatial axes are inferred from observable
-lengths when importing data. If the observable layout cannot be inferred,
-importers fall back to a single ``frame`` axis.
+lengths when importing data. Ambiguous observable layouts use a single ``frame``
+axis.
 
 You can inspect the current layout via ``experiment.describe_dims()`` and reshape arrays
 manually using :func:`mrax.data_struct.reshape_frames_to_dims` or
@@ -25,10 +25,10 @@ ROI masks from external tools sometimes arrive transposed relative to MRax spati
 ordering. Use :func:`mrax.analysis.match_spatial_mask` to validate or transpose masks
 before ROI extraction.
 
-By default, any non-spatial dimension without a mapped observable is treated like an
+By default, each non-spatial dimension lacking a mapped observable is treated like an
 additional parameter axis. Fits will return fields with that dimension up front, for
 example ``t, x, y`` or ``frame, x, y``. This enables per-repeat regularizers and
-``parameter_constant_dims`` along the repeat axis without splitting the dataset. If you
+``parameter_constant_dims`` along the repeat axis within one dataset. If you
 want parameters shared across a repeat dimension, map it to an explicit observable or set
 ``parameter_constant_dims`` to collapse that axis.
 
@@ -79,7 +79,7 @@ settings, you can combine them into a single frame-major experiment for a joint 
    fields, losses = run_fit(joint_exp, model, joint_ds, auto_mask_nan_observables=True)
 
 Missing observables are filled with ``NaN`` by default; ``auto_mask_nan_observables=True``
-ensures those frames do not contribute to the loss.
+restricts the loss to frames with valid observables.
 By default the join helper adds a ``joint_source`` observable (integer index per frame) so
 side models can condition on scan/timepoint membership.
 

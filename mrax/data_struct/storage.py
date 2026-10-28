@@ -76,8 +76,7 @@ def _record_skipped_experiment(
 def save_ismrmrd_array(path: Path, array: np.ndarray, group: str):
     """Write an array to an ISMRMRD file under the given group name."""
     _ensure_parent(path)
-    # Make writes idempotent: replace the target group instead of appending, so rerunning
-    # exports (or changing reconstruction shapes) does not accumulate incompatible entries.
+    # Replace the target group for idempotent exports, including shape changes.
     if path.exists():
         try:
             import h5py
@@ -87,7 +86,7 @@ def save_ismrmrd_array(path: Path, array: np.ndarray, group: str):
                 if root is not None and group in root:
                     del root[group]
         except Exception:
-            # Fall back to append semantics if the file cannot be opened/edited.
+            # Use append semantics after an optional in-place edit fails.
             _LOG.debug("Ignored optional operation failure", exc_info=True)
     dset = ismrmrd.Dataset(str(path), "dataset")
     img = ismrmrd.Image.from_array(np.asarray(array), transpose=False)
@@ -513,7 +512,7 @@ def _save_volume_slices(
     for obs_idx in np.ndindex(*obs_sizes):
         if progress_callback:
             progress_callback(len(slices), max(1, int(np.prod(obs_sizes))), f"Writing image frame {len(slices) + 1}/{int(np.prod(obs_sizes))}")
-        # obs_idx empty tuple when there are no observables.
+        # A scalar observable layout uses an empty obs_idx tuple.
         idx_map: dict[str, int] = {}
         slicespec = [slice(None)] * array.ndim
         for axis_name, axis_idx, dim in zip(observable_axes, obs_idx, observable_idxs):

@@ -73,7 +73,7 @@ class DicomMetadataAdapter(Protocol):
         datasets: Sequence[PydicomDataset],
         frame_metadata: Sequence[Mapping[str, object]],
     ) -> DicomMetadataPatch:
-        """Return metadata additions without changing pixel assembly."""
+        """Return metadata additions for the shared pixel-assembly pipeline."""
 
         ...
 
@@ -93,8 +93,8 @@ def discover_dicom_series(
 ) -> list[DicomSeriesInfo]:
     """Inspect DICOM headers and return image-series summaries.
 
-    Patient-identifying attributes are intentionally not included in the summaries.
-    Files that are not readable DICOM images are skipped.
+    Summaries contain only technical series metadata.
+    Readable DICOM images enter discovery.
     """
 
     grouped = _read_grouped_headers(source, recursive=recursive, force=force)
@@ -166,7 +166,7 @@ def load_dicom_study(
 
     ``series_groups`` maps experiment names to series UIDs. Selected series must
     share study, frame of reference, pixel layout and physical geometry. Unlisted
-    series remain separate. Series are never merged by filename or description.
+    series remain separate. Explicit compatible UIDs govern series merging.
     """
 
     from mrax.io.measurement import image_signal_scale

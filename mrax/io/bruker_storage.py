@@ -64,7 +64,7 @@ def discover_raw_stream(folder, acqp):
 
 
 def decode_records(folder, method, acqp, *, library=None, profile=None, retain_record=False):
-    """Decode all complete records; no silent scalar or record truncation."""
+    """Decode complete records and validate scalar and record sizes."""
     library = library or DefinitionLibrary()
     path, kind = discover_raw_stream(folder, acqp)
     if path is None:
@@ -122,7 +122,7 @@ def decode_records(folder, method, acqp, *, library=None, profile=None, retain_r
 
 
 def coordinate_event_map(records, method, acqp, *, event_count, profile):
-    """Map explicit encoding-coordinate events without assuming a rectangular loop."""
+    """Map explicit encoding-coordinate events in their declared acquisition order."""
     objects, repeats = int(acqp.get("NI", 1)), int(acqp.get("NR", 1))
     group = int(acqp.get("ACQ_phase_factor", 1))
     if records.source_kind == "job":

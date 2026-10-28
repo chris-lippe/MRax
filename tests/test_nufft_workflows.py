@@ -1,4 +1,4 @@
-"""Independent synthetic checks for the portable nonuniform Fourier operator."""
+"""Synthetic nufft contracts and numerical references."""
 
 import jax
 import jax.numpy as jnp

@@ -8,8 +8,8 @@ Importers translate file records and scanner metadata into
 :class:`mrax.data_struct.AcquisitionData`, images and experiment observables.
 They resolve record order, receiver calibration, Fourier signs, units and geometry
 before reconstruction. Scanner images are decoded independently of raw samples.
-Numerical reconstruction then uses the :ref:`api-acquisition-conventions` without
-reading scanner metadata.
+Numerical reconstruction uses the :ref:`api-acquisition-conventions` supplied
+by that normalized contract.
 
 Extending Bruker definitions
 ----------------------------
@@ -36,7 +36,7 @@ Extracted-file readers and Pulseq metadata
 ``register_measurement_reader(name, extensions, reader, inspector=...)`` adds an
 extracted-file reader. The reader returns ``MeasurementData`` with images or an
 ``AcquisitionData`` object and normalized metadata. An optional inspector lists
-groups or image series without loading pixels. Image reconstruction remains a
+groups or image series through metadata-only inspection. Image reconstruction remains a
 separate operation.
 
 ``mrax/io/definitions/pulseq.toml`` maps observable aliases and unit scales.

@@ -28,8 +28,8 @@ DEFAULT_DIM_SPECS_BY_EXP_TYPE: dict[str, tuple[DimensionSpec, ...]] = {
     "vfa": (DimensionSpec("flip", "flip_angle"),),
     "mse": (DimensionSpec("te", "TE"),),
     "mge": (DimensionSpec("te", "TE"),),
-    # Diffusion acquisitions are a per-volume list of bvals/bvecs, not a
-    # rectangular shell dimension. Keep them as frames so incomplete shells and
+    # Diffusion acquisitions use a per-volume list of bvals/bvecs.
+    # Keep them as frames so incomplete shells and
     # arbitrary direction tables remain navigable one acquisition at a time.
     "dti": (),
     "dki": (),

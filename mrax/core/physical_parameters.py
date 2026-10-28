@@ -92,8 +92,8 @@ def balance_physical_coordinates(smooth_loss, params, unpack, operators, *, stor
     if not factors and metric == "initial_gradient":
         gradient = jax.grad(smooth_loss)(params)
         # A fixed block metric with an initial RMS displacement equal to that
-        # of a midpoint bounded transform. This is NOT an adaptive Adam step:
-        # it is selected once, then the usual certified TV prox is used.
+        # of a midpoint bounded transform. Select it once, then use the
+        # certified TV prox in these fixed coordinates.
         for key, value in params.items():
             current = unpack._mrax_physical_scales[key]
             physical_rms = float(jnp.sqrt(jnp.mean(jnp.abs(gradient[key] / current)**2)))

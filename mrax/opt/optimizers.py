@@ -1,4 +1,4 @@
-"""Optax-friendly wrappers and proximal variants."""
+"""Optax optimizers and the native FISTA and split-Bregman transformations."""
 
 from __future__ import annotations
 
@@ -36,6 +36,23 @@ def _validate_proximal_weights(weights):
 def _any_positive(weights) -> bool:
     leaves, _ = jax.tree_util.tree_flatten(weights)
     return any(np.any(np.asarray(leaf) > 0.0) for leaf in leaves)
+
+
+def fista_extrapolated_params(params, state):
+    """Return the gradient point in the caller's original parameter PyTree.
+
+    Direct fixed-step FISTA callers using supplied gradients differentiate here,
+    then pass ``gradient_at_extrapolated=True`` to ``update``. Objective-callback
+    loops and ordinary fitting evaluate this point internally.
+    """
+    solver = state.get("solver", {}) if isinstance(state, dict) else {}
+    if "y" not in solver:
+        raise ValueError("Expected a FISTA transformation state with an extrapolated point")
+    point = solver["y"]
+    leaves, definition = jax.tree.flatten(params)
+    if not isinstance(point, dict) or set(point) != {str(i) for i in range(len(leaves))}:
+        raise ValueError("Use a direct FISTA transformation state matching the parameter PyTree")
+    return jax.tree.unflatten(definition, [point[str(i)] for i in range(len(leaves))])
 
 
 def _with_box_constraints(opt, bounds):
@@ -77,15 +94,17 @@ def _project_bounds(params, bounds: Tuple[object, object] | None):
 
 def _make_proximal_optimizer(name, step_size, regularizer_weight, prox_fn,
                               box_bounds, penalty, *, context, tolerance,
-                              max_steps, inner_steps, maximum_rate, grad_clip_norm):
+                               max_steps, inner_steps, maximum_rate, grad_clip_norm, fista_restart,
+                               fista_backtracking):
     """One canonical kernel, exposed as an Optax ExtraArgs transformation.
 
     The fitting executor supplies ``value_fn`` automatically. Direct Optax
     callers should pass a differentiable smooth ``value_fn`` to ``update``.
-    Without it fixed-step compatibility mode uses the supplied gradient (at
-    state['solver']['y'] for FISTA); objective safeguards require value_fn.
+    Fixed-step gradient mode uses the supplied gradient, evaluated at
+    state['solver']['y'] for FISTA. Objective safeguards require value_fn.
     """
-    from ._proximal import make_proximal_kernel
+    from ._fista import make_fista_kernel
+    from ._split_bregman import make_split_bregman_kernel
     from .tv import CallbackOperator, L1Operator
 
     def flatten(tree):
@@ -93,11 +112,15 @@ def _make_proximal_optimizer(name, step_size, regularizer_weight, prox_fn,
         return {str(i): x for i, x in enumerate(leaves)}, definition
 
     def build_kernel(loss, smooth, bounds, operators, checked):
-        return make_proximal_kernel(loss, smooth, bounds, operators, name, step_size,
+        if name == "fista":
+            return make_fista_kernel(loss, smooth, bounds, operators, step_size,
+                tolerance=tolerance, max_prox_steps=max_steps, maximum_rate=maximum_rate,
+                grad_clip_norm=grad_clip_norm, objective_check=checked, restart=fista_restart,
+                backtracking=fista_backtracking)
+        return make_split_bregman_kernel(loss, smooth, bounds, operators, step_size,
             tolerance=tolerance, max_prox_steps=max_steps, penalty=penalty,
             inner_steps=inner_steps, maximum_rate=maximum_rate,
-            grad_clip_norm=grad_clip_norm, objective_check=checked,
-            composite_check=context is not None or prox_fn is soft_threshold)
+            grad_clip_norm=grad_clip_norm, objective_check=checked)
 
     context_kernel = build_kernel(*context, True) if context is not None else None
 
@@ -151,7 +174,13 @@ def _make_proximal_optimizer(name, step_size, regularizer_weight, prox_fn,
                 "value": jnp.asarray(0., jnp.result_type(*[jnp.real(x).dtype for x in jax.tree.leaves(params)], jnp.float32)),
                 "status": jnp.asarray(0, jnp.int32)}
 
-    def update(grads, state, params, *, value_fn=None, **extra_args):
+    def update(grads, state, params, *, value_fn=None, gradient_at_extrapolated=False, **extra_args):
+        if name == "split_bregman" and context is None and value_fn is None:
+            raise ValueError("Split Bregman requires value_fn for its augmented primal subproblem; "
+                             "run_fit supplies it automatically")
+        if name == "fista" and context is None and value_fn is None and not gradient_at_extrapolated:
+            raise ValueError("FISTA requires value_fn for gradients at its extrapolated point; "
+                             "fixed-step callers must explicitly set gradient_at_extrapolated=True")
         packed, convert, (_, step, _) = prepare(params, value_fn, grads)
         value, accepted, solver, status = step(packed, state["solver"])
         accepted = convert(accepted)
@@ -169,6 +198,9 @@ def _make_proximal_optimizer(name, step_size, regularizer_weight, prox_fn,
         # Earlier local checkpoints carried unused copies of parameter arrays.
         if not isinstance(state, dict) or not isinstance(state.get('solver'), dict):
             return state
+        if name == 'split_bregman' and ('layout_version' not in state['solver'] or
+                                       int(np.asarray(state['solver']['layout_version'])) != 6):
+            raise ValueError("Split Bregman checkpoint layout changed; start a fresh optimizer")
         obsolete = {'x_ref', 'x'} if name == 'fista' else {'x_ref'}
         return {**state, 'solver': {key: value for key, value in state['solver'].items()
                                     if key not in obsolete}}
@@ -186,6 +218,17 @@ def _make_proximal_optimizer(name, step_size, regularizer_weight, prox_fn,
                 zip(jax.tree.leaves(params), jax.tree.leaves(weights), strict=True))
         return total
     update._mrax_objective = objective
+    update._mrax_proximal_name = name
+    def bind_context(new_context):
+        if context is not None:
+            raise ValueError("This optimizer is already bound to a fitting objective")
+        if prox_fn is not soft_threshold or box_bounds is not None or _any_positive(regularizer_weight):
+            raise ValueError("Use model bounds and field regularizers for native TV map fitting")
+        return _make_proximal_optimizer(name, step_size, regularizer_weight, prox_fn,
+            box_bounds, penalty, context=new_context, tolerance=tolerance, max_steps=max_steps,
+            inner_steps=inner_steps, maximum_rate=maximum_rate, grad_clip_norm=grad_clip_norm,
+            fista_restart=fista_restart, fista_backtracking=fista_backtracking)
+    update._mrax_bind_context = bind_context
     return optax.GradientTransformationExtraArgs(init, update)
 
 
@@ -206,17 +249,19 @@ def make_optimizer(
     bregman_inner_steps: int = 1,
     proximal_max_step_size: float | None = None,
     grad_clip_norm: float | None = None,
+    fista_restart: str = "gradient",
+    fista_backtracking: str = "full",
 ) -> optax.GradientTransformation:
     """Single entry point to build optimizers, with optional proximal variants.
 
     - ``fista`` uses Euclidean gradient and proximal steps with acceleration.
-      ``split_bregman`` uses linearized augmented-Lagrangian primal steps,
-      splitting, and dual updates. Both retain their solver at zero weight.
+      ``split_bregman`` uses augmented primal solves, exact split shrinkage,
+      and Bregman multiplier updates. Both retain their solver at zero weight.
     - Proximal callbacks receive the appropriate scalar, array, or tree threshold.
       Base factories are restricted to plain ``optax.sgd``; Adam is unsupported.
       Pass the differentiable smooth objective as ``value_fn`` to ``update``
       for safeguarded trials; the fitting API supplies it automatically. Direct
-      fixed-step callers without it must evaluate FISTA gradients at state.y
+      fixed-step supplied-gradient callers evaluate FISTA gradients at state.y
       (stored under ``state['solver']``). Check ``state['status']`` for failure.
     - All other optimizers are resolved from Optax and only support L2 weight decay plus optional
       box constraints. ``grad_clip_norm`` optionally clips their full gradient.
@@ -239,8 +284,8 @@ def make_optimizer(
             raise ValueError("FISTA and split Bregman require Euclidean gradient steps; an Adam base is unsupported")
         if bregman_penalty <= 0 or not np.isfinite(bregman_penalty):
             raise ValueError("bregman_penalty must be finite and positive")
-        if not callable(step_size) and step_size <= 0:
-            raise ValueError("Proximal learning rate must be finite and positive")
+        if not callable(step_size) and step_size < 0:
+            raise ValueError("Proximal learning rate must be finite and nonnegative")
         if not np.isfinite(proximal_tolerance) or proximal_tolerance <= 0:
             raise ValueError("Proximal tolerance must be finite and positive")
         if index(proximal_max_steps) < 1 or index(bregman_inner_steps) < 1:
@@ -253,7 +298,8 @@ def make_optimizer(
             regularizer_weight, prox_fn, box_constraints, bregman_penalty,
             context=proximal_context, tolerance=proximal_tolerance,
             max_steps=proximal_max_steps, inner_steps=bregman_inner_steps,
-            maximum_rate=proximal_max_step_size, grad_clip_norm=grad_clip_norm), device)
+            maximum_rate=proximal_max_step_size, grad_clip_norm=grad_clip_norm,
+            fista_restart=fista_restart, fista_backtracking=fista_backtracking), device)
 
     if regularizer_prox is not None:
         raise ValueError("regularizer_prox is only supported for 'split_bregman' or 'fista'.")

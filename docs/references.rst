@@ -112,6 +112,22 @@ Reconstruction and optimization
    reconstruction with a minimal oversampling ratio. *IEEE Transactions on
    Medical Imaging* 24(6), 799-808 (2005). https://doi.org/10.1109/TMI.2005.848376.
 
+.. [PipeMenon1999] Pipe, J. G. and Menon, P. Sampling density compensation in MRI:
+   rationale and an iterative numerical solution. *Magnetic Resonance in
+   Medicine* 41(1), 179-186 (1999).
+   https://pubmed.ncbi.nlm.nih.gov/10025627/.
+
+.. [Poser2013] Poser, B. A., Barth, M., Goa, P.-E., Deng, W. and Stenger, V. A.
+   Single-shot echo-planar imaging with Nyquist ghost compensation: interleaved
+   dual echo with acceleration (IDEA) echo-planar imaging (EPI).
+   *Magnetic Resonance in Medicine* 69(1), 37-47 (2013).
+   https://doi.org/10.1002/mrm.24222.
+
+.. [Skare2006] Skare, S., Clayton, D. B., Newbould, R., Moseley, M. and Bammer, R.
+   A fast and robust minimum entropy based non-interactive Nyquist ghost
+   correction algorithm. *Proceedings of the ISMRM* 14, 2349 (2006).
+   https://cds.ismrm.org/protected/06MProceedings/PDFfiles/02349.pdf.
+
 .. [Haacke1991] Haacke, E. M., Lindskog, E. D. and Lin, W. A fast, iterative,
    partial-Fourier technique capable of local phase recovery. *Journal of
    Magnetic Resonance* 92(1), 126-145 (1991).
@@ -129,6 +145,20 @@ Reconstruction and optimization
 .. [BeckTeboulle2009] Beck, A. and Teboulle, M. A fast iterative
    shrinkage-thresholding algorithm for linear inverse problems. *SIAM Journal
    on Imaging Sciences* 2(1), 183-202 (2009). https://doi.org/10.1137/080716542.
+
+.. [Scheinberg2014] Scheinberg, K., Goldfarb, D. and Bai, X. Fast first-order
+   methods for composite convex optimization with backtracking. *Foundations
+   of Computational Mathematics* 14, 389-417 (2014).
+   https://doi.org/10.1007/s10208-014-9189-9.
+
+.. [ODonoghue2015] O'Donoghue, B. and Candes, E. Adaptive restart for accelerated
+   gradient schemes. *Foundations of Computational Mathematics* 15, 715-732
+   (2015). https://doi.org/10.1007/s10208-013-9150-3.
+
+.. [BeckTeboulleTV2009] Beck, A. and Teboulle, M. Fast gradient-based algorithms
+   for constrained total variation image denoising and deblurring problems.
+   *IEEE Transactions on Image Processing* 18(11), 2419-2434 (2009).
+   https://doi.org/10.1109/TIP.2009.2028250.
 
 Phase unwrapping
 -------------------------------

@@ -3,49 +3,91 @@
 Fitting
 =======
 
-Build and run differentiable losses with Optax/Proximal variants. All functions accept
-per-parameter regularizer configs/weights that override model defaults.
+Build differentiable losses, fit individual experiments and execute study plans.
+See :doc:`model_fitting` for the workflow and :ref:`api-optim` for solver controls.
 
-- ``build_loss(experiment, model, dataset, ...)`` → ``(loss_fn, init_params, unpack)``
-  where ``loss_fn(params)`` returns a scalar data+regularization loss. Pass known
-  observation variances with ``data_variance`` for precision weighting; uniform
-  variance is the default, ``data_variance="auto"`` estimates robust per-frame
-  variances before fitting, and the RMS loss normalization is retained.
-- ``run_fit(experiment, model, dataset, optimizer_name="adam", step_size=0.02, num_steps=200, ...)``
-  fits a single experiment; returns ``(fitted_fields_with_units, loss_history)`` or
-  ``(fitted_fields_with_units, loss_history, model_fn)`` when
-  ``return_model_callable=True`` (``model_fn(fields, offsets=None, observables=None)`` applies
-  study globals + observables).
-  Supports Optax optimizers plus ``split_bregman``/``fista`` wrappers, box constraints,
-  proximal regularizers, and explicit initial parameters.
-- ``make_model_callable(experiment, model, study_globals=None)`` builds a callable that
-  merges study globals/observables before invoking ``model.model_apply``. Use it in
-  notebooks to evaluate predictions without manually attaching ``field_strength_mhz``.
-- ``plan_study_fits(study, target_names=None, precomputed_fields=None)`` returns an
-  ordered list of :class:`mrax.core.study_runner.PlannedFit` entries for sequential
-  fitting, optionally reusing cached fields.
-- ``execute_study_plan(plan, run_fit_kwargs=None, run_fit_overrides=None, ...)`` executes
-  the plan via :func:`run_fit` and returns result entries plus the
-  fitted field cache. Experiments missing required observables are skipped by default
-  and marked with ``skipped=True`` in the results. Put shared ``run_fit`` options in
-  ``run_fit_kwargs`` and per-experiment options in ``run_fit_overrides``; dict-valued
-  ``run_fit`` options such as ``regularizer_weights`` are passed through unchanged.
-- ``check_fit_sanity(experiment, model, dataset, study_globals=None)`` runs a fast
-  pre-fit check and returns a :class:`mrax.core.fit_sanity.FitSanityReport`.
-- ``estimate_data_variance(experiment, dataset, mask=None, ...)`` estimates robust
-  per-frame observation variances from background noise, with a spatial
-  wavelet-MAD fallback, and returns diagnostics in a
-  :class:`mrax.core.variance.VarianceEstimate`. The optional mask must identify a
-  noise-only region; fitting masks are separate.
+Objective and inputs
+--------------------
+
+``build_loss`` returns the scalar loss, initial parameter tree and field unpacker.
+Weighted least squares is the default. Masks combine spatial confidence, frames
+and observable support; ``mask_dims`` specifies their axis order.
+Each fit requires usable finite observations.
+
+``data_normalization="roi"`` computes RMS over retained finite observations;
+``"full"`` uses all finite image data. To preserve regularization balance when
+switching from full-image to ROI normalization, multiply each regularizer weight
+by ``(RMS_full / RMS_roi)**2``. Double-precision fits use
+``JAX_ENABLE_X64=true`` with float64 data, observables and initial parameters.
+
+``reference_image`` fits signal intensities as the fixed spatial reference
+times the relative model prediction. Returned predictions include that scale,
+and measurement uncertainty in the reference remains relevant. Signal-domain
+and Z-spectrum weighting define distinct statistical objectives.
+
+``data_variance`` specifies observation variances, with uniform variance as the
+default and ``"auto"`` for robust estimation before fitting. The optional
+``variance_estimation_mask`` identifies a noise region separately from the
+fitting mask. See :doc:`variance_weighting`.
+
+A custom differentiable ``data_loss(residual, weights)`` receives RMS-normalized
+residuals and the combined mask/precision weights and returns a real scalar.
+All optimizer interfaces use that callable. Grouped pseudo-Huber loss applies
+one bounded influence to the RMS of consecutive frames at each spatial position;
+``delta`` is in normalized residual units. Calibrate it from the training noise
+for the intended statistical objective.
 
 .. autofunction:: mrax.core.loss_builder.build_loss
-.. autofunction:: mrax.core.loss_builder.run_fit
+
 .. autofunction:: mrax.core.loss_builder.make_model_callable
+
+.. autofunction:: mrax.core.data_losses.pseudo_huber_loss
+
+Execution and continuation
+--------------------------
+
+``run_fit`` returns fitted fields with units and a loss history.
+``return_model_callable=True`` adds the prediction callable;
+``return_fit_info=True`` adds ``FitInfo`` after it. Study globals and
+observables are merged by ``make_model_callable``.
+
+``step_size`` accepts a constant or Optax schedule. ``chunk_size`` sets the
+interval between host progress and finiteness checks; a progress callback may
+cancel by raising an exception. Early stopping uses ``convergence_tolerance``,
+``parameter_tolerance``, ``convergence_patience`` and ``min_steps``, with
+``num_steps`` as the maximum.
+
+History entries precede updates. ``info.final_loss`` evaluates the returned
+fields; ``info`` also records completed updates, termination and the complete
+checkpoint. Continue with ``initial_state=info.state`` and matching model,
+data, regularizers and optimizer. ``initial_params`` instead starts a fresh
+optimizer. Solver-family and state-layout changes require fresh optimizer state.
+
+``FitError`` reports nonfinite updates and failed proximal/backtracking
+certificates. Its ``last_valid_state`` and ``loss_history`` preserve the latest
+verified checkpoint when available.
+
+.. autofunction:: mrax.core.loss_builder.run_fit
+
+Study plans and diagnostics
+---------------------------
+
+Study plans order experiments by their observable dependencies and may reuse
+precomputed fields. Shared options use ``run_fit_kwargs``; per-experiment
+options use ``run_fit_overrides``. By default, experiments requiring additional
+observables receive ``skipped=True``.
+
+.. autofunction:: mrax.core.loss_builder.build_study_losses
+
+.. autofunction:: mrax.core.study_runner.plan_study_fits
+
+.. autofunction:: mrax.core.study_runner.execute_study_plan
+
+.. autofunction:: mrax.core.fit_sanity.check_fit_sanity
+
+.. autoclass:: mrax.core.fit_sanity.FitSanityReport
+
 .. autofunction:: mrax.core.variance.estimate_data_variance
+
 .. autoclass:: mrax.core.variance.VarianceEstimate
    :members:
-.. autofunction:: mrax.core.loss_builder.build_study_losses
-.. autofunction:: mrax.core.study_runner.plan_study_fits
-.. autofunction:: mrax.core.study_runner.execute_study_plan
-.. autofunction:: mrax.core.fit_sanity.check_fit_sanity
-.. autoclass:: mrax.core.fit_sanity.FitSanityReport

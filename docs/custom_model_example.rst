@@ -59,5 +59,4 @@ Custom model example
 
 The same pattern applies to synthetic studies: construct your ``Model`` first, then
 pass it into ``Study`` entries or ``run_fit`` directly. For imported data, use
-``model_map_by_type`` or ``recipe=`` when the automatically selected model is not the
-one you want.
+``model_map_by_type`` or ``recipe=`` to select a specific model.

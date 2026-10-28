@@ -60,10 +60,8 @@ def complete_partial_fourier(kspace, acquired, *, spatial_ndim=2, method="pocs",
                              phase_window="boxcar", weighting="step", tolerance=0.0):
     """Phase-constrained POCS or homodyne from symmetric measured support.
 
-    The phase reference uses paired frequencies around the *encoding* DC, not
-    the midpoint of acquired indices. POCS restores every measured value after
-    each projection. Homodyne is a different estimator and does not impose that
-    constraint. See Noll et al. (1991), DOI 10.1109/42.79473, and Haacke et al.
+    The phase reference pairs frequencies around the *encoding* DC. POCS restores every measured value after
+    each projection. Homodyne uses a weighted real-image estimator. See Noll et al. (1991), DOI 10.1109/42.79473, and Haacke et al.
     (1991), DOI 10.1016/0022-2364(91)90253-P.
     """
     if method not in {"pocs", "homodyne"}:
@@ -191,11 +189,11 @@ def reconstruct_acquisition(
     frame_batch_size: int | None = None,
     **options,
 ) -> ReconstructionResult:
-    """Reconstruct explicit samples without consulting source-format metadata.
+    """Reconstruct explicit samples through the normalized acquisition contract.
 
     FFT, variational and signal-model reconstruction share the same measured
     samples, encoding grid, calibration convention and output recipe. Completion
-    is an initialization for iterative algorithms, never additional measured data.
+    supplies initialization; iterative objectives retain the acquired support.
     """
     acquisition.require_prepared()
     name = method.lower().replace("-", "_")

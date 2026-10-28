@@ -1,7 +1,7 @@
 Custom models
 =============
 
-Use the provided template to add a custom forward model without touching the
+Use the provided template to register a custom forward model alongside the
 built-in library:
 
 1. Copy ``docs/model_template.py`` next to your code (e.g., ``my_models.py``).

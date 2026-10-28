@@ -16,8 +16,8 @@ def read_siemens_measurement(path, *, sequence_info=None, scan_index=None, spati
                              load_auxiliary=True, frame_selection=None, axis_order=None, density="auto", gradient_directions=None):
     """Read the selected measurement in acquisition order, retaining oversampling.
 
-    A matching Pulseq descriptor is required: scanner protocol placeholders do
-    not reliably describe the encoding executed by an external interpreter.
+    A matching Pulseq descriptor supplies the encoding executed by the external
+    interpreter; scanner protocol placeholders remain auxiliary metadata.
     """
     try:
         from mapvbvd import mapVBVD
@@ -46,7 +46,7 @@ def read_siemens_measurement(path, *, sequence_info=None, scan_index=None, spati
     counts = np.asarray(sequence_info.adc_counts)
     adc_counters = {}
     if counts.size and int(np.sum(counts)) == columns * int(image.NAcq) and len(counts) != int(image.NAcq):
-        # Storage chunks within one continuous ADC cannot represent separate images.
+        # Storage chunks inside a continuous ADC belong to the same readout.
         event = np.searchsorted(np.cumsum(counts), np.arange(int(image.NAcq)) * columns, side='right')
         retained = []
         starts = np.r_[0, np.flatnonzero(np.diff(event)) + 1]

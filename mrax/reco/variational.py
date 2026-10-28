@@ -49,6 +49,11 @@ from mrax.reco.nufft import NUFFTPlan, prepare_nufft
 Array = jnp.ndarray
 
 
+def _squared_magnitude(value: Array) -> Array:
+    """Equivalent quadratic form with correct complex curvature at zero."""
+    return jnp.real(value * jnp.conj(value))
+
+
 @dataclass(frozen=True)
 class RegridApodizationCorrection:
     """Kaiser-Bessel deapodization settings for gridding-style reconstructions.
@@ -398,7 +403,7 @@ def combine_coil_images(
     method:
         ``"sum"`` for direct complex summation, ``"rss"`` for magnitude RSS, or
         ``"sense"`` for sensitivity-weighted combination. ``"sense"`` falls back to
-        sum when sensitivities are not supplied.
+        sum with ``sensitivities=None``.
     sensitivities:
         Optional ``(coil, *spatial)`` sensitivity map for SENSE combination.
     coil_axis:
@@ -868,7 +873,6 @@ def solve_variational(
     from operator import index
 
     from mrax.core.fit_execution import execute_optimizer
-    from mrax.core.tv_fit import make_tv_steps
     from mrax.opt.tv import L1Operator, TVOperator
 
     num_steps, tv_iterations = index(num_steps), index(tv_iterations)
@@ -971,7 +975,7 @@ def solve_variational(
         if prediction.shape != y.shape:
             raise ValueError("Encoded image layout does not match measured samples")
         residual = jnp.where(weights > 0, prediction - y, 0)
-        return .5 * jnp.sum(weights * jnp.abs(residual)**2) / weight_sum
+        return .5 * jnp.sum(weights * _squared_magnitude(residual)) / weight_sum
 
     homogeneous_data_loss = None
     if (sensitivities is not None and not independent_coils and not op.is_non_cartesian and shifts is None and
@@ -990,7 +994,7 @@ def solve_variational(
     def penalty(image):
         if tv_operator is not None:
             return tv_operator.value(image, smoothed=not proximal)
-        return (regularizer_weight * jnp.mean(jnp.abs(image)**2) if reg == "l2" else jnp.asarray(0., jnp.real(image).dtype))
+        return (regularizer_weight * jnp.mean(_squared_magnitude(image)) if reg == "l2" else jnp.asarray(0., jnp.real(image).dtype))
     def objective(values):
         return data_loss(values["image"]) + penalty(values["image"])
     def smooth(values):
@@ -1005,8 +1009,8 @@ def solve_variational(
             else:
                 def homogeneous_loss(image):
                     value = (homogeneous_data_loss(image) if homogeneous_data_loss is not None else
-                        .5 * jnp.sum(weights * jnp.abs(encode(image, homogeneous=True))**2) / weight_sum)
-                    return value + (regularizer_weight * jnp.mean(jnp.abs(image)**2) if reg == "l2" else 0)
+                        .5 * jnp.sum(weights * _squared_magnitude(encode(image, homogeneous=True))) / weight_sum)
+                    return value + (regularizer_weight * jnp.mean(_squared_magnitude(image)) if reg == "l2" else 0)
                 gradient = jax.grad(homogeneous_loss)
                 direction = jax.random.rademacher(jax.random.key(0), x0.shape, dtype=jnp.real(x0).dtype).astype(x0.dtype)
                 if jnp.iscomplexobj(x0):
@@ -1023,21 +1027,20 @@ def solve_variational(
     if not np.isfinite(step_size) or step_size <= 0:
         raise ValueError("step_size must be finite and positive")
     parameters = {"image": x0}
-    step_function = convergence_check = None
     if proximal:
-        optimizer, step_function, convergence_check = make_tv_steps(objective, smooth,
-            {"image": (-np.inf, np.inf)}, {"image": () if tv_operator is None else (tv_operator,)},
-            name, step_size, tolerance=prox_tolerance, max_prox_steps=tv_iterations,
+        optimizer = make_optimizer(name, step_size,
+            proximal_context=(objective, smooth, {"image": (-np.inf, np.inf)},
+                              {"image": () if tv_operator is None else (tv_operator,)}),
+            proximal_tolerance=prox_tolerance, proximal_max_steps=tv_iterations,
             grad_clip_norm=grad_clip_norm,
-            penalty=1. / x0.size if bregman_penalty is None else bregman_penalty,
+            bregman_penalty=1. / x0.size if bregman_penalty is None else bregman_penalty,
             device=device)
     else:
         optimizer = make_optimizer(name, step_size, device=device)
         if grad_clip_norm is not None:
             optimizer = optax.chain(optax.clip_by_global_norm(grad_clip_norm), optimizer)
     parameters, losses, info = execute_optimizer(objective, parameters, optimizer,
-        num_steps=num_steps, step_function=step_function,
-        convergence_check=convergence_check, device=device)
+        num_steps=num_steps, device=device)
     image = parameters["image"]
     history = losses[1:] + [float(info.final_loss)] if losses else []
     return (image, history) if return_history else image
@@ -1173,7 +1176,7 @@ def _model_encoding_loss(op, *, samples, weights, denominator, scale, frame_weig
             if local_frames is not None:
                 difference = jnp.where(local_frames > 0, difference, 0.)
             local_weights = select(weights, start, size, rank=samples.ndim)
-            value = jnp.sum(jnp.abs(difference)**2 * local_weights) / denominator
+            value = jnp.sum(_squared_magnitude(difference) * local_weights) / denominator
             if pred_full is not None:
                 assert completion is not None and completion_weights is not None and completion_denominator is not None
                 target_missing = jax.lax.dynamic_slice_in_dim(completion, start, size, axis=0)
@@ -1181,14 +1184,14 @@ def _model_encoding_loss(op, *, samples, weights, denominator, scale, frame_weig
                 if local_frames is not None:
                     difference_missing = jnp.where(local_frames > 0, difference_missing, 0.)
                 missing_weights = select(completion_weights, start, size, rank=samples.ndim)
-                value = value + completion_weight * jnp.sum(jnp.abs(difference_missing)**2 * missing_weights) / completion_denominator
+                value = value + completion_weight * jnp.sum(_squared_magnitude(difference_missing) * missing_weights) / completion_denominator
             return value
 
         if batch_size == frames:
             return piece(0, frames)
         count, remainder = divmod(frames, batch_size)
-        # Rematerialization retains the full model/time regularizers, without
-        # saving every frame's coil-space intermediates during reverse AD.
+        # Rematerialize coil-space intermediates during reverse AD while retaining
+        # the full model and temporal regularizers.
         parts = jax.lax.map(jax.checkpoint(lambda batch: piece(batch * batch_size, batch_size)),
                             jnp.arange(count))
         total = jnp.sum(parts)
@@ -1267,10 +1270,10 @@ def solve_model_based(
     - The encoding operator :math:`A` is the same as in :func:`solve_variational` (FFT/NUFFT,
       optional sampling mask, optional coil sensitivities).
     - ``roi_mask`` weights regularizers and masks output fields. Physical object
-      support is supplied separately with ``object_support_mask``; an analysis ROI
-      must not erase signal outside that ROI before Fourier encoding.
+      support is supplied separately with ``object_support_mask``. Fourier encoding
+      retains the full object signal across analysis ROI boundaries.
     - ``frame_mask`` (or ``auto_mask_nan_observables=True``) can drop frames with missing
-      per-frame observables; masked frames do not contribute to the data term.
+      per-frame observables; valid frames define the data term.
     - ``reference_image`` / ``reference_kspace`` can be used to model acquisitions where the
       signal model predicts a *relative* image series (e.g., Z-spectra). In that case the
       encoded prediction becomes :math:`A(reference\\_image \\cdot M(\\theta))`. When
@@ -1683,7 +1686,7 @@ def solve_model_based(
             pred_ref_k = op_ref.forward(ref)
             diff_ref = (pred_ref_k - y_ref_coils) * scale_ref
             assert weights_ref is not None and denominator_ref is not None
-            misfit_ref = jnp.sum(jnp.abs(diff_ref) ** 2 * weights_ref) / denominator_ref
+            misfit_ref = jnp.sum(_squared_magnitude(diff_ref) * weights_ref) / denominator_ref
             total = total + ref_weight * misfit_ref
         return total
 
@@ -1725,6 +1728,11 @@ def solve_model_based(
         params_all = balance_physical_coordinates(smooth_loss, params_all, unpack,
             tv_operators, balance=num_steps != 0)
 
+    proximal_options = dict(
+        proximal_context=(loss_fn, smooth_loss, unpack._mrax_physical_bounds, tv_operators),
+        proximal_tolerance=proximal_tolerance, proximal_max_steps=proximal_max_steps,
+        bregman_penalty=bregman_penalty, bregman_inner_steps=bregman_inner_steps,
+    ) if true_tv else {}
     opt = make_optimizer(
         selected,
         step_size,
@@ -1733,16 +1741,10 @@ def solve_model_based(
         base_optimizer_factory=optimizer_base_factory,
         device=device,
         box_constraints=box_constraints,
+        **proximal_options,
     )
-    step_function = convergence_check = None
-    if true_tv:
-        from mrax.core.tv_fit import make_tv_steps
-        opt, step_function, convergence_check = make_tv_steps(loss_fn, smooth_loss,
-            unpack._mrax_physical_bounds, tv_operators, selected, step_size,
-            tolerance=proximal_tolerance, max_prox_steps=proximal_max_steps,
-            penalty=bregman_penalty, inner_steps=bregman_inner_steps, device=device)
     params_all, losses, info = execute_optimizer(loss_fn, params_all, opt, num_steps=num_steps,
-        step_function=step_function, convergence_check=convergence_check, device=device)
+        device=device)
     losses = losses[1:] + [float(info.final_loss)] if losses else []
 
     final_model_params = params_all if reference_kspace is None else params_all["model"]

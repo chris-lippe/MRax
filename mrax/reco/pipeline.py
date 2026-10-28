@@ -1,7 +1,7 @@
 """Editable, vendor-independent reconstruction stage plans.
 
-Plans describe algorithms, not executable Python. Importers may suggest a plan;
-changing that plan never changes the acquired samples or their validity mask.
+Plans declaratively describe algorithms. Importers may suggest a plan;
+editing it preserves the acquired samples and their validity mask.
 """
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ class ReconstructionPipeline:
 
     Shift and partial-Fourier/gridding stages precede exactly one solver. Output
     formatting and coil combination follow it. Partial-Fourier values initialize
-    iterative solvers; they never become additional measured samples.
+    iterative solvers; the acquired support defines their data term.
     """
 
     stages: tuple[ReconstructionStage, ...]
@@ -109,7 +109,7 @@ class ReconstructionPipeline:
 
     @classmethod
     def from_toml(cls, path: str | Path):
-        """Read an allowlisted plan. No expressions, imports or code execution."""
+        """Read a declarative plan using allowlisted keys and values."""
         import tomllib
 
         with Path(path).open("rb") as handle:
