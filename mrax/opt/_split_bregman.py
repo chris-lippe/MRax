@@ -77,6 +77,10 @@ def make_split_bregman_kernel(loss, smooth_loss, bounds, operators, step_size, *
         raise ValueError("Split Bregman step size must be finite and nonnegative")
     if maximum_rate is not None and (not np.isfinite(maximum_rate) or maximum_rate <= 0):
         raise ValueError("Maximum Split Bregman step must be finite and positive")
+    # Hessian-vector linearization would otherwise retain the smooth model's
+    # full reverse-mode tape throughout every curvature probe. Recompute those
+    # intermediates while preserving the primal objective and derivatives.
+    smooth_loss = jax.checkpoint(smooth_loss)
     operators = {key: tuple(op for op in groups if op.axes)
                  for key, groups in operators.items()}
     # Canonical split coordinates A=D, d=Du, g(d)=sum(w*|d|).

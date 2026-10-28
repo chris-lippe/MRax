@@ -239,6 +239,37 @@ def test_invalid_curvature_uses_a_finite_identity_preconditioner():
     _same_tree(apply_preconditioner(point, state), point)
 
 
+def test_coupled_nearly_singular_primal_agrees_with_cpu_on_gpu():
+    try:
+        gpu = jax.devices("gpu")[0]
+    except RuntimeError:
+        pytest.skip("GPU backend unavailable")
+    cpu = jax.devices("cpu")[0]
+    solutions = []
+    with jax.enable_x64():
+        target = .2 + .1 * np.sin(np.arange(64).reshape(8, 8))
+        for device in (cpu, gpu):
+            with jax.default_device(device):
+                observed = jnp.asarray(target)
+                initial = {key: jnp.zeros((8, 8), jnp.float64) for key in ("a", "b")}
+
+                def smooth(p, observed=observed):
+                    residual = p["a"] + p["b"] - observed
+                    difference = p["a"] - p["b"]
+                    return .5 * jnp.mean(residual ** 2) + 5e-13 * jnp.mean(difference ** 2)
+
+                bounds = {key: (-1., 1.) for key in initial}
+                operators = {key: () for key in initial}
+                optimizer = make_optimizer("split_bregman", .2, device=device,
+                    proximal_context=(smooth, smooth, bounds, operators))
+                (fitted, _state), statuses = _scan(optimizer, smooth, initial, 24)
+                np.testing.assert_array_equal(statuses, np.zeros(24, dtype=np.int32))
+                solutions.append({key: np.asarray(value) for key, value in fitted.items()})
+        for key in initial:
+            np.testing.assert_allclose(solutions[0][key], target / 2, atol=1e-6, rtol=0)
+            np.testing.assert_allclose(solutions[1][key], solutions[0][key], atol=1e-6, rtol=0)
+
+
 def test_builtin_complex_least_squares_has_the_quadratic_hessian_at_exact_fit():
     experiment = Experiment(dims={"frame": 1, "x": 2, "y": 1})
 

@@ -28,6 +28,42 @@ from mrax.opt.optimizers import make_optimizer
 from mrax.reco.variational import build_operator, solve_variational
 
 
+@pytest.mark.parametrize("name", [
+    "adam", "adamw", "sgd", "rmsprop", "adagrad", "adadelta", "adamax",
+    "adamaxw", "amsgrad", "lamb", "lars", "lion", "novograd", "noisy_sgd",
+    "radam", "sm3", "yogi",
+])
+def test_bounded_optax_cpu_gpu_consistency(name):
+    try:
+        gpu = jax.devices("gpu")[0]
+    except RuntimeError:
+        pytest.skip("GPU backend unavailable")
+    cpu = jax.devices("cpu")[0]
+    references = []
+    with jax.enable_x64():
+        for device in (cpu, gpu):
+            with jax.default_device(device):
+                target = jnp.arange(20, dtype=jnp.float64).reshape(4, 5) / 64 + .25
+                initial = {"x": jnp.full((4, 5), -.125, jnp.float64)}
+
+                def loss(p, target=target):
+                    return .5 * jnp.sum((p["x"] - target) ** 2)
+
+                optimizer = make_optimizer(name, .02, box_constraints=(-.5, .75), device=device)
+                fitted, history, info = execute_optimizer(
+                    loss, initial, optimizer, num_steps=64, chunk_size=8, device=device)
+                assert int(info.state.step) == 64
+                assert all(value.devices() == {device} for value in
+                           jax.tree.leaves((fitted, info.state.optimizer_state))
+                           if hasattr(value, "devices"))
+                values = np.asarray(fitted["x"])
+                assert np.isfinite(values).all()
+                assert np.all((values >= -.5) & (values <= .75))
+                references.append((values, np.asarray(history)))
+        np.testing.assert_allclose(references[1][0], references[0][0], rtol=1e-8, atol=1e-10)
+        np.testing.assert_allclose(references[1][1], references[0][1], rtol=1e-8, atol=1e-10)
+
+
 def _constant_problem(target=0.3, initial=0.0, signal=None):
     experiment = Experiment(dims={"frame": 3, "x": 2, "y": 2})
 

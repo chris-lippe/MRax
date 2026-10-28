@@ -35,6 +35,10 @@ Newton directions, with acceptance evaluated on the augmented objective.
 One bounded inverse/line-search restart handles a failed large-system primal
 step. Shrinkage and multiplier updates follow a certified primal step.
 
+Smooth-model intermediates are recomputed during differentiation so curvature
+probes do not retain a full reverse-mode tape for an image series. This reduces
+memory use.
+
 Convex convergence results apply under the assumptions in the cited papers.
 For nonlinear MRI objectives, assess the projected KKT residual, constraint
 residuals and sensitivity to starting values.
