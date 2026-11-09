@@ -5,7 +5,7 @@ import logging
 import warnings
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -312,6 +312,7 @@ def import_bruker_study(
     strict_raw: bool = True,
     device: DeviceLike = "cpu",
     progress_callback: Callable[[int, int, str], None] | None = None,
+    selected_experiments: Sequence[str] | None = None,
 ):
     root = Path(study_root)
     study_globals = _normalize_study_globals(study_globals, field_strength_mhz)
@@ -325,6 +326,16 @@ def import_bruker_study(
     entries: List[dict] = []
     skipped_entries: List[dict] = []
     scan_dirs = discover_bruker_experiments(root)
+    if isinstance(selected_experiments, (str, bytes)):
+        raise ValueError("Provide selected experiment names as a list")
+    if selected_experiments is not None:
+        selected = {str(name) for name in selected_experiments}
+        available = {path.name for path in scan_dirs}
+        if not selected:
+            raise ValueError("Select at least one Bruker experiment")
+        if selected - available:
+            raise ValueError("The selected Bruker experiments are no longer available")
+        scan_dirs = [path for path in scan_dirs if path.name in selected]
     total_steps = max(1, len(scan_dirs) + 1)
     if progress_callback is not None:
         progress_callback(0, total_steps, "Scanning Bruker study")

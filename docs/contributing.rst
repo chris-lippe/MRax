@@ -42,6 +42,20 @@ Dependency and release changes:
 - Development, documentation, and notebook authoring tools belong in contributor extras.
 - Release notes list user-facing changes.
 
+GUI development
+---------------
+
+After installing the editable checkout, build the frontend before starting
+its GUI:
+
+.. code-block:: bash
+
+   npm --prefix frontend ci
+   npm --prefix frontend run build
+   mrax-gui
+
+Run browser tests with ``npm --prefix frontend test``.
+
 Documentation build
 -------------------
 

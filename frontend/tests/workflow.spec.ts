@@ -1,0 +1,181 @@
+import { zoomImage, imageZoom } from './ui';
+import { loadExample } from './ui';
+import { openRoiCoordinates } from './ui';
+import { saveWorkspace, openWorkspace } from './ui';
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { selectWorkflow, selectExperiment, selectTheme } from './ui';
+import type { Workspace } from '../src/api';
+
+async function current(request: APIRequestContext) {
+  const studies = (await (await request.get('/api/workspaces')).json()) as Workspace[];
+  return studies.at(-1)!;
+}
+
+test.afterEach(async ({ request }) => {
+  const token = (await (await request.get('/api/session')).json()).token;
+  const studies = (await (await request.get('/api/workspaces')).json()) as Workspace[];
+  for (const study of studies) {
+    const response = await request.delete(`/api/workspaces/${study.id}`, {
+      headers: { 'x-mrax-token': token },
+      data: { revision: study.revision, discard: true },
+    });
+    expect(response.status()).toBe(204);
+  }
+});
+
+async function addRoi(page: Page, name: string, column: number) {
+  await openRoiCoordinates(page);
+  await page.getByLabel('New ROI name', { exact: true }).fill(name);
+  await page.getByLabel('ROI column', { exact: true }).fill(String(column));
+  await page.getByLabel('ROI width', { exact: true }).fill('4');
+  await page.getByLabel('ROI height', { exact: true }).fill('4');
+  await page.getByRole('button', { name: 'Add rectangle by coordinates', exact: true }).click();
+  await expect(
+    page.locator('.roi-card').getByRole('button', { name: new RegExp(name) }),
+  ).toBeVisible();
+}
+
+test('View, Segment, Fit and Register share layers and independent ROI selections', async ({
+  page,
+  request,
+}, info) => {
+  test.setTimeout(120000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/');
+  await loadExample(page, 'multimodal');
+  await expect(page.getByTestId('roi-surface')).toBeVisible();
+  await selectTheme(page, 'light');
+  await selectWorkflow(page, 'Segment');
+  await addRoi(page, 'Anterior', 3);
+  await addRoi(page, 'Posterior', 13);
+
+  await selectWorkflow(page, 'View', 'Image and ROI overlays');
+  await page.getByLabel('Show Anterior', { exact: true }).uncheck();
+  await expect(page.locator('.roi-mask')).toHaveCount(1);
+  await page.getByLabel('Active ROI', { exact: true }).selectOption('Anterior');
+  await expect(page.locator('.roi-mask')).toHaveCount(1);
+  await selectWorkflow(page, 'Segment');
+  await expect(page.locator('.roi-mask')).toHaveCount(2);
+  await expect(page.locator('.roi-card.selected')).toContainText('Anterior');
+
+  await selectWorkflow(page, 'Fit');
+  await expect(page.getByLabel('Fit mask Anterior', { exact: true })).toBeChecked();
+  await page.getByLabel('Fit mask Posterior', { exact: true }).uncheck();
+  await page.getByLabel('Fit steps', { exact: true }).fill('600');
+  await selectWorkflow(page, 'View');
+  await expect(page.getByLabel('Show Anterior', { exact: true })).not.toBeChecked();
+  await selectWorkflow(page, 'Fit');
+  await expect(page.getByLabel('Fit mask Posterior', { exact: true })).not.toBeChecked();
+  await expect(page.getByLabel('Fit steps', { exact: true })).toHaveValue('600');
+  await page.getByRole('button', { name: 'Run full map fit', exact: true }).click();
+  await expect(page.locator('.job-status strong')).toHaveText('Operation complete', {
+    timeout: 60000,
+  });
+  expect((await current(request)).fit_info?.roi_names).toEqual(['Anterior']);
+
+  await selectWorkflow(page, 'View');
+  await page
+    .getByLabel('Overlay source', { exact: true })
+    .selectOption({ label: 'T2 phantom · t2' });
+  await page.getByRole('button', { name: 'Add overlay', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Overlay 1', exact: true })).toBeVisible();
+  await page
+    .getByRole('region', { name: 'Overlay 1', exact: true })
+    .getByText('Layer settings', { exact: true })
+    .click();
+  await page.getByLabel('Overlay 1 colormap', { exact: true }).selectOption('hot');
+  await selectWorkflow(page, 'View', 'Image display');
+  await zoomImage(page, 2);
+  const initialZoom = await imageZoom(page);
+  await page.getByLabel('Display contrast', { exact: true }).fill('1.3');
+
+  await selectExperiment(page, 'Motion shifted');
+  await selectWorkflow(page, 'Register');
+  await page.getByLabel('Reference experiment', { exact: true }).selectOption('Motion reference');
+  await page.getByLabel('Moving experiment', { exact: true }).selectOption('Motion shifted');
+  await expect(
+    page.getByLabel('Moving metric mask', { exact: true }).locator('option'),
+  ).toHaveCount(1);
+  await page.getByLabel('Moving frame', { exact: true }).fill('3');
+  await page.getByLabel('Manual affine transform', { exact: true }).check();
+  await page.getByLabel('Horizontal shift', { exact: true }).fill('3');
+  await page.getByRole('button', { name: 'Run registration', exact: true }).click();
+  await expect.poll(async () => (await current(request)).registrations.length).toBe(1);
+  await expect(page.locator('.job-status strong')).toHaveText('Operation complete', {
+    timeout: 60000,
+  });
+  const completed = await current(request);
+  expect(completed.experiment).toBe('Motion shifted');
+  expect(completed.registrations[0].diagnostics).toMatchObject({
+    post: { mse: expect.any(Number) },
+  });
+  await page.getByRole('button', { name: 'View registered overlay', exact: true }).click();
+  await selectWorkflow(page, 'View', 'Image and ROI overlays');
+  await expect(page.getByRole('region', { name: 'Overlay 1', exact: true })).toContainText(
+    'registered',
+  );
+  await expect(page.getByRole('img', { name: /32 by 40 quantitative image/ })).toBeVisible();
+
+  await selectExperiment(page, 'T2 phantom');
+  await selectWorkflow(page, 'Fit');
+  await selectWorkflow(page, 'View', 'Image display');
+  await expect.poll(() => imageZoom(page)).toBe(initialZoom);
+  await expect(page.getByLabel('Display contrast', { exact: true })).toHaveValue('1.3');
+  await selectWorkflow(page, 'View', 'Image and ROI overlays');
+  await expect(page.getByLabel('Show Anterior', { exact: true })).not.toBeChecked();
+  await expect(page.getByRole('region', { name: 'Overlay 1', exact: true })).toContainText(
+    'T2 phantom · t2',
+  );
+  const file = info.outputPath('shared-workflow.mrax');
+  await saveWorkspace(page, file);
+  await openWorkspace(page, file);
+  await expect(page.getByLabel('Show Anterior', { exact: true })).not.toBeChecked();
+  await selectWorkflow(page, 'Fit');
+  await expect(page.getByLabel('Fit mask Anterior', { exact: true })).toBeChecked();
+  await expect(page.getByLabel('Fit mask Posterior', { exact: true })).not.toBeChecked();
+  await selectWorkflow(page, 'View');
+  await page.screenshot({ path: info.outputPath('shared-workflow.png') });
+  expect(errors).toEqual([]);
+});
+
+test('overlay opacity previews continuously during one drag and commits on release', async ({
+  page,
+  request,
+}) => {
+  await page.goto('/');
+  await loadExample(page);
+  await expect(page.getByTestId('roi-surface')).toBeVisible();
+  await selectWorkflow(page, 'View', 'Image and ROI overlays');
+  await page
+    .getByLabel('Overlay source', { exact: true })
+    .selectOption({ label: 'T2 phantom · Image' });
+  await page.getByRole('button', { name: 'Add overlay', exact: true }).click();
+  const slider = page.getByLabel('Overlay 1 opacity', { exact: true });
+  await slider.scrollIntoViewIfNeeded();
+  const before = await page
+    .locator('canvas')
+    .evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
+  const handle = await slider.elementHandle();
+  const box = (await slider.boundingBox())!;
+  const point = (fraction: number) => box.x + 8 + (box.width - 16) * fraction;
+  let requests = 0;
+  page.on('request', (r) => {
+    if (r.method() === 'PATCH' && r.url().endsWith('/view')) requests++;
+  });
+  await page.mouse.move(point(0.5), box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(point(0.8), box.y + box.height / 2, { steps: 8 });
+  await expect(slider).toHaveValue('0.8');
+  const preview = await page
+    .locator('canvas')
+    .evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
+  expect(preview).not.toBe(before);
+  expect(requests).toBe(0);
+  await page.mouse.move(point(0.2), box.y + box.height / 2, { steps: 8 });
+  await expect(slider).toHaveValue('0.2');
+  expect(await handle!.evaluate((input) => input.isConnected)).toBe(true);
+  await page.mouse.up();
+  await expect.poll(async () => (await current(request)).scene.layers[0].opacity).toBe(0.2);
+  expect(requests).toBe(1);
+});

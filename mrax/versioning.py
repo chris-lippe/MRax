@@ -44,12 +44,15 @@ def mrax_versions_are_compatible(producer: object, current: object = MRAX_VERSIO
 
     Stable releases share a data-compatibility line by major version. While MRax is
     pre-1.0, the minor version identifies that line; patch releases remain compatible.
+    MRax 0.4 also reads the unchanged persisted-data schemas written by 0.3.
     """
 
     producer_version = _version_tuple(producer)
     current_version = _version_tuple(current)
     if current_version[0] == 0 or producer_version[0] == 0:
-        return producer_version[:2] == current_version[:2]
+        return producer_version[:2] == current_version[:2] or (
+            current_version[:2] == (0, 4) and producer_version[:2] == (0, 3)
+        )
     return producer_version[0] == current_version[0]
 
 

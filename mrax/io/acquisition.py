@@ -48,7 +48,7 @@ def save_acquisition(path: str | Path, acquisition: AcquisitionData) -> None:
             "target_points": readout.target_points, "relative_cutoff": readout.relative_cutoff}
     arrays["metadata"] = np.asarray(json.dumps(metadata))
     # Opening the stream explicitly prevents NumPy from changing the filename.
-    with Path(path).open("wb") as stream:
+    with Path(path).open("xb") as stream:
         np.savez_compressed(stream, **arrays)
 
 

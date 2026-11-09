@@ -1,6 +1,21 @@
 Release Notes
 =============
 
+Version 0.4.0
+-------------
+
+Highlights
+~~~~~~~~~~
+
+- Complete GUI overhaul: Browser-based desktop GUI with action-oriented controls, adjustable panels,
+  light/dark themes, keyboard shortcuts, accessibility preferences and a guided
+  synthetic-study tutorial.
+- A shared workflow for viewing, reconstruction, preprocessing, registration,
+  segmentation, fitting and analysis, including overlays and split comparison.
+- Editable processing pipelines retain original image data and fitted maps.
+  Reusable processing, reconstruction and fitting workflows can be saved as
+  versioned ``.mpip``, ``.mrec`` and ``.mfit`` files.
+
 Version 0.3.2
 -------------
 
@@ -58,17 +73,6 @@ uses ``read_pulseq_acquisition``. Reconstruct explicitly with
 Configure reconstruction and cropping in the plan; import options
 ``prefer_raw_image``, ``reco_pipeline`` and ``slice_crop_mode`` are removed.
 Low-level solvers are ``solve_variational`` and ``solve_model_based``.
-
-Version 0.2.1
--------------
-
-Bug fixes
-~~~~~~~~~
-
-- Fixed Qt popup and transient-window handling when MRax runs through VS Code's
-  forwarded Wayland socket. MRax now uses the accompanying X11/XWayland display
-  in that environment, allowing combo-box menus to close normally, dialogs to be
-  dismissed, and parameter-table values to be edited reliably.
 
 Version 0.2.0
 -------------

@@ -1,58 +1,31 @@
 Loading and viewing data
 ========================
 
-Loading Data
-------------
+Use **Open workspace** for a saved ``.mrax`` file or **Import data** to load
+an acquisition. In the import dialog, choose **New study** or add an experiment
+to the selected study under **Import destination**. **New study** in **Data & studies**
+starts an empty study. **Example studies** provides synthetic datasets.
 
-``Load...`` opens:
+Imports accept files and study folders. Select a Bruker study folder directly;
+no archive is required. Supported
+formats include MRax packages, Bruker, Pulseq, DICOM, NIfTI, NumPy and raw arrays.
+For Bruker studies, review the experiment list before importing. Select the
+experiments and reconstructions to load, check types, models and frequency,
+and enable raw k-space only when needed.
+For raw arrays, specify the shape, dimension order, data type and byte order.
+Edit metadata, observables and study constants through **View → Metadata**.
+See :doc:`gui_metadata` for navigation and imports.
+Tables show editable values and units; expand nested fields or arrays to inspect
+them. **Raw** opens the same draft as JSON for structural edits. If the table
+cannot be built, the raw text remains available. Changes enter the workspace
+only after **Apply**.
 
-- ``study_manifest.json`` files written by
-  :func:`mrax.data_struct.storage.save_study_results`.
-- ``.mrax`` bundles.
-- MRax package folders containing ``mrax_package.json``.
-- GUI state files written by this release.
+Select experiments in **Data & studies**. Choose the view and plane above
+the image. Sliders select frames and slices; available views depend on the data.
+**View → Image display** controls complex components, colormap, window centre and
+width, contrast and zoom. Hold Alt while dragging to pan. **Reset display**
+fits the image to the available space using its physical voxel spacing.
+Display changes do not resample the data or masks.
 
-GUI state loading is strict about the state format and version. The referenced
-study manifest is loaded first, then saved view settings, ROIs, fitted maps, frame
-selections, and fit controls are restored. Warnings and handled errors are shown on
-the Diagnostics page and can be saved with ``Save Diagnostic Report``.
-
-``Import...`` opens one folder picker and automatically detects Bruker ParaVision,
-Pulseq or DICOM data. Pulseq folders must contain sequences and their measurements.
-The study overview shows the detected vendor and lets you select measurements, experiment
-types and models. Raw-only inputs use the shared reconstruction pipeline.
-Sequence pairing must be unambiguous; reader options and metadata sidecars follow
-:doc:`pulseq_import`.
-DICOM discovery is recursive, groups image objects by series, and creates one
-short-named MRax experiment per series. ``Add Experiment`` also accepts an individual
-DICOM file or series. Imports are converted into MRax objects immediately; use
-``Save...`` to write a bundle or package. Standalone NIfTI and NumPy imports use
-``Add Experiment``.
-
-Viewing
--------
-
-The left panel keeps experiment selection and the current view mode visible.
-``Image`` displays vendor image data, ``MRax reconstruction`` displays reconstructions
-from raw k-space, ``K-space`` displays raw k-space when present, and ``Map`` displays
-fitted maps. The MRax reconstruction view can switch between magnitude and phase and
-between the combined image and each available receiver coil. Phase unwrapping is
-enabled by default and can be disabled in the reconstruction controls.
-
-The viewer supports:
-
-- axial, coronal, and sagittal views for 3D images. Plane selection changes the
-  active spatial slider and uses stored voxel spacing for the display aspect ratio;
-  fixed ``x/y/z`` array semantics are independent of native acquisition orientation,
-- controls for frame, slice, echo, b-value, offset, or other non-displayed axes
-  inferred from experiment dimensions,
-- k-space display modes ``log_magnitude``, ``magnitude``, ``phase``, ``real``,
-  and ``imag``,
-- k-space centering modes ``auto``, ``none``, and ``fftshift``,
-- fitted-map display with units and ROI overlays,
-- per-experiment view state for display-only masks, stored transforms, color
-  channels, and opacity.
-
-View-state changes are cached per experiment and can be reset. Source arrays,
-maps, k-space and ROI masks remain intact. The Fit page uses view-state masks or
-transforms only when ``Use view-state masks/transforms`` is enabled.
+Use **Reconstruct** to load raw k-space or reconstruct images
+before selecting those views.

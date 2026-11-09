@@ -126,7 +126,7 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
-html_logo = "_static/MRax_logo_nav.png"
+html_logo = os.path.join(PROJECT_ROOT, "MRax_logo.svg")
 html_show_copyright = False
 html_context = {
     "contact_email": contact_email,
@@ -137,8 +137,8 @@ html_theme_options = {
     "sidebar_includehidden": False,
     "navbar_end": ["theme-switcher", "navbar-icon-links"],
     "logo": {
-        "image_light": "_static/MRax_logo_nav.png",
-        "image_dark": "_static/MRax_logo_nav.png",
+        "image_light": "_static/MRax_logo.svg",
+        "image_dark": "_static/MRax_logo.svg",
         "text": "",
     },
     "secondary_sidebar_items": [],

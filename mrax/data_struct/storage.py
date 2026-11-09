@@ -73,8 +73,11 @@ def _record_skipped_experiment(
             break
 
 
-def save_ismrmrd_array(path: Path, array: np.ndarray, group: str):
+def save_ismrmrd_array(path: Path, array: np.ndarray, group: str, *, overwrite: bool = False):
     """Write an array to an ISMRMRD file under the given group name."""
+    from mrax.io.output_guard import require_new_file
+
+    require_new_file(path, overwrite=overwrite, warn=True)
     _ensure_parent(path)
     # Replace the target group for idempotent exports, including shape changes.
     if path.exists():
@@ -96,10 +99,12 @@ def save_ismrmrd_array(path: Path, array: np.ndarray, group: str):
 
 def load_ismrmrd_array(path: Path, group: str, expected_shape: tuple[int, ...] | None = None) -> np.ndarray:
     """Read the first array stored under a group name from an ISMRMRD file."""
-    dset = ismrmrd.Dataset(str(path), "dataset", create_if_needed=False)
-    img = dset.read_image(group, 0)
-    arr = np.asarray(img.data)
-    dset.close()
+    dset = ismrmrd.Dataset(str(path), "dataset", create_if_needed=False, mode="r")
+    try:
+        img = dset.read_image(group, 0)
+        arr = np.asarray(img.data)
+    finally:
+        dset.close()
     if expected_shape:
         try:
             arr = arr.reshape(expected_shape)
@@ -171,7 +176,7 @@ def _set_acquisition_flags(
         acq.setFlag(ismrmrd.ACQ_LAST_IN_MEASUREMENT)
 
 
-def save_ismrmrd_kspace(path: Path, array: np.ndarray, *, has_coil_axis: bool = False) -> None:
+def save_ismrmrd_kspace(path: Path, array: np.ndarray, *, has_coil_axis: bool = False, overwrite: bool = False) -> None:
     """Write raw k-space as standard ISMRMRD acquisition readouts.
 
     ISMRMRD raw data are stored as one acquisition per readout line, with the
@@ -180,6 +185,14 @@ def save_ismrmrd_kspace(path: Path, array: np.ndarray, *, has_coil_axis: bool = 
     readout/sample axis and an optional leading axis stores receiver coils.
     """
 
+    from mrax.io.output_guard import require_new_file
+
+    require_new_file(path, overwrite=overwrite, warn=True)
+    _write_ismrmrd_kspace(path, array, has_coil_axis=has_coil_axis)
+
+
+def _write_ismrmrd_kspace(path: Path, array: np.ndarray, *, has_coil_axis: bool = False) -> None:
+    """Assemble an acquisition group inside a newly created MRax export."""
     _ensure_parent(path)
     _clear_ismrmrd_dataset_item(path, "data")
     arr = np.asarray(array, dtype=np.complex64)
@@ -233,7 +246,7 @@ def save_ismrmrd_kspace(path: Path, array: np.ndarray, *, has_coil_axis: bool = 
 def load_ismrmrd_kspace(path: Path, expected_shape: tuple[int, ...] | None = None) -> np.ndarray:
     """Read raw k-space from standard ISMRMRD acquisitions."""
 
-    dset = ismrmrd.Dataset(str(path), "dataset", create_if_needed=False)
+    dset = ismrmrd.Dataset(str(path), "dataset", create_if_needed=False, mode="r")
     try:
         try:
             count = int(dset.number_of_acquisitions())
@@ -705,6 +718,7 @@ def save_study_results(
     save_nifti: bool = False,
     *,
     bundle: bool = True,
+    overwrite: bool = False,
     progress_callback=None,
 ):
     """Save a portable .mrax bundle; use bundle=False for a manifest folder."""
@@ -723,13 +737,16 @@ def save_study_results(
             def compression(current, total, message):
                 if progress_callback:
                     progress_callback(total + current, 2 * total, message)
-            write_bundle(target, temporary, progress_callback=compression)
+            write_bundle(target, temporary, progress_callback=compression, overwrite=overwrite)
         return target
 
     if not file_extension.startswith("."):
         raise ValueError("file_extension must start with '.' (e.g., '.mrd' or '.h5')")
 
     base = Path(output_dir)
+    from mrax.io.output_guard import require_empty_directory
+
+    require_empty_directory(base)
     base.mkdir(parents=True, exist_ok=True)
     exp_root = base / "experiments"
     exp_root.mkdir(exist_ok=True)
@@ -856,7 +873,7 @@ def save_study_results(
                             idx.insert(len(non_spatial), slice(None))
                         slice_arr = kspace_arr[tuple(idx)]
                         path = base / entry["path"]
-                        save_ismrmrd_kspace(path, np.asarray(slice_arr), has_coil_axis=has_coils)
+                        _write_ismrmrd_kspace(path, np.asarray(slice_arr), has_coil_axis=has_coils)
                         kspace_slices.append(
                             {
                                 "path": entry["path"],

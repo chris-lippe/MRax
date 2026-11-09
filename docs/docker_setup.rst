@@ -55,6 +55,18 @@ To start Jupyter from the container and access it on the host:
 
 Then open ``http://localhost:8888`` on the host.
 
+Starting the GUI
+----------------
+
+Build the frontend assets as described in :doc:`contributing`, then run:
+
+.. code-block:: bash
+
+   mrax-gui --host 0.0.0.0 --no-browser
+
+Forward port 8765 to localhost and open it in your browser. With ``docker run``,
+add ``-p 127.0.0.1:8765:8765`` when creating the container.
+
 VS Code Dev Container
 ---------------------
 
@@ -71,6 +83,10 @@ extras:
 .. code-block:: bash
 
    python -m pip install -e ".[all,dev,docs,notebooks]"
+
+The post-create step also creates ``data/`` for local test measurements and ``tmp/``
+for results and scratch work. Both are ordinary workspace folders, ignored by Git
+and excluded from container images. Add test data manually to ``data/``.
 
 NVIDIA GPU Development
 ~~~~~~~~~~~~~~~~~~~~~~

@@ -34,9 +34,13 @@ def save_dipy_nifti(
     affine: np.ndarray,
     *,
     dtype: np.dtype | None = None,
+    overwrite: bool = False,
 ) -> None:
     """Save a NIfTI file using DIPY's I/O helpers."""
 
+    from .output_guard import require_new_file
+
+    require_new_file(path, overwrite=overwrite, warn=True)
     _import_dipy()
     from dipy.io.image import save_nifti  # type: ignore
 

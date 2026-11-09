@@ -18,6 +18,7 @@
 
 Shared file builders live in `_synthetic.py`.
 
-Run `python -m pytest -q`. For headless GUI checks, set
-`QT_QPA_PLATFORM=offscreen`. Tests select available CPU/GPU devices explicitly;
+Run `python -m pytest -q`. Build the frontend with `npm --prefix frontend run build`
+and run browser checks with `npm --prefix frontend test`.
+Tests select available CPU/GPU devices explicitly;
 GPU-specific cases skip when a GPU is unavailable.

@@ -47,6 +47,14 @@ def axis_coordinates(experiment, dimension, indices=None, *, geometry=None):
     if mapping is None:
         mapping = dim_observable_map(experiment.exp_type)
     key = (mapping or {}).get(dimension)
+    if key is None:
+        matches = [
+            name for name, value in obs.items()
+            if name.casefold() == dimension.casefold()
+            or tuple(getattr(value, "dims", None) or ()) == (dimension,)
+        ]
+        if len(matches) == 1:
+            key = matches[0]
     if dimension == "frame" and experiment.exp_type in ("dti", "dki"):
         key = "bvals" if "bvals" in obs else "bval"
     qty = obs.get(key) if key else None

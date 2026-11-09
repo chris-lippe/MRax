@@ -1,4 +1,4 @@
-"""Non-Qt session state for the MRax GUI."""
+"""Scientific session state for the MRax browser application."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from mrax.data_struct.dimensions import (
 from mrax.data_struct.quantity import require_quantity_dict
 from mrax.data_struct.storage import load_study_results
 from mrax.devices import DeviceLike
-from mrax.reco.components import reconstruction_coil_count, reconstruction_variant
+from mrax.reco.components import reconstruction_variant
 
 from .models import make_model, normalize_model_key
 
@@ -172,7 +172,7 @@ class Diagnostic:
 
 @dataclass
 class GuiSession:
-    """Qt-independent, manifest-backed GUI session state."""
+    """Manifest-backed image-analysis session state."""
 
     manifest_path: Path | None = None
     data: dict[str, Any] | None = None
@@ -275,6 +275,7 @@ class GuiSession:
         *,
         field_strength_mhz: float | Quantity | None = None,
         pdata_index: str | Mapping[str, str] = "1",
+        selected_experiments: Sequence[str] | None = None,
         load_raw_kspace: bool = False,
         type_overrides: Mapping[str, str] | None = None,
         model_overrides_by_name: Mapping[str, str] | None = None,
@@ -302,6 +303,7 @@ class GuiSession:
             model_map_by_name=model_map_by_name,
             field_strength_mhz=field_strength_mhz,
             pdata_index=pdata_index,
+            selected_experiments=selected_experiments,
             load_raw_kspace=load_raw_kspace,
             progress_callback=progress_callback,
         )
@@ -449,7 +451,10 @@ class GuiSession:
         if non_imaging:
             metadata["non_imaging"] = True
         self.import_metadata = self.import_metadata or {"subject": self.study_name, "experiments": {}}
-        self.import_metadata.setdefault("experiments", {})[exp_name] = metadata
+        imported_entries = self.import_metadata.setdefault("experiments", {})
+        for old_name, old_data in previous_experiments.items():
+            imported_entries[old_name] = dict(old_data.get("extra_metadata") or {})
+        imported_entries[exp_name] = metadata
         self.data = _study_to_session_data(
             study,
             self.import_metadata,
@@ -707,6 +712,13 @@ class GuiSession:
         else:
             self.frame_mask.resize(max(1, self.frame_count))
         self.visual_state = replace(state.visual_state)
+        names = self.non_spatial_dim_names
+        if names[:1] == ["t"] and "t" not in self.active_indices and "frame" in self.active_indices:
+            self.active_indices["t"] = self.active_indices["frame"]
+        if self.experiment_dims and any(name in self.active_indices for name in names):
+            self.set_active_index(names[0], self.active_indices.get(names[0], 0))
+        else:
+            self.set_active_frame(self.active_frame)
 
     def _reset_current_view_state(self) -> None:
         self.active_frame = 0
@@ -770,7 +782,9 @@ class GuiSession:
             dataset = DataSet(
                 data=jnp.asarray(_as_numpy(exp_data.get("mr_image"))),
                 name=name,
+                processed=dict(exp_data.get("processed") or {}),
                 kspace=None if exp_data.get("raw_kspace") is None else jnp.asarray(exp_data.get("raw_kspace")),
+                kspace_metadata=dict(exp_data.get("kspace_metadata") or {}),
                 spatial_geometry=_spatial_geometry_from_experiment_data(exp_data, dims=dims),
                 acquisition=exp_data.get("acquisition"),
                 trajectory=exp_data.get("trajectory"), density=exp_data.get("density"),
@@ -932,7 +946,23 @@ class GuiSession:
 
     @property
     def reconstruction_coil_count(self) -> int:
-        return reconstruction_coil_count(self.processed_arrays)
+        value = self.processed_arrays.get("raw_reconstruction_coils")
+        if value is None:
+            return 0
+        shape = _array_source(value).shape
+        if len(shape) < 4:
+            raise ValueError("MRax per-coil reconstructions must use (frame, coil, *spatial) layout.")
+        return int(shape[1])
+
+    @property
+    def has_reconstruction(self) -> bool:
+        return any(
+            self.processed_arrays.get(key) is not None
+            for key in (
+                "raw_reconstruction", "raw_reconstruction_frequency_hz",
+                "raw_reconstruction_complex", "raw_reconstruction_coils",
+            )
+        )
 
     def reconstruction_display_array(
         self,
@@ -1228,9 +1258,12 @@ class GuiSession:
             return []
         kind = kind.lower().replace("-", "_").replace(" ", "_")
         if self.is_non_imaging and kind == "image":
-            return _axis_controls_for_non_image(self.image_array, self.experiment_dims)
+            return _axis_controls_for_non_image(
+                _array_source(self.current_experiment.get("mr_image")), self.experiment_dims
+            )
         if kind == "k_space":
-            arr = self.kspace_array
+            raw = self.current_experiment.get("raw_kspace")
+            arr = _array_source(raw) if raw is not None else None
             return [] if arr is None else _axis_controls_for_kspace(arr, self.experiment_dims)
         if kind in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"}:
             try:
@@ -1253,14 +1286,14 @@ class GuiSession:
         if kind == "map":
             try:
                 return _axis_controls_for_map(
-                    self.map_array(),
+                    _array_source(self.fitted_maps[self.active_map or self.map_names[0]]),
                     self.experiment_dims,
                     plane_dims=self.image_plane_dims,
                 )
             except Exception:
                 return []
         return _axis_controls_for_image(
-            self.image_array,
+            _array_source(self.current_experiment.get("mr_image")),
             self.experiment_dims,
             plane_dims=self.image_plane_dims,
         )
@@ -1416,7 +1449,13 @@ class GuiSession:
         self._slice_cache.clear()
 
     def set_active_index(self, key: str, value: int) -> None:
-        size = None
+        if key == "frame" and (key not in self.non_spatial_dim_names or not self.experiment_dims):
+            if self.experiment_dims and self.non_spatial_dim_names[:1] == ["t"]:
+                key = "t"
+            else:
+                self.set_active_frame(value)
+                return
+        size = self.experiment_dims.get(key)
         for kind in ("image", "k_space", "map"):
             for control in self.dimension_controls(kind):
                 if control["key"] == key:
@@ -1428,10 +1467,33 @@ class GuiSession:
         if size is not None:
             value = min(value, max(0, size - 1))
         self.active_indices[key] = value
-        if key == "frame":
-            self.active_frame = value
-        elif key == "z":
+        if key in self.non_spatial_dim_names:
+            names = self.non_spatial_dim_names
+            shape = tuple(self.experiment_dims[name] for name in names)
+            indices = tuple(
+                min(max(0, self.active_indices.get(name, 0)), count - 1)
+                for name, count in zip(names, shape)
+            )
+            self.active_frame = int(np.ravel_multi_index(indices, shape))
+            if names[:1] == ["t"]:
+                self.active_indices["frame"] = self.active_indices.get("t", 0)
+        if key == "z":
             self.active_z = value
+        self._slice_cache.clear()
+
+    def set_active_frame(self, value: int) -> None:
+        """Select a flattened acquisition frame and its named dimension indices."""
+        self.active_frame = self._bounded_frame(value)
+        names = self.non_spatial_dim_names
+        if names and self.experiment_dims:
+            shape = tuple(self.experiment_dims[name] for name in names)
+            self.active_indices.update(
+                zip(names, (int(v) for v in np.unravel_index(self.active_frame, shape)))
+            )
+        if names[:1] == ["t"] and self.experiment_dims:
+            self.active_indices["frame"] = self.active_indices.get("t", 0)
+        elif "frame" not in names or not self.experiment_dims:
+            self.active_indices["frame"] = self.active_frame
         self._slice_cache.clear()
 
     def frame_image(
@@ -1447,7 +1509,14 @@ class GuiSession:
         frame_idx = self._bounded_frame(frame)
         z_idx = self.active_z if z is None else max(0, int(z))
         indices = dict(self.active_indices)
-        indices["frame"] = frame_idx
+        if frame is not None and self.non_spatial_dim_names and self.experiment_dims:
+            names = self.non_spatial_dim_names
+            shape = tuple(self.experiment_dims[name] for name in names)
+            indices.update(zip(names, np.unravel_index(frame_idx, shape)))
+        if self.non_spatial_dim_names[:1] == ["t"] and self.experiment_dims:
+            indices["frame"] = indices.get("t", 0)
+        elif "frame" not in self.non_spatial_dim_names or not self.experiment_dims:
+            indices["frame"] = frame_idx
         indices["z"] = z_idx
         source = "original" if original else "current"
         key = (
@@ -1458,8 +1527,11 @@ class GuiSession:
             tuple(sorted(indices.items())),
         )
         if key not in self._slice_cache:
+            data = self.current_experiment.get("original_mr_image") if original else None
+            if data is None:
+                data = self.current_experiment.get("mr_image")
             self._slice_cache[key] = _display_slice(
-                self.original_image_array if original else self.image_array,
+                _array_source(data),
                 dims=self.experiment_dims,
                 indices=indices,
                 kind="image",
@@ -1572,7 +1644,7 @@ class GuiSession:
         )
         if key not in self._slice_cache:
             self._slice_cache[key] = _display_slice(
-                self.map_array(map_name),
+                _array_source(self.fitted_maps[map_name]),
                 dims=self.experiment_dims,
                 indices=indices,
                 kind="map",
@@ -1663,6 +1735,39 @@ class GuiSession:
                 ]
 
     def apply_rois_to_all_experiments(self) -> None:
+        source_dims = tuple(self.spatial_dim_names)
+        source_shape = tuple(self.spatial_shape)
+        source_geometry = self.build_dataset().spatial_geometry
+        for name in self.experiment_names:
+            dims = dict(self.summary_by_name.get(name, {}).get("dims") or {})
+            target_dims = tuple(spatial_names(dims))
+            target_shape = tuple(int(dims[dim]) for dim in target_dims)
+            if source_dims != target_dims or source_shape != target_shape:
+                raise ValueError("Native grids differ; register experiments before sharing ROIs")
+            geometry = _spatial_geometry_from_experiment_data(
+                self.data["experiments"][name], dims=dims
+            )
+            spacing = source_geometry.voxel_sizes if source_geometry is not None else None
+            if (spacing is None) != (geometry.voxel_sizes is None) or (
+                spacing is not None
+                and not np.allclose(spacing, geometry.voxel_sizes, atol=1e-6, rtol=1e-6)
+            ):
+                raise ValueError("Voxel spacing differs; register experiments before sharing ROIs")
+            for frame in range(
+                max(1, len(source_geometry.frame_affines) if source_geometry else 0,
+                    len(geometry.frame_affines))
+            ):
+                source_affine = (
+                    source_geometry.affine_for_frame(frame) if source_geometry else None
+                )
+                target_affine = geometry.affine_for_frame(frame)
+                if (source_affine is None) != (target_affine is None) or (
+                    source_affine is not None
+                    and not np.allclose(source_affine, target_affine, atol=1e-6, rtol=1e-6)
+                ):
+                    raise ValueError(
+                        "Physical geometry differs; register experiments before sharing ROIs"
+                    )
         current_rois = [_copy_roi(roi) for roi in self.rois]
         selected_roi = self.fit_settings.selected_roi
         current_names = {roi.name for roi in current_rois}
@@ -2438,9 +2543,34 @@ class GuiSession:
 
     @staticmethod
     def _ensure_original_image_snapshot(exp_data: MutableMapping[str, Any]) -> None:
-        if exp_data.get("original_mr_image") is not None or exp_data.get("mr_image") is None:
+        original = exp_data.get("original_mr_image")
+        if original is None:
+            original = exp_data.get("mr_image")
+        if original is None:
             return
-        exp_data["original_mr_image"] = np.asarray(exp_data.get("mr_image")).copy()
+        exp_data["original_mr_image"] = _original_image_snapshot(original)
+
+
+def _array_source(value: Any):
+    """Inspect or slice an array before transferring numerical data to the host."""
+    if isinstance(value, Quantity):
+        value = value.values
+    return value if hasattr(value, "ndim") and hasattr(value, "shape") else np.asarray(value)
+
+
+def _original_image_snapshot(value: Any):
+    if hasattr(value, "block_until_ready") and hasattr(value, "shape"):
+        return value
+    image = np.asarray(value)
+    # A file-backed view must not remain tied to an external mutable mapping.
+    base = image
+    needs_copy = image.flags.writeable or isinstance(base, np.memmap)
+    while isinstance(getattr(base, "base", None), np.ndarray):
+        base = base.base
+        needs_copy = needs_copy or base.flags.writeable or isinstance(base, np.memmap)
+    original = image.copy() if needs_copy else image
+    original.flags.writeable = False
+    return original
 
 
 def _as_numpy(value: Any) -> np.ndarray:
@@ -2911,7 +3041,7 @@ def _study_to_session_data(
         image = dataset.data
         experiments[name] = {
             "mr_image": image,
-            "original_mr_image": np.asarray(image).copy(),
+            "original_mr_image": _original_image_snapshot(image),
             "raw_kspace": dataset.kspace,
             "acquisition": dataset.acquisition,
             "trajectory": dataset.trajectory, "density": dataset.density,
@@ -3001,13 +3131,13 @@ def _display_slice(
     kind: str = "image",
     plane_dims: Sequence[str] = ("x", "y"),
 ) -> np.ndarray:
-    arr = np.asarray(array)
+    arr = _array_source(array)
     if arr.ndim == 0:
-        return arr.reshape((1, 1))
+        return np.asarray(arr).reshape((1, 1))
     if arr.ndim == 1:
-        return arr.reshape((1, arr.shape[0]))
+        return np.asarray(arr).reshape((1, arr.shape[0]))
     if arr.ndim == 2:
-        return arr
+        return np.asarray(arr)
 
     controls = _axis_controls_for_kind(arr, dims or {}, kind, plane_dims=plane_dims)
     index_map = dict(indices or {})
@@ -3063,7 +3193,7 @@ def _axis_controls_for_image(
     *,
     plane_dims: Sequence[str] = ("x", "y"),
 ) -> list[dict[str, int | str]]:
-    arr = np.asarray(arr)
+    arr = _array_source(arr)
     if arr.ndim <= 2:
         return []
     dim_names = list(dims.keys()) if len(dims) == arr.ndim else []
@@ -3085,7 +3215,7 @@ def _axis_controls_for_image(
 
 
 def _axis_controls_for_non_image(arr: np.ndarray, dims: Mapping[str, int]) -> list[dict[str, int | str]]:
-    arr = np.asarray(arr)
+    arr = _array_source(arr)
     if arr.ndim <= 1:
         return []
     dim_names = list(dims.keys()) if len(dims) == arr.ndim else []
@@ -3104,7 +3234,7 @@ def _axis_controls_for_map(
     *,
     plane_dims: Sequence[str] = ("x", "y"),
 ) -> list[dict[str, int | str]]:
-    arr = np.asarray(arr)
+    arr = _array_source(arr)
     if arr.ndim <= 2:
         return []
     controls: list[dict[str, int | str]] = []
@@ -3135,7 +3265,7 @@ def _axis_controls_for_map(
 
 
 def _axis_controls_for_kspace(arr: np.ndarray, dims: Mapping[str, int]) -> list[dict[str, int | str]]:
-    arr = np.asarray(arr)
+    arr = _array_source(arr)
     if arr.ndim <= 2:
         return []
     non_spatial = non_spatial_names(dims)

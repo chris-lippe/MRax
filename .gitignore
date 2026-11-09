@@ -204,11 +204,14 @@ marimo/_lsp/
 __marimo__/
 
 # Output files
+/frontend/node_modules/
+/frontend/test-results/
+/frontend/playwright-report/
+/mrax/web/static/
 /data/
+/.data/
 tmp/
 *.png
-!MRax_logo.png
-!docs/_static/MRax_logo*
 *.mp4
 *.pkl
 *.mrd

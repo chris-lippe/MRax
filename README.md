@@ -1,4 +1,4 @@
-![MRax logo](MRax_logo.png)
+![MRax logo](MRax_logo.svg)
 
 # MRax
 
@@ -18,7 +18,10 @@ pip install mrax
 ```
 
 The base package includes fitting, reconstruction, import, preprocessing,
-registration, analysis, storage and the desktop GUI. Optional BM3D/BM4D
+registration, analysis, storage and the GUI. Start it with `mrax-gui`;
+see the [GUI user guide](https://chris-lippe.github.io/MRax/gui.html) for usage.
+
+Optional BM3D/BM4D
 denoisers use `pip install "mrax[denoise-external]"` under their upstream
 non-commercial licenses.
 See [installation](https://chris-lippe.github.io/MRax/setup.html) and

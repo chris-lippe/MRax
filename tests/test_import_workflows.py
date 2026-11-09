@@ -19,7 +19,7 @@ from pydicom.uid import EnhancedMRImageStorage, generate_uid
 from mrax.core import make_model_callable
 from mrax.data_struct import Quantity
 from mrax.gui import GuiSession
-from mrax.gui.app import _detect_import_vendor, _load_dicom_experiment_from_dialog
+from mrax.gui.services.importing import _detect_import_vendor, load_dicom_experiment
 from mrax.io import (
     discover_dicom_series,
     import_bruker_experiment,
@@ -650,7 +650,7 @@ def test_gui_single_dicom_file_payload_preserves_inferred_experiment(tmp_path):
     path = tmp_path / "single.dcm"
     _write_enhanced_bruker_dicom(path, series_uid=generate_uid())
 
-    payload = _load_dicom_experiment_from_dialog(path)
+    payload = load_dicom_experiment(path)
     session = GuiSession()
     session.create_empty_study("dicom_single")
     added_name = session.add_experiment(

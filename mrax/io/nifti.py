@@ -95,9 +95,13 @@ def save_nifti(
     dtype: np.dtype | None = None,
     slope: float | None = None,
     intercept: float | None = None,
+    overwrite: bool = False,
 ) -> None:
     """Save data (MRax spatial order) to NIfTI with a specified affine."""
 
+    from .output_guard import require_new_file
+
+    require_new_file(path, overwrite=overwrite, warn=True)
     nib = _import_nibabel()
     arr = mrax_to_nifti_volume(data)
     if dtype is not None:
@@ -136,7 +140,7 @@ def export_nifti_series(
     intercepts: Sequence[float] | None = None,
     raw_dtype: np.dtype | None = None,
     stem: str | None = None,
-    overwrite: bool = True,
+    overwrite: bool = False,
     reference_geometry: SpatialGeometry | None = None,
 ) -> list[Path]:
     """Export each frame to an individual NIfTI file.
@@ -148,7 +152,6 @@ def export_nifti_series(
     """
 
     out_path = Path(out_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
 
     data = np.asarray(dataset.data)
     dim_names = list(experiment.dims.keys())
@@ -162,6 +165,12 @@ def export_nifti_series(
     spatial_shape = tuple(int(data.shape[axis]) for axis in spatial_axes)
     non_spatial_sizes = [experiment.dims[dim_names[ax]] for ax in non_spatial_axes]
     frame_count = int(np.prod(non_spatial_sizes)) if non_spatial_sizes else 1
+    from .output_guard import require_new_file
+
+    fname = stem or str(dataset.name or "scan")
+    for index in range(frame_count):
+        require_new_file(out_path / f"{fname}_{index + 1}.nii", overwrite=overwrite, warn=True)
+    out_path.mkdir(parents=True, exist_ok=True)
 
     for idx in _iter_non_spatial_indices(experiment.dims):
         slices = [slice(None)] * data.ndim
@@ -211,10 +220,6 @@ def export_nifti_series(
 
         fname = stem or str(dataset.name or "scan")
         out_file = out_path / f"{fname}_{flat_index + 1}.nii"
-        if out_file.exists() and not overwrite:
-            outputs.append(out_file)
-            continue
-
         nib = _import_nibabel()
         if slope_local is not None:
             if raw_dtype is None:
@@ -255,7 +260,7 @@ def export_nifti_4d(
     intercept: float | None = None,
     raw_dtype: np.dtype | None = None,
     stem: str | None = None,
-    overwrite: bool = True,
+    overwrite: bool = False,
     reference_geometry: SpatialGeometry | None = None,
 ) -> Path:
     """Export all frames into a single 4D NIfTI file."""
@@ -265,8 +270,9 @@ def export_nifti_4d(
         fname = stem or str(dataset.name or "scan")
         out_file = out_file / f"{fname}.nii"
 
-    if out_file.exists() and not overwrite:
-        return out_file
+    from .output_guard import require_new_file
+
+    require_new_file(out_file, overwrite=overwrite, warn=True)
 
     data = np.asarray(dataset.data)
     dim_names = list(experiment.dims.keys())

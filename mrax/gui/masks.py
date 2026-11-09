@@ -51,6 +51,7 @@ def save_roi_set(
     path: str | Path,
     *,
     metadata: dict[str, Any] | None = None,
+    overwrite: bool = False,
 ) -> tuple[Path, Path]:
     """Save ROI masks as ``.npz`` data plus sidecar JSON metadata.
 
@@ -58,6 +59,10 @@ def save_roi_set(
     """
 
     npz_path, json_path = _paths(path)
+    from mrax.io.output_guard import require_new_file
+
+    require_new_file(npz_path, overwrite=overwrite, warn=True)
+    require_new_file(json_path, overwrite=overwrite, warn=True)
     npz_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.parent.mkdir(parents=True, exist_ok=True)
 

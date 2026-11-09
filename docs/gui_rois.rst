@@ -1,40 +1,51 @@
 ROIs and masks
 ==============
 
-ROIs and Masks
---------------
+In **Segment → Create and edit ROIs**, choose a rectangle, ellipse, polygon, lasso, brush, intensity wand
+or Otsu selection, then draw on the image. Complete a polygon with Enter or a
+double click; Escape cancels it. Use coordinate fields and edit handles to
+adjust shapes. Drawing is available in native-grid views.
 
-ROI tools create rectangles, circles/ellipses, regular polygons, lassos,
-brush/erase edits, wand masks, and Otsu-threshold masks on the active image slice.
-Masks are stored as :class:`mrax.analysis.ROI` objects.
+Select an ROI to rename it, enable it for individual experiments, or inspect
+its mean signal below the image. **Data table** shows observations and fitted
+values; the curve-axis control selects the plotted dimension.
 
-Draw and edit ROIs in image or map views on the native image grid.
+Choose **View → Image and ROI overlays** to show or hide individual masks. Hidden masks
+remain editable in **Segment**. Enabling a mask attaches it to an experiment;
+its visibility and use in fitting are separate choices.
 
-Geometric ROIs remain editable until they are consolidated. Brush, erase, and wand
-edits convert the selected geometric ROI to a raster mask. Label masks are
-supported with integer labels; label ``0`` is background.
+Select an ROI in **Segment**, or in **View → Image and ROI overlays**, to change
+its color and opacity. Indexed masks also offer individual **Label colors**.
+Appearance is saved with the experiment and does not change mask values or fits.
+**Reset ROI appearance** restores the automatic palette and default opacity.
 
-Slice and volume tools include combine, subtract, shift, copy z, delete z, and
-interpolate z. Interpolation uses signed distance fields for linear and spline
-strategies.
+Use **Convert to pixel mask** beneath the selected ROI to retain its labelled
+voxels and continue editing with a brush. **Undo ROI edit** restores the shape.
+**Preview export mask** shows the stored native label array used by NIfTI and
+other mask exports, with plane/slice selection and exact label inspection using
+the pointer or arrow keys. It remains opaque for inspection even when the ROI
+overlay is transparent. Registration may display the mask on a different grid;
+the export preview shows its original grid.
 
-ROIs are managed as one shared ROI set with per-experiment enablement:
+Use **Drawing mode** to add or subtract successive rounds from the selected ROI.
+Drawing stays active between rounds and slice changes; turn it off to finish.
+**Auto subtract** removes newly drawn voxels from other enabled ROIs, for shapes
+and brush strokes. **Undo ROI edit** restores the entire previous edit.
 
-- loading or drawing an ROI adds it to the shared set and enables it for the active
-  experiment,
-- newly visited experiments keep shared ROIs disabled until selected,
-- ``Remove`` deletes an ROI from all experiments,
-- ``Disable All`` disables ROIs only for the active experiment,
-- ``Apply All`` copies the active experiment's enabled ROI set to every experiment.
+**Segment → Edit label masks** provides brush painting, erasing, relabelling and
+label deletion. Choose a coloured label or enter a new **Label value**.
+**Erase only label** protects other labels in the same mask; zero is background.
 
-Save and load ROI sets with:
+**Segment → 3D expansion** copies the current slice to selected slices or
+interpolates gaps without changing existing labelled voxels. Slice numbers start at 1; change the image plane
+to choose the expansion axis. **Grow ROI in 3D** adds background voxels within
+the chosen Euclidean distance in voxel units, preserving existing labels.
 
-.. code-block:: python
+**Segment → Combine ROIs** creates a new joint binary ROI or indexed label mask
+and retains the source ROIs. Indexed labels follow selection order; choose
+which source wins at overlaps, or reject overlapping masks.
 
-   from mrax.gui.masks import load_roi_set, save_roi_set
+Use **Segment → Import masks and ROI sets** to load masks; save them from **Export data**.
 
-   save_roi_set(rois, "subject_rois.npz")
-   rois = load_roi_set("subject_rois.json")
-
-Raw NumPy masks can be imported with :func:`mrax.gui.masks.import_mask` when their
-shape matches the experiment spatial shape.
+**Analyze → ROI map statistics** shows mean, standard deviation, median and finite voxel count
+for enabled masks across a fitted or derived map, including masks hidden in View.

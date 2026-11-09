@@ -1,24 +1,24 @@
 Registration and drift
 ======================
 
-Registration and Drift
-----------------------
+In **Register → Image alignment**, select the fixed and moving experiments and frames.
+Choose automatic alignment and review the transform, metric and interpolation
+settings, or set shifts, rotation and scale manually. An ROI can constrain
+the registration metric.
 
-The Registration page aligns the active experiment image to a selected reference
-experiment. SimpleITK registration exposes the transform, metric, optimizer,
-interpolation, initializer, sampling, histogram, iteration, learning-rate, and
-multi-resolution settings. ROIs can be used as metric masks.
+Inspect the metric summaries, then use **View registered overlay** to select
+the reference image. The result is an image layer: adjust its opacity, color
+and frame in **View → Image and ROI overlays**, or let it follow the base frame to inspect a sequence
+with the stored transform. Plane registrations apply to their stored slice;
+volume registrations support other planes. Transfer ROIs with the label-transfer
+controls; label resampling uses nearest-neighbour interpolation.
 
-Registration stores transforms in the GUI session and reports pre/post normalized
-correlation, MSE, MAD, optimizer diagnostics, selected mask pixel counts, and
-transform parameters. A reference overlay supports visual inspection while
-preserving the experiment view state.
+In **Register → Drift correction**, select reference frames, review the correction settings
+and run the operation. Progress and cancellation controls are available for
+registration and drift. Save the workspace to retain transforms and corrected
+data; export transform files and diagnostics from the corresponding controls.
 
-Manual alignment can also create stored transforms using pixel shifts, rotation,
-and X/Y stretch. Stored transforms can be applied to the current view state or to
-ROIs.
-
-The same page exposes MRax linear drift correction for frame stacks. It fits one
-linear transform-parameter drift model over selected dimensions using the JAX drift
-optimizer. Drift results are stored separately in the view state. The original image snapshot remains available through
-``Show original data`` and ``Restore Source Image``.
+Registration and drift become steps in the experiment's pipeline, above the
+image. Edit, disable or remove them there. Subsequent processing and fitting use
+the corrected data. Use **Original** to inspect the protected source without
+discarding the steps.

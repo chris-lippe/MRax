@@ -1,14 +1,9 @@
 """Synthetic save export contracts and numerical references."""
 
 import json
-import os
-import subprocess
-import sys
 import tomllib
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
 
 import jax.numpy as jnp
 import numpy as np
@@ -29,14 +24,13 @@ from mrax.data_struct import (
 from mrax.data_struct.dimensions import build_experiment_dims
 from mrax.data_struct.storage import _resolve_manifest_path
 from mrax.gui import GuiSession
-from mrax.gui.app import (
+from mrax.gui.plotting import axis_coordinates, image_profile, profile_selection
+from mrax.gui.services.export import (
     _export_object_records_for_session,
-    _MainWindowMixin,
-    _mrax_package_entries,
     _single_export_file_types,
     _write_single_export_object,
 )
-from mrax.gui.plotting import axis_coordinates, image_profile, profile_selection
+from mrax.gui.services.package import _mrax_package_entries
 from mrax.io.bundle import extract_bundle, write_bundle
 from mrax.io.image_export import export_image_files
 from mrax.io.nifti import (
@@ -48,7 +42,12 @@ from mrax.io.nifti import (
     save_nifti,
 )
 from mrax.library import make_t2_se_model
-from mrax.versioning import versioned_payload
+from mrax.versioning import (
+    MRaxVersionIncompatibilityError,
+    mrax_versions_are_compatible,
+    validate_mrax_file_version,
+    versioned_payload,
+)
 
 
 def small_study():
@@ -73,9 +72,40 @@ def test_package_version_citation_and_distribution():
     assert 'version-specific DOI' in citation
     manifest = (root / 'MANIFEST.in').read_text()
     assert 'prune data\n' in manifest
+    assert 'prune .data\n' in manifest
     assert 'prune local_testing\n' in manifest
     exclusions = (root / '.dockerignore').read_text().splitlines()
     assert 'data/' in exclusions and 'local_testing/' in exclusions
+    assert '.data/' in exclusions
+    frontend = json.loads((root / 'frontend/package.json').read_text())
+    lock = json.loads((root / 'frontend/package-lock.json').read_text())
+    assert frontend['version'] == lock['version'] == lock['packages']['']['version'] == __version__
+
+
+def test_release_data_versions_read_03_without_accepting_unknown_lines():
+    assert mrax_versions_are_compatible("0.3.2", "0.4.0")
+    assert mrax_versions_are_compatible("0.4.1", "0.4.0")
+    assert not mrax_versions_are_compatible("0.4.0", "0.3.2")
+    assert not mrax_versions_are_compatible("0.2.1", "0.4.0")
+    with pytest.raises(MRaxVersionIncompatibilityError):
+        validate_mrax_file_version({MRAX_VERSION_TAG: "0.5.0"}, file_kind="Synthetic study")
+
+
+def test_release_loads_03_study_data_without_a_native_gui(tmp_path):
+    original = small_study()
+    current = original.save(tmp_path / "current.mrax")
+    previous = tmp_path / "previous.mrax"
+    with zipfile.ZipFile(current) as source, zipfile.ZipFile(previous, "w") as destination:
+        for item in source.infolist():
+            content = source.read(item)
+            if item.filename.endswith(".json"):
+                content = content.replace(
+                    ('"' + MRAX_VERSION_TAG + '": "' + MRAX_VERSION + '"').encode(),
+                    ('"' + MRAX_VERSION_TAG + '": "0.3.2"').encode(),
+                )
+            destination.writestr(item, content)
+    loaded = load_study_results(previous)
+    np.testing.assert_array_equal(loaded["experiments"]["synthetic"]["mr_image"], original.datasets[0].data)
 
 
 def test_storage_rejects_path_traversal(tmp_path):
@@ -176,7 +206,7 @@ def test_bundle_failure_preserves_previous_file_and_rejects_traversal(tmp_path):
     def cancel(*_args):
         raise RuntimeError("cancel")
     with pytest.raises(RuntimeError, match="cancel"):
-        write_bundle(target, source, progress_callback=cancel)
+        write_bundle(target, source, progress_callback=cancel, overwrite=True)
     assert target.read_bytes() == b"previous contents"
     assert not list(tmp_path.glob("*.partial"))
     with zipfile.ZipFile(target, "w") as archive:
@@ -241,10 +271,6 @@ def test_plot_choices_follow_sliders_and_profiles_follow_other_selected_axes():
     session.add_experiment("synthetic", data, dims=dims, exp_type="fair_asl", model_name="fair_asl",
                            observables={"TI": Quantity([100., 300., 900.], "ms"),
                                         "fair_label": Quantity([0., 1.], "1"), "TR": Quantity(np.ones(6) * 1000, "ms")})
-    editor = object.__new__(_MainWindowMixin)
-    editor.session = session
-    editor.view_combo = SimpleNamespace(currentText=lambda: "Image")
-    assert editor._plot_x_axis_choices() == [("Auto", "auto"), ("ti", "ti"), ("fair", "fair"), ("z", "z")]
     indices = {"fair": 1, "z": 2}
     values = image_profile(data, session.build_experiment(), "ti", indices)
     np.testing.assert_allclose(values, np.mean(data[:, 1, :, :, 2], axis=(1, 2)))
@@ -264,30 +290,6 @@ def test_elapsed_time_is_cumulative_but_variable_tr_axis_retains_parameter_value
     assert label == "TR (ms)"
     np.testing.assert_array_equal(values, [5., 7., 9.])
     assert list(build_experiment_dims(3, (2, 4), obs, exp_type="dce")) == ["t", "x", "y"]
-
-
-def test_guarded_save_enters_busy_state_before_work_and_clears_on_error():
-    editor = object.__new__(_MainWindowMixin)
-    editor._task_running = False
-    editor._busy_message = None
-    events = []
-    def begin(message):
-        editor._task_running = True
-        events.append("busy")
-    def end():
-        editor._task_running = False
-        events.append("idle")
-    editor._begin_busy, editor._end_busy = begin, end
-    editor.on_task_progress = Mock()
-    editor.show_error = Mock()
-    editor.statusBar = Mock(return_value=Mock())
-    def fail(progress):
-        assert editor.is_busy
-        events.append("write")
-        raise RuntimeError("write failed")
-    editor.run_guarded_task(fail, Mock(), "Saving study")
-    assert events == ["busy", "write", "idle"] and not editor.is_busy
-    editor.show_error.assert_called_once()
 
 
 def test_nifti_integer_label_export_preserves_values(tmp_path):
@@ -339,10 +341,7 @@ def test_gui_snapshot_saves_current_data_without_copying_unrelated_files(tmp_pat
     updated = np.full_like(session.image_array, 7)
     session.replace_image_data(updated)
     session.replace_fitted_maps({"amplitude": Quantity(np.ones((2, 4)), "1")})
-    editor = object.__new__(_MainWindowMixin)
-    editor.session = session
-    editor.on_task_progress = Mock()
-    output = editor._save_gui_state_data_snapshot(tmp_path / "snapshot")
+    output = session.save_imported_study(tmp_path / "snapshot", bundle=False)
     restored = load_study_results(output)["experiments"]["synthetic"]
     np.testing.assert_array_equal(restored["mr_image"], updated)
     np.testing.assert_array_equal(restored["fitted_maps"]["amplitude"].values, np.ones((2, 4)))
@@ -358,85 +357,8 @@ def test_dicom_unsigned_integer_images_are_lossless(tmp_path):
     assert restored.PixelRepresentation == 0 and float(restored.RescaleSlope) == 1.
 
 
-def test_bulk_exports_include_dicom_and_multiframe_nifti_maps(tmp_path):
-    session = GuiSession()
-    session.create_empty_study("synthetic", field_strength_mhz=100)
-    session.add_experiment("synthetic", np.ones((2, 3, 5)), dims={"t": 2, "x": 3, "y": 5})
-    session.replace_fitted_maps({"level": Quantity(np.full((2, 3, 5), 7.), "1")})
-    editor = object.__new__(_MainWindowMixin)
-    editor.session = session
-    editor.record_diagnostic_event = Mock()
-    paths = editor.export_current_study(tmp_path, include_images=True, include_kspace=False,
-                                        include_maps=True, include_rois=False, export_numpy=False,
-                                        export_nifti=True, export_dicom=True, include_reconstructions=False)
-    assert len([path for path in paths if path.suffix == ".dcm"]) == 4
-    assert len([path for path in paths if path.suffix == ".nii"]) == 4
-    assert all(path.is_file() for path in paths)
-
-
 def test_spatial_plot_axis_uses_spacing_in_millimeters():
     experiment = Experiment(dims={"frame": 1, "x": 3, "y": 5, "z": 4})
     label, values = axis_coordinates(experiment, "z", geometry={"spatial_shape": [3, 5, 4], "voxel_sizes": [1., 2., 3.]})
     assert label == "z distance (mm)"
     np.testing.assert_array_equal(values, [0., 3., 6., 9.])
-
-
-def test_headless_gui_save_feedback_and_map_axis_refresh(tmp_path):
-    script = """
-import sys
-from pathlib import Path
-import numpy as np
-try:
-    from mrax.gui._deps import import_qt, import_pyqtgraph
-    QtCore, QtGui, QtWidgets = import_qt()
-    pg = import_pyqtgraph()
-except Exception as error:
-    print(error)
-    sys.exit(77)
-from mrax.gui.app import _build_main_window
-pg.setConfigOptions(imageAxisOrder='row-major')
-app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-window = _build_main_window(QtCore, QtGui, QtWidgets, pg)()
-sys.excepthook = sys.__excepthook__
-window.session.create_empty_study('synthetic', field_strength_mhz=100)
-window.session.add_experiment('synthetic', np.ones((3, 7, 11)), dims={'t': 3, 'x': 7, 'y': 11})
-window.show()
-app.processEvents()
-output = Path(sys.argv[1])
-def accept(dialog):
-    for edit in dialog.findChildren(QtWidgets.QLineEdit):
-        edit.setText(str(output))
-    return QtWidgets.QDialog.Accepted
-window._exec_dialog = accept
-errors = []
-window.show_error = lambda *args, **kwargs: errors.append(args)
-updates = []
-original = window.on_task_progress
-def progress(*args):
-    assert window.is_busy and window.progress_bar.isVisible()
-    assert not window._central_splitter.isEnabled()
-    assert window._central_splitter.graphicsEffect().opacity() == .45
-    updates.append(args)
-    original(*args)
-window.on_task_progress = progress
-assert window.save_dialog() and output.is_file() and updates and not errors
-assert not window.is_busy and not window.progress_bar.isVisible()
-assert window._central_splitter.isEnabled() and window._central_splitter.graphicsEffect() is None
-window.session.replace_fitted_maps({'static': np.ones((7, 11)), 'dynamic': np.ones((3, 7, 11))})
-window.refresh_map_list()
-window.view_combo.setCurrentText('Map')
-for name, expected in [('static', ['auto']), ('dynamic', ['auto', 't']), ('static', ['auto'])]:
-    window.on_map_changed(name)
-    choices = [window.plot_x_combo.itemData(i) for i in range(window.plot_x_combo.count())]
-    assert choices == expected, (name, choices)
-assert not errors
-window.clear_dirty()
-window.close()
-"""
-    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", JAX_PLATFORMS="cpu",
-               MRAX_GUI_CONFIG=str(tmp_path / "gui_config.json"), XLA_PYTHON_CLIENT_PREALLOCATE="false")
-    result = subprocess.run([sys.executable, "-c", script, str(tmp_path / "study.mrax")],
-                            env=env, capture_output=True, text=True, timeout=45)
-    if result.returncode == 77:
-        pytest.skip("Native Qt dependencies are unavailable")
-    assert result.returncode == 0, result.stderr

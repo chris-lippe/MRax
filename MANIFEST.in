@@ -2,15 +2,28 @@ include LICENSE
 include README.md
 include .dockerignore
 include CITATION.cff
-include MRax_logo.png
+include MRax_logo.svg
+include MRax_icon.svg
 include pyrightconfig.json
 include requirements.txt
 include requirements-dev.txt
 recursive-include mrax *.py *.toml
-recursive-include docs *.rst *.py *.css *.js *.html *.png
+recursive-include mrax/web/static *.html *.js *.css *.svg
+include frontend/package.json frontend/package-lock.json frontend/openapi.json
+include frontend/index.html frontend/tsconfig.json
+include frontend/vite.config.ts frontend/playwright.config.ts frontend/eslint.config.js
+recursive-include frontend/src *.ts *.tsx *.css
+recursive-include frontend/scripts *.py
+recursive-include frontend/tests *.ts
+include frontend/.prettierignore frontend/.prettierrc.json
+recursive-exclude frontend/node_modules *
+recursive-exclude frontend/test-results *
+recursive-exclude frontend/playwright-report *
+recursive-include docs *.rst *.py *.css *.js *.html *.png *.svg
 recursive-include notebooks *.ipynb
 recursive-include tests *.py
 prune docs/_build
 prune data
+prune .data
 prune local_testing
 global-exclude __pycache__ *.py[cod] .DS_Store

@@ -61,9 +61,25 @@ def image_frames(array, dims=None):
         yield flat, "_".join(labels), np.asarray(arr[tuple(selection)])
 
 
-def export_image_files(path, array, *, dims=None, affine=None, geometry=None, format="nifti", unit="", description="MRax image"):
+def export_image_files(path, array, *, dims=None, affine=None, geometry=None, format="nifti", unit="", description="MRax image", overwrite=False):
     """Write one NIfTI per spatial frame, or one DICOM series per frame."""
     path = Path(path)
+    from .output_guard import require_new_file
+
+    if format not in {"nifti", "dicom"}:
+        raise ValueError("Image format must be 'nifti' or 'dicom'")
+    # Check every frame and slice before writing any file in a series.
+    for _, suffix, volume in image_frames(array, dims):
+        stem = path.name[:-7] if path.name.endswith(".nii.gz") else path.stem
+        stem += "_" + suffix if suffix else ""
+        if format == "nifti":
+            extension = ".nii.gz" if path.name.endswith(".nii.gz") else ".nii"
+            require_new_file(path.with_name(stem + extension), overwrite=overwrite)
+        else:
+            slices = mrax_to_nifti_volume(volume).shape[2]
+            for z in range(slices):
+                name = stem + (f"_slice-{z:04d}" if slices != 1 else "") + ".dcm"
+                require_new_file(path.with_name(name), overwrite=overwrite, warn=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(geometry, Mapping):
         geometry = SpatialGeometry.from_metadata(geometry)
@@ -79,7 +95,7 @@ def export_image_files(path, array, *, dims=None, affine=None, geometry=None, fo
             extension = ".nii.gz" if path.name.endswith(".nii.gz") else ".nii"
             output = path.with_name(stem + extension)
             exported = volume.astype(np.uint8) if volume.dtype == bool else volume
-            save_nifti(output, exported, matrix, dtype=exported.dtype)
+            save_nifti(output, exported, matrix, dtype=exported.dtype, overwrite=overwrite)
             outputs.append(output)
         elif format == "dicom":
             files, study_uid, reference_uid = _export_dicom_frame(path.with_name(stem + ".dcm"), volume, matrix,

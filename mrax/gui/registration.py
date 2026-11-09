@@ -1,6 +1,6 @@
 """Registration helpers for the MRax GUI.
 
-The functions in this module operate independently of Qt. Lazy SimpleITK
+The functions in this module operate on numerical image data. Lazy SimpleITK
 imports keep registration dependencies local to the registration workflow.
 """
 
@@ -57,7 +57,7 @@ def registration_choice_sets() -> dict[str, tuple[str, ...]]:
 
     return {
         "transform": ("translation", "rigid", "similarity", "affine"),
-        "metric": ("mattes_mi", "joint_histogram_mi", "mean_squares", "correlation", "ants_correlation", "demons"),
+        "metric": ("mattes_mi", "joint_histogram_mi", "mean_squares", "correlation", "ants_correlation"),
         "optimizer": ("gradient_descent", "regular_step_gradient_descent", "lbfgsb", "powell", "amoeba"),
         "interpolator": ("linear", "nearest", "bspline"),
         "initializer": ("geometry", "moments", "identity"),
@@ -186,6 +186,15 @@ def registration_method_factory(
         method.SetInterpolator(_sitk_interpolator(sitk, options.interpolator))
         _configure_optimizer(method, options)
         _configure_multiresolution(method, options)
+        minimum_size = min((*fixed_image.GetSize(), *moving_image.GetSize()))
+        smallest_level = max(options.shrink_factors, default=1)
+        if minimum_size / smallest_level < 4:
+            method.SetMetricUseFixedImageGradientFilter(False)
+            method.SetMetricUseMovingImageGradientFilter(False)
+        if minimum_size < 4:
+            # Recursive Gaussian smoothing requires four voxels on every axis.
+            method.SetShrinkFactorsPerLevel((1,))
+            method.SetSmoothingSigmasPerLevel((0.0,))
         initial = _initial_transform(sitk, fixed_image, moving_image, dimension, options)
         method.SetInitialTransform(initial, inPlace=False)
         return method
@@ -407,7 +416,10 @@ def _configure_metric(method, sitk, options: RegistrationOptions) -> None:
     elif metric == "ants_correlation":
         method.SetMetricAsANTSNeighborhoodCorrelation(radius=2)
     elif metric == "demons":
-        method.SetMetricAsDemons(10)
+        raise ValueError(
+            "The Demons metric requires displacement-field registration; "
+            "choose a metric supported by the linear transforms"
+        )
     else:
         raise ValueError(f"Unsupported SimpleITK metric {metric!r}")
 

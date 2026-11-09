@@ -1,29 +1,28 @@
-Fitting and timecourses
-=======================
+Fitting and analysis
+====================
 
-Fitting
--------
+In **Fit**:
 
-The Fit page uses the same fitting functions as scripted MRax workflows:
-:func:`mrax.core.loss_builder.run_fit`,
-:func:`mrax.core.loss_builder.make_model_callable`, and the experiment sanity
-checks. Frame exclusions are passed as ``frame_mask``. ROI selections are passed
-as spatial masks for full-map fits.
+1. Choose a model, compute device and optimizer. Set the iteration count and
+   learning rate, then review initial values, bounds and fixed parameters.
+2. Supply the required observables and references. Select frames to include
+   and configure regularization or constant dimensions if needed.
+3. Select a preview ROI to fit its mean signal. For voxelwise maps, choose
+   **Selected ROIs** and check the masks to include, or choose **Whole image**,
+   then use **Run full map fit**. Multiple masks form a union; hidden ROIs can
+   still be included. Display overlays never become fitting data.
 
-Available model choices mirror the built-in model factories in
-:mod:`mrax.library.default_models`.
+Use the sanity check to inspect missing inputs and shape or observable
+mismatches before fitting. The signal panel and fit inspection show predictions,
+parameter values, units and residuals. See :doc:`models` for model assumptions.
 
-Run ``Fit Sanity Check`` before fitting. It checks the exact GUI fit inputs and
-reports missing maps, shape mismatches, invalid bounds, and other conditions that
-would prevent ``run_fit`` from starting.
+Progress and cancellation controls remain available during a fit. Changing
+fit inputs prevents an earlier running result from replacing those edits.
+Save the workspace to retain fit settings and results.
 
-``Preview ROI Fit`` fits the selected ROI timecourse. ``Run Full-Map Fit`` fits
-the active experiment and replaces the displayed fitted maps with the result.
-``Save Fit`` writes the latest result using the normal MRax manifest layout.
-
-Timecourses
------------
-
-ROI timecourses are extracted with :func:`mrax.analysis.extract_timecourse` and
-:func:`mrax.analysis.extract_timecourse_from_experiment`. Use the same functions
-in scripts when you need a reproducible non-GUI analysis path.
+In **Analyze → ROI timecourses**, select enabled ROIs, an acquisition axis and a summary statistic,
+then choose **Analyze timecourse**. The chart compares the full ROI volumes;
+other acquisition axes follow the current frame. Switch to **Data table** to
+inspect values and finite voxel counts. Fit frame exclusions can be applied
+explicitly. Download the result from **Export data → Download timecourse CSV**.
+ROI map statistics and derived diffusion metrics are also available in Analyze.
