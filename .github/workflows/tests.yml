@@ -22,7 +22,7 @@ jobs:
       - name: Install package and test tools
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[gui,dev]"
       - uses: actions/setup-node@v7
         with:
           node-version: "24.22.2"
@@ -46,13 +46,53 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install lint tools
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[gui,dev]"
       - name: Run static checks
         run: |
           python -m ruff check mrax tests
           python -m isort --check-only mrax tests
           python -m pyright
           python -m compileall -q mrax tests
+
+  installation-profiles:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        profile: [base, full, gui]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.22.2"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Compile the bundled frontend
+        run: |
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+      - name: Build and install a profile without developer dependencies
+        shell: bash
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python -m pip install build
+          python -m build --wheel
+          wheel=$(echo dist/*.whl)
+          if [ "$PROFILE" != base ]; then wheel="$wheel[$PROFILE]"; fi
+          python -m venv tmp/install-profile
+          if [ "$RUNNER_OS" = Windows ]; then
+            profile_python=tmp/install-profile/Scripts/python.exe
+          else
+            profile_python=tmp/install-profile/bin/python
+          fi
+          "$profile_python" -m pip install --force-reinstall "$wheel"
+          "$profile_python" -m pip check
+          "$profile_python" -I tests/qualify_python_install.py --profile "$PROFILE"
 
   browser:
     strategy:
@@ -73,7 +113,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install backend and locked frontend tools
         run: |
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[gui,dev]"
           npm ci --prefix frontend
       - name: Install test browsers
         working-directory: frontend
@@ -93,11 +133,11 @@ jobs:
         run: |
           python -m build --wheel
           python tests/qualify_distribution.py dist
-          python -m venv --system-site-packages .wheel-env
+          python -m venv .wheel-env
           if [ "$RUNNER_OS" = "Windows" ]; then
             wheel_python=.wheel-env/Scripts/python.exe
           else
             wheel_python=.wheel-env/bin/python
           fi
-          "$wheel_python" -m pip install --no-deps --force-reinstall dist/*.whl
+          "$wheel_python" -m pip install --force-reinstall "$(echo dist/*.whl)[gui]"
           "$wheel_python" -I tests/qualify_browser_install.py --device cpu

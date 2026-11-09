@@ -13,8 +13,7 @@ from pathlib import Path, PurePosixPath
 
 FORBIDDEN_PARTS = {
     "data",
-    ".data",
-    "local_testing",
+    "tmp",
     "node_modules",
     "test-results",
     "playwright-report",

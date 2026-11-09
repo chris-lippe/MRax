@@ -17,9 +17,11 @@ MRax is intended for research use. Coding agents assisted development.
 pip install mrax
 ```
 
-The base package includes fitting, reconstruction, import, preprocessing,
-registration, analysis, storage and the GUI. Start it with `mrax-gui`;
-see the [GUI user guide](https://chris-lippe.github.io/MRax/gui.html) for usage.
+The base package includes CPU fitting, reconstruction, analysis, common MRI I/O
+and storage. Install `mrax[full]` for specialized raw importers, registration,
+DIPY interoperability and plotting, or `mrax[gui]` for the browser GUI and its
+scientific tools. Start the latter with `mrax-gui`. See the
+[GUI user guide](https://chris-lippe.github.io/MRax/gui.html) for usage.
 
 Optional BM3D/BM4D
 denoisers use `pip install "mrax[denoise-external]"` under their upstream
@@ -50,6 +52,8 @@ fields, history = run_fit(
 ```
 
 ## Documentation
+
+Visit the [MRax documentation](https://chris-lippe.github.io/MRax/) for details on usage and development.
 
 - [Overview and workflows](https://chris-lippe.github.io/MRax/overview.html)
 - [Fitting guide](https://chris-lippe.github.io/MRax/model_fitting.html)

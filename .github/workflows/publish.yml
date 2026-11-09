@@ -26,7 +26,7 @@ jobs:
       - name: Install release validation tools
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,docs]"
+          python -m pip install -e ".[gui,dev,docs]"
       - name: Build and check browser assets
         run: |
           npm ci --prefix frontend
@@ -52,8 +52,8 @@ jobs:
           python -m build
           python -m twine check dist/*
           python tests/qualify_distribution.py dist
-          python -m venv --system-site-packages /tmp/mrax-release-wheel
-          /tmp/mrax-release-wheel/bin/python -m pip install --no-deps --force-reinstall dist/*.whl
+          python -m venv /tmp/mrax-release-wheel
+          /tmp/mrax-release-wheel/bin/python -m pip install --force-reinstall "$(echo dist/*.whl)[gui]"
           /tmp/mrax-release-wheel/bin/python -I tests/qualify_browser_install.py --device cpu
       - uses: actions/upload-artifact@v4
         with:

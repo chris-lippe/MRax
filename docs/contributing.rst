@@ -38,9 +38,15 @@ Docs changes:
 
 Dependency and release changes:
 
-- Runtime dependencies live in ``pyproject.toml`` when required by ``pip install mrax``.
+- Shared runtime dependencies live in ``pyproject.toml``. The ``full`` extra adds
+  specialized scientific tools; ``gui`` adds those tools and the web backend.
+  Keep imports usable without unrelated extras and make missing-feature errors
+  name the required extra.
 - Development, documentation, and notebook authoring tools belong in contributor extras.
 - Release notes list user-facing changes.
+- Build and qualify each installation profile in an isolated environment. Keep
+  desktop installer recipes, browser runtimes and installer outputs outside this
+  repository.
 
 GUI development
 ---------------

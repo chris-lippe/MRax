@@ -548,7 +548,7 @@ def _sitk():
         import SimpleITK as sitk
     except ImportError as exc:
         raise ImportError(
-            "SimpleITK is required for GUI registration. Install MRax with `pip install mrax`."
+            "SimpleITK is required for GUI registration. Install `pip install 'mrax[gui]'`."
         ) from exc
     return sitk
 

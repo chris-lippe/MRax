@@ -1,4 +1,13 @@
 -r requirements.txt
+# Scientific and browser development; end users install the relevant package extra.
+pymapvbvd>=0.7,<1
+dipy>=1.10,<2
+pypulseq>=1.4,<2
+SimpleITK>=2.4,<3
+matplotlib>=3.9,<4
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+httpx>=0.27,<1
 build
 coverage
 pytest

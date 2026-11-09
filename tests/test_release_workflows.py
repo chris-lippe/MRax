@@ -39,6 +39,7 @@ def test_release_archive_contains_local_gui_assets_and_one_launcher(tmp_path):
     "name",
     [
         "data/private.json",
+        "tmp/private.json",
         "mrax/.data/private.json",
         "frontend/test-results/session.json",
         "frontend/node_modules/package/index.js",

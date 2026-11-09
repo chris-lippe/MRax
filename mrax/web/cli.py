@@ -57,7 +57,7 @@ def main(argv=None) -> int:
 
         from .app import create_app
     except ImportError as exc:
-        parser.exit(2, f"MRax installation is incomplete; reinstall mrax: {exc}\n")
+        parser.exit(2, f"Install the GUI with pip install 'mrax[gui]': {exc}\n")
     if not 0 <= args.port <= 65535:
         parser.error("port must be between 0 and 65535")
     if args.workspace is not None and not args.workspace.exists():

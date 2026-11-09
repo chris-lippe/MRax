@@ -9,10 +9,13 @@ Starting the GUI
 
 .. code-block:: bash
 
-   pip install mrax
+   pip install "mrax[gui]"
    mrax-gui
 
-The command opens a browser tab. Keep the terminal running while you work;
+In a standalone Windows distribution, start **MRax.exe**. Its installer includes
+the Python and browser runtimes; no Python installation is required.
+
+For a Python installation, the command opens a browser tab. Keep the terminal running while you work;
 save your workspace before stopping it with Ctrl+C. To open a saved workspace
 at startup, use ``mrax-gui /path/to/study.mrax``. Run ``mrax-gui --help`` for
 startup options.

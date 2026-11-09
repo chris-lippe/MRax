@@ -26,8 +26,9 @@ Getting Started
 
      pip install mrax
 
-2. Launch the desktop GUI to import measurements, reconstruct images and fit maps::
+2. To use the browser GUI, install its extra and start it::
 
+     pip install "mrax[gui]"
      mrax-gui
 
 3. Follow :doc:`gui` for interactive analysis, or :doc:`guides` for Python workflows.
@@ -40,7 +41,7 @@ Getting Started
    through WSL 2. Native Windows installations use CPU JAX.
    See :doc:`windows_setup` and :doc:`docker_setup`.
 
-For editable installations, containers and contributor checks, see :doc:`setup`.
+For installation profiles, see :doc:`setup`. Contributor checks are in :doc:`contributing`.
 
 Key Modules
 -----------

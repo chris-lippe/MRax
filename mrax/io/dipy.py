@@ -11,7 +11,7 @@ def _import_dipy():
         import dipy  # type: ignore
     except Exception as exc:  # pragma: no cover - invalid runtime environment
         raise ImportError(
-            "dipy is required for DIPY I/O helpers. Reinstall MRax with `pip install mrax`."
+            "dipy is required for DIPY I/O helpers. Install `pip install 'mrax[full]'`."
         ) from exc
     return dipy
 

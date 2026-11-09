@@ -24,6 +24,7 @@ recursive-include notebooks *.ipynb
 recursive-include tests *.py
 prune docs/_build
 prune data
+prune tmp
 prune .data
 prune local_testing
 global-exclude __pycache__ *.py[cod] .DS_Store
