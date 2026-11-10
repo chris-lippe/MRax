@@ -2,6 +2,8 @@ import { useEffect, useId, useState } from 'react';
 import { api, type Job, type Options, type PipelineStep, type Workspace } from './api';
 import { WorkbenchIcon } from './WorkbenchIcon';
 import { DataEditor, dataController, dataDraft } from './Controls';
+import { PipelineWorkflowBlock, type BlockOptions } from './PipelineWorkflowBlock';
+import type { WorkflowDocument } from './reusableWorkflows';
 import {
   activePipelineJob,
   copiedStep,
@@ -44,15 +46,17 @@ const statusLabels: Record<string, string> = {
 function icon(step: PipelineStep) {
   return step.kind === 'reconstruct'
     ? 'reconstruct'
-    : ['register', 'stored_registration'].includes(step.kind)
-      ? 'registration'
-      : step.kind === 'drift'
-        ? 'drift'
-        : step.family === 'denoise'
-          ? 'denoise'
-          : step.family === 'normalize'
-            ? 'normalize'
-            : 'series';
+    : step.kind === 'fit'
+      ? 'fit'
+      : ['register', 'stored_registration'].includes(step.kind)
+        ? 'registration'
+        : step.kind === 'drift'
+          ? 'drift'
+          : step.family === 'denoise'
+            ? 'denoise'
+            : step.family === 'normalize'
+              ? 'normalize'
+              : 'series';
 }
 
 export function Pipeline({
@@ -75,6 +79,7 @@ export function Pipeline({
   const [settings, setSettings] = useState<string | null>(null);
   const [insertAt, setInsertAt] = useState<number | null>(null);
   const [insertion, setInsertion] = useState('gaussian');
+  const [block, setBlock] = useState<BlockOptions | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -102,15 +107,20 @@ export function Pipeline({
     setInsertAt(null);
     setError('');
     setNotice('');
+    setBlock(null);
   }, [context]);
   const catalog = loaded?.key === catalogKey ? loaded.catalog : null;
   const current = draft ?? newPipelineDraft(w);
   const changed = draft ? draftChanged(draft) : false;
-  const issue = draft ? draftProblem(draft) : '';
+  const issue = draft ? draftProblem(draft, w) : '';
   const stale = Boolean(draft && draft.generation !== pipeline.generation);
   const blocked = busy || activePipelineJob(job);
   const ownRun = draft?.submission && draft.submission === job?.id ? job : pipelineJob;
-  const signature = ownRun?.summary?.pipeline as { signature?: string } | undefined;
+  const signature = ownRun?.summary?.pipeline as
+    { signature?: string; generation?: number } | undefined;
+  const awaitingCommit =
+    ownRun?.status === 'completed' &&
+    ((signature?.generation ?? 0) > pipeline.generation || draft?.submission === ownRun.id);
   const matchingRun =
     ownRun &&
     (activePipelineJob(ownRun) ||
@@ -121,6 +131,7 @@ export function Pipeline({
   const activity = matchingRun?.pipeline;
   const locked =
     submitting ||
+    awaitingCommit ||
     Boolean(
       draft?.submission && draft.submission === matchingRun?.id && activePipelineJob(matchingRun),
     ) ||
@@ -137,10 +148,14 @@ export function Pipeline({
         )
       : current.steps;
   const reconstruction = steps.find((step) => step.kind === 'reconstruct');
+  const sourceKind = reconstruction?.enabled ? 'kspace' : 'image';
+  const source = pipeline.sources?.[sourceKind];
   const methods = catalog?.methods.filter((method) => method.id !== 'dti') ?? [];
   function label(step: DraftStep) {
     try {
-      const method = stepOptions(step).method;
+      const options = stepOptions(step);
+      const method = options.method;
+      if (options.workflow) return (options.workflow as WorkflowDocument).name;
       return step.kind === 'process'
         ? (catalog?.methods.find((item) => item.id === method)?.label ?? step.label)
         : step.label;
@@ -177,8 +192,12 @@ export function Pipeline({
   function add() {
     if (insertAt === null || !catalog) return;
     try {
-      const step =
-        insertion === 'register'
+      const step = ['reconstruct', 'fit'].includes(insertion)
+        ? (() => {
+            if (!block) throw Error('Choose a workflow for the block.');
+            return insertedStep(insertion, structuredClone(block), block.workflow.name);
+          })()
+        : insertion === 'register'
           ? insertedStep(
               'register',
               {
@@ -199,10 +218,17 @@ export function Pipeline({
             : processDraftStep(w, catalog, insertion);
       const next = [...current.steps];
       const minimum = next[0]?.kind === 'reconstruct' ? 1 : 0;
-      next.splice(Math.max(minimum, Math.min(insertAt, next.length)), 0, step);
+      next.splice(
+        insertion === 'reconstruct' ? 0 : Math.max(minimum, Math.min(insertAt, next.length)),
+        0,
+        step,
+      );
+      const problem = draftProblem({ ...current, steps: next }, w);
+      if (problem) throw Error(problem);
       update({ ...current, steps: next });
       setSettings(step.id);
       setInsertAt(null);
+      setBlock(null);
       setNotice('Step inserted. Configure its settings before applying the pipeline.');
     } catch (failure) {
       setError(String(failure));
@@ -304,22 +330,24 @@ export function Pipeline({
                       insertedStep(
                         'reconstruct',
                         { view: 'mrax_reconstruction', component: 'magnitude', device: 'cpu' },
-                        'Image reconstruction',
+                        w.reconstruction_label ?? 'Reconstruction',
                       ),
                       ...current.steps,
                     ],
                   });
               }}
             >
-              <option value="vendor">Vendor image</option>
+              <option value="vendor">Image data</option>
               <option
                 value="mrax"
-                disabled={!w.has_reconstruction || (!reconstruction && steps.length >= 64)}
+                disabled={!w.can_reconstruct || (!reconstruction && steps.length >= 64)}
                 title={
-                  !w.has_reconstruction ? 'Reconstruct images first in Reconstruct.' : undefined
+                  !w.can_reconstruct
+                    ? (w.reconstruction_unavailable ?? 'No valid k-space data.')
+                    : undefined
                 }
               >
-                MRax reconstruction
+                {reconstruction ? label(reconstruction) : 'Reconstruction (.mrec)'}
               </option>
             </select>
           </label>
@@ -375,7 +403,12 @@ export function Pipeline({
         <div className="pipeline-draft-toolbar">
           <span>{changed ? 'Unapplied changes' : 'Confirmed pipeline'}</span>
           {draft && (
-            <button className="secondary" disabled={locked} onClick={discard}>
+            <button
+              className="secondary"
+              data-tutorial="pipeline-discard"
+              disabled={locked}
+              onClick={discard}
+            >
               Discard changes
             </button>
           )}
@@ -425,10 +458,19 @@ export function Pipeline({
           </div>
         )}
         <ol className="pipeline-steps" aria-busy={Boolean(activePipelineJob(matchingRun))}>
-          <li className="pipeline-source">
-            <WorkbenchIcon name="lock" />
-            <span>Original data</span>
-            <small>Protected</small>
+          <li
+            className="pipeline-source"
+            aria-label="Pipeline input"
+            title={source?.path ?? undefined}
+          >
+            <WorkbenchIcon name={sourceKind === 'kspace' ? 'reconstruct' : 'image'} />
+            <strong>{sourceKind === 'kspace' ? 'Acquired k-space' : 'Image data'}</strong>
+            {source && (
+              <>
+                <small>{source.format}</small>
+                <small className="pipeline-source-location">{source.location}</small>
+              </>
+            )}
           </li>
           {steps.map((step, index) => {
             const progress = activity?.steps.find(
@@ -507,9 +549,16 @@ export function Pipeline({
                 {!['image', 'view', undefined].includes(
                   step.options.input as string | undefined,
                 ) && <p className="control-note">Input: {String(step.options.input)}</p>}
+                {step.kind === 'fit' && (
+                  <small className="control-note">
+                    Fitting workflow (.mfit) · {step.result_maps?.length ?? 0} maps stored alongside
+                    image data
+                  </small>
+                )}
                 <div className="pipeline-step-actions">
                   <button
                     className="secondary"
+                    data-tutorial={step.family === 'denoise' ? 'pipeline-denoise-edit' : undefined}
                     disabled={locked}
                     onClick={() => {
                       setSettings(settings === step.id ? null : step.id);
@@ -603,14 +652,7 @@ export function Pipeline({
           })}
         </ol>
         {insertAt !== null && (
-          <form
-            className="pipeline-settings"
-            aria-label="Insert pipeline step"
-            onSubmit={(event) => {
-              event.preventDefault();
-              add();
-            }}
-          >
+          <div className="pipeline-settings" role="form" aria-label="Insert pipeline step">
             <h3>Insert at position {insertAt + 1}</h3>
             <label>
               Processing step
@@ -618,7 +660,10 @@ export function Pipeline({
                 aria-label="New pipeline step"
                 value={insertion}
                 disabled={locked || !catalog}
-                onChange={(event) => setInsertion(event.target.value)}
+                onChange={(event) => {
+                  setInsertion(event.target.value);
+                  setBlock(null);
+                }}
               >
                 {methods.map((method) => (
                   <option key={method.id} value={method.id} disabled={Boolean(method.unavailable)}>
@@ -630,55 +675,104 @@ export function Pipeline({
                 <option value="drift" disabled={w.frame_count < 2}>
                   Drift correction
                 </option>
+                <option
+                  value="reconstruct"
+                  disabled={!w.can_reconstruct || Boolean(reconstruction)}
+                >
+                  Reconstruction workflow (.mrec)
+                </option>
+                <option value="fit">Fitting workflow (.mfit)</option>
               </select>
             </label>
+            {insertion === 'reconstruct' && (
+              <p className="control-note">
+                Reconstruction uses acquired k-space and is inserted first.
+              </p>
+            )}
+            {['reconstruct', 'fit'].includes(insertion) && (
+              <PipelineWorkflowBlock
+                workspace={w}
+                kind={insertion as 'reconstruct' | 'fit'}
+                value={block}
+                onChange={setBlock}
+                disabled={locked}
+              />
+            )}
             <div className="button-row">
-              <button className="secondary" disabled={locked || !catalog}>
+              <button
+                type="button"
+                onClick={add}
+                className="secondary"
+                disabled={
+                  locked || !catalog || (['reconstruct', 'fit'].includes(insertion) && !block)
+                }
+              >
                 Insert into draft
               </button>
               <button type="button" className="secondary" onClick={() => setInsertAt(null)}>
                 Cancel insertion
               </button>
             </div>
-          </form>
+          </div>
         )}
         {selected && controller && (
           <div className="pipeline-settings">
-            <DataEditor
-              key={selected.id}
-              label="Pipeline step settings"
-              controller={controller}
-              disabled={locked}
-              applyLabel="Validate draft settings"
-              onApply={async (options) =>
-                changeStep(selected.id, {
-                  options,
-                  editor: undefined,
-                  version: crypto.randomUUID(),
-                })
-              }
-            />
+            {['reconstruct', 'fit'].includes(selected.kind) ? (
+              <PipelineWorkflowBlock
+                key={selected.id}
+                workspace={w}
+                kind={selected.kind as 'reconstruct' | 'fit'}
+                value={selected.options}
+                onChange={(options) =>
+                  changeStep(selected.id, {
+                    options,
+                    editor: undefined,
+                    version: crypto.randomUUID(),
+                  })
+                }
+                disabled={locked}
+              />
+            ) : (
+              <>
+                <DataEditor
+                  key={selected.id}
+                  label="Pipeline step settings"
+                  controller={controller}
+                  disabled={locked}
+                  applyLabel="Validate draft settings"
+                  onApply={async (options) =>
+                    changeStep(selected.id, {
+                      options,
+                      editor: undefined,
+                      version: crypto.randomUUID(),
+                    })
+                  }
+                />
+              </>
+            )}
             <p className="control-note">
               Settings remain in this draft until Apply pipeline. Use action controls for parameter
               descriptions and dedicated forms.
             </p>
             <div className="button-row">
-              <button
-                className="secondary"
-                disabled={locked || Boolean(issue)}
-                onClick={() => {
-                  try {
-                    const options = stepOptions(selected);
-                    changeStep(selected.id, { options, editor: undefined });
-                    setSettings(null);
-                    edit({ ...selected, options });
-                  } catch (failure) {
-                    setError(String(failure));
-                  }
-                }}
-              >
-                Use action controls
-              </button>
+              {selected.kind !== 'fit' && (
+                <button
+                  className="secondary"
+                  disabled={locked || Boolean(issue)}
+                  onClick={() => {
+                    try {
+                      const options = stepOptions(selected);
+                      changeStep(selected.id, { options, editor: undefined });
+                      setSettings(null);
+                      edit({ ...selected, options });
+                    } catch (failure) {
+                      setError(String(failure));
+                    }
+                  }}
+                >
+                  Use action controls
+                </button>
+              )}
               <button className="secondary" onClick={() => setSettings(null)}>
                 Close settings
               </button>

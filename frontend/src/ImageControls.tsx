@@ -4,6 +4,7 @@ import { SceneControls } from './SceneControls';
 import { ViewingModes } from './ViewingModes';
 import type { WorkflowTask } from './WorkflowNav';
 import { InspectorSection } from './InspectorSection';
+import { viewLabel } from './viewing';
 
 export function ImageControls({
   workspace,
@@ -74,6 +75,7 @@ export function ImageControls({
                   ].map((view) => (
                     <option
                       key={view}
+                      value={view}
                       disabled={
                         view === 'Map'
                           ? !workspace.maps.length
@@ -86,7 +88,7 @@ export function ImageControls({
                                 : false
                       }
                     >
-                      {view}
+                      {viewLabel(workspace, view)}
                     </option>
                   ))}
                 </select>

@@ -2,6 +2,7 @@ import type { Pixels } from './api';
 
 export class ImagePlaneCache {
   private readonly entries = new Map<string, Pixels>();
+  private readonly buffers = new Map<ArrayBufferLike, number>();
   private used = 0;
   constructor(private readonly limit = 64 * 1024 * 1024) {}
   get bytes() {
@@ -17,25 +18,34 @@ export class ImagePlaneCache {
   }
   set(key: string, value: Pixels) {
     const old = this.entries.get(key);
-    if (old) {
-      this.entries.delete(key);
-      this.used -= old.byteLength;
-    }
-    if (value.byteLength > this.limit) return;
+    if (old) this.remove(key);
+    // A typed-array view retains its entire buffer, including sibling planes.
+    // Count shared buffers once, and release their budget only at the last view.
+    if (value.buffer.byteLength > this.limit) return;
     this.entries.set(key, value);
-    this.used += value.byteLength;
+    const references = this.buffers.get(value.buffer) ?? 0;
+    if (!references) this.used += value.buffer.byteLength;
+    this.buffers.set(value.buffer, references + 1);
     while (this.used > this.limit || this.entries.size > 128) {
       const oldest = this.entries.keys().next().value!;
-      this.used -= this.entries.get(oldest)!.byteLength;
-      this.entries.delete(oldest);
+      this.remove(oldest);
     }
   }
   clearWorkspace(id: string) {
-    for (const [key, value] of this.entries) {
+    for (const key of this.entries.keys()) {
       if (JSON.parse(key)[0] === id) {
-        this.entries.delete(key);
-        this.used -= value.byteLength;
+        this.remove(key);
       }
+    }
+  }
+  private remove(key: string) {
+    const value = this.entries.get(key)!;
+    this.entries.delete(key);
+    const references = this.buffers.get(value.buffer)!;
+    if (references > 1) this.buffers.set(value.buffer, references - 1);
+    else {
+      this.buffers.delete(value.buffer);
+      this.used -= value.buffer.byteLength;
     }
   }
 }

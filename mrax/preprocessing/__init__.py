@@ -29,6 +29,7 @@ from .motion import (
     register_image,
     resample_image,
 )
+from .noise import estimate_noise, estimate_noise_sigma
 
 __all__ = [
     "Affine2DTransform",
@@ -48,6 +49,8 @@ __all__ = [
     "denoise_bm3d",
     "denoise_bm4d",
     "denoise_filter",
+    "estimate_noise",
+    "estimate_noise_sigma",
     "linear_drift_correct_dataset",
     "linear_drift_correct_framestack",
     "motion_correct_dataset",

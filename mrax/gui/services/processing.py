@@ -185,6 +185,9 @@ def processing_methods(session):
                         kind="choice",
                         choices=("full", "basic"),
                     ),
+                    _field("noise_model", "Noise estimation model", value="auto", kind="choice",
+                           choices=("auto", "gaussian", "background")),
+                    _field("noise_coils", "Effective noise coils", value=1, kind="integer", minimum=1, maximum=64),
                     complex_mode,
                 ],
             }
@@ -335,7 +338,9 @@ def processing_catalog(workspace):
         {"id": "original", "label": "Original image data"},
     ]
     if session.reconstruction_array is not None:
-        sources.append({"id": "reconstruction", "label": "MRax reconstruction"})
+        from .reconstruction import reconstruction_label
+
+        sources.append({"id": "reconstruction", "label": reconstruction_label(workspace)})
     sources.extend(
         {"id": "map:" + name, "label": "Map: " + name}
         for name in session.map_names
@@ -400,7 +405,7 @@ def _source(workspace, key, component):
     elif key.startswith("map:"):
         from .pipeline import display_session
 
-        session = display_session(workspace, fitted=True)
+        session = display_session(workspace, fitted=True, map_name=key.removeprefix("map:"))
     experiment = session.build_experiment()
     dims = dict(experiment.dims)
     geometry = session.build_dataset().spatial_geometry
@@ -552,7 +557,9 @@ def _reference(workspace, options, dims, unit, geometry, *, series):
     return np.asarray(reshape_dims_to_frames(array, context.experiment_dims))[index]
 
 
-def _filter(data, axes, method, parameters, progress):
+def _filter(data, axes, method, parameters, progress, *, reports=None, roi_estimate=None):
+    from .noise_estimation import block_estimate
+
     other = [axis for axis in range(data.ndim) if axis not in axes]
     order = other + axes
     grouped = data.transpose(order)
@@ -568,8 +575,22 @@ def _filter(data, axes, method, parameters, progress):
         else:
             function = denoise_bm3d if method == "bm3d" else denoise_bm4d
             values = {key: value for key, value in parameters.items() if key != "complex_mode"}
+            estimate = None
+            if parameters["sigma"] is None:
+                estimate = roi_estimate or block_estimate(block, parameters)
+                values["sigma"] = estimate["sigma"]
+                if reports is not None and roi_estimate is None and estimate.get("method") != "insufficient_samples":
+                    reports.append(estimate)
             if np.iscomplexobj(block) and parameters["complex_mode"] == "real_imag":
-                result = function(block.real, **values) + 1j * function(block.imag, **values)
+                components = {} if estimate is None else estimate.get("components", {})
+                real_sigma = components.get("real", values["sigma"])
+                imag_sigma = components.get("imaginary", values["sigma"])
+                if isinstance(real_sigma, dict):
+                    real_sigma = real_sigma["sigma"]
+                    imag_sigma = imag_sigma["sigma"]
+                result = function(block.real, **{**values, "sigma": real_sigma}) + 1j * function(
+                    block.imag, **{**values, "sigma": imag_sigma}
+                )
             else:
                 result = function(np.abs(block) if np.iscomplexobj(block) else block, **values)
         result = np.asarray(result)
@@ -675,6 +696,8 @@ def _dti(workspace, options, progress):
 
 
 def apply_processing(workspace, options, progress):
+    from .noise_estimation import estimate_input, noise_mask, summarize
+
     session = workspace.session
     options = dict(options)
     if not session.is_loaded:
@@ -706,6 +729,8 @@ def apply_processing(workspace, options, progress):
     ):
         raise ValueError("Limit transformed processing with transferred ROIs on the target grid")
     key = method["id"]
+    estimates = []
+    estimated_noise = None
     if key in FILTERS:
         axes = options.get("axes", session.spatial_dim_names)
         if (
@@ -729,7 +754,18 @@ def apply_processing(workspace, options, progress):
             raise ValueError(
                 "This method needs finite input; use NaN-aware Gaussian for missing samples"
             )
-        result = _filter(data, [list(dims).index(name) for name in axes], key, parameters, progress)
+        estimation_mask = None
+        if key in {"bm3d", "bm4d"} and parameters["sigma"] is None:
+            estimation_mask = noise_mask(workspace, options, dims, data.shape)
+            if estimation_mask is not None:
+                estimated_noise = estimate_input(data, dims, axes, parameters, estimation_mask)
+        result = _filter(
+            data, [list(dims).index(name) for name in axes], key, parameters, progress,
+            reports=estimates, roi_estimate=estimated_noise,
+        )
+        if key in {"bm3d", "bm4d"} and parameters["sigma"] is None and estimated_noise is None:
+            count = int(np.prod([size for name, size in dims.items() if name not in axes]))
+            estimated_noise = summarize(estimates, blocks=count)
     else:
         if np.iscomplexobj(data):
             raise ValueError(
@@ -779,7 +815,7 @@ def apply_processing(workspace, options, progress):
         mask = broadcast_mask(roi.mask, data.shape, mask_dims=roi.dims, target_dims=tuple(dims))
         changes_unit = key == "normalize" or (key == "baseline" and parameters["mode"] == "divide")
         result = np.where(mask, result, np.nan if changes_unit else data)
-    return _create_result(
+    summary = _create_result(
         workspace,
         result,
         context,
@@ -788,6 +824,9 @@ def apply_processing(workspace, options, progress):
         parameters,
         source_name,
     )
+    if estimated_noise is not None:
+        summary["noise_estimate"] = estimated_noise
+    return summary
 
 
 def rename_processing_sources(workspace, old, new):

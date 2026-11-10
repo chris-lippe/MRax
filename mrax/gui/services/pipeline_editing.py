@@ -48,7 +48,7 @@ def apply_pipeline_draft(workspace, options, progress):
         if client_id in existing and client_id != source_id:
             raise ValueError("A draft cannot replace the identity of another step")
         kind = row.get("kind")
-        if kind not in {"process", "register", "stored_registration", "drift", "reconstruct"}:
+        if kind not in {"process", "register", "stored_registration", "drift", "reconstruct", "fit"}:
             raise ValueError("Choose a supported pipeline operation")
         if previous is not None and kind != previous["kind"]:
             raise ValueError("Insert a new step to change its operation type")
@@ -88,6 +88,9 @@ def apply_pipeline_draft(workspace, options, progress):
         step.update(enabled=enabled, _draft_id=client_id)
         result.append(step)
     pipeline["steps"] = result
+    from .pipeline_blocks import validate_chain
+
+    validate_chain(candidate, result)
     _evaluate(candidate, progress)
     for step in result:
         step.pop("_draft_id", None)

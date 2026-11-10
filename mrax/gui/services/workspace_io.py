@@ -124,6 +124,15 @@ def save_workspace_folder(workspace, root):
         "array_file": "workflow_arrays.npz",
         "processed_arrays": processed_arrays,
         "pipelines": pipelines,
+        "reconstruction_settings": {
+            name: {
+                key: value
+                for key, value in (entry.get("kspace_metadata") or {}).items()
+                if key.startswith("reconstruction_") or key == "output_product"
+            }
+            for name, entry in (session.data or {}).get("experiments", {}).items()
+            if (entry.get("kspace_metadata") or {}).get("reconstruction_pipeline")
+        },
         "source_kind": session.source_kind,
         "import_metadata": session.import_metadata,
         "source_files": workspace.source_files,
@@ -217,6 +226,24 @@ def load_workspace_root(root, *, key):
                 session.study.datasets[list(session.study.names).index(name)].processed.update(
                     target
                 )
+        # Keep the cached reconstruction's recipe even if its processing step is removed.
+        reconstructions = workflow.get("reconstruction_settings") or {}
+        if not isinstance(reconstructions, dict):
+            raise ValueError("Invalid reconstruction settings in workspace")
+        for name, settings in reconstructions.items():
+            if name not in session.data["experiments"] or not isinstance(settings, dict):
+                raise ValueError("Invalid reconstruction settings in workspace")
+            from mrax.reco.plans import normalize_plan
+
+            if settings.get("reconstruction_pipeline") is not None:
+                settings["reconstruction_pipeline"] = normalize_plan(
+                    settings["reconstruction_pipeline"]
+                )
+            entry = session.data["experiments"][name]
+            entry["kspace_metadata"] = {**(entry.get("kspace_metadata") or {}), **settings}
+            if session.study is not None and name in session.study.names:
+                dataset = session.study.datasets[list(session.study.names).index(name)]
+                dataset.kspace_metadata = dict(entry["kspace_metadata"])
         for name, row in dict(workflow.get("registrations") or {}).items():
             result = {
                 k: v for k, v in row.items() if not k.endswith("_array") and k != "transform_file"

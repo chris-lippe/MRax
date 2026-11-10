@@ -27,14 +27,28 @@ registration transforms or fitted results.
 Applying workflows
 ------------------
 
-**Replace processing steps** replays the recipe from protected source data,
-retaining the target's reconstruction step. **Append workflow steps** adds to
+**Replace processing steps** replaces the chain with the saved recipe.
+Without a reconstruction block, its source is imported image data.
+**Append workflow steps** adds to
 the existing pipeline. Replacing is repeatable; appending intentionally applies
 the added operations again. Individual imported steps remain editable in the
 processing pipeline.
 
+Use **Insert step** to include a reconstruction (``.mrec``) or fitting (``.mfit``)
+workflow. Choose a session workflow or open its file, then assign its inputs.
+Reconstruction requires valid acquired k-space and can occur only once, first.
+Incompatible acquisitions are rejected. Fitting uses the image state at its
+position in the chain and stores separately named maps without replacing images.
+Removing a fitting block retains its maps. Confirm or discard edits with the
+pipeline controls.
+
 A reconstruction workflow uses the target's raw data and replaces its
 reconstruction step. Existing image processing is then reapplied.
+In **Reconstruct**, choose a ``.mrec`` preset, insert or remove stages, and expand
+each stage to edit its settings. Fourier, gridded Fourier, NUFFT adjoint and
+variational presets are included. **Apply reconstruction** confirms the changes;
+**Discard changes** restores the confirmed plan. **Open .mrec** loads a plan
+without running it; **Reconstruction workflows** saves or shares the draft.
 Processing and reconstruction changes retain fitted maps; the GUI marks them
 as requiring a new fit when their input state has changed.
 
@@ -95,6 +109,20 @@ an explicit converter.
 
 Version 1 permits ``process``, ``register`` and ``drift`` steps in ``.mpip``,
 one ``reconstruct`` step in ``.mrec``, and one ``fit`` step in ``.mfit``.
+Processing files containing reconstruction or fitting blocks use format version 2.
+Each block's ``settings.workflow`` embeds the complete version 1 ``.mrec`` or
+``.mfit`` document; ``settings.bindings`` maps its input IDs to bindings declared
+by the enclosing ``.mpip``. Embedded documents keep their own binding namespace
+and cannot contain further workflow blocks. No external workflow paths are saved.
+Version 1 files remain readable; readers that do not support version 2 reject it.
+Reconstruction settings contain a ``pipeline`` with ``schema_version: 1``, a
+``name``, an ``encoding`` (``any``, ``cartesian`` or ``sampled``), and ordered
+``stages``. Each stage has ``kind``, ``options``, optional ``enabled`` and ``when``.
+Empty options inherit the target acquisition's settings. ``when`` is ``always``,
+``cartesian``, ``sampled`` or ``configured``; the latter runs an acquisition
+correction only when its metadata or explicit options configure it. Disabled or
+removed stages do not run. Exactly one solver, output geometry and coil
+combination are required. Measured samples are retained.
 Step order is significant. IDs are unique within their lists, and at least one
 step must be enabled. Bindings are declared with an ID, kind and label; an input
 refers to one using ``{"$binding": "input_1"}``. Resource names are assigned

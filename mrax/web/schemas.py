@@ -113,11 +113,20 @@ class SceneInfo(BaseModel):
 
 
 class ExperimentInfo(BaseModel):
+    reconstruction_label: str = "Reconstruction"
     name: str
     frames: int
     maps: list[str]
     has_reconstruction: bool
     rois: list[str]
+
+
+class NavigationCommand(Command):
+    revision: int = Field(ge=0)
+    view_revision: int = Field(ge=0)
+    indices: dict[str, int] = Field(min_length=1, max_length=16)
+    commit: bool = True
+    include_images: bool = True
 
 
 class ViewCommand(Command):
@@ -281,9 +290,19 @@ class PipelineStep(BaseModel):
     input_grid: dict[str, Any] | None = None
     output_grid: dict[str, Any] | None = None
     plane_dims: list[str] = []
+    noise_estimate: dict[str, Any] | None = None
+    result_maps: list[str] = []
+
+
+class PipelineSource(BaseModel):
+    kind: Literal["image", "kspace"]
+    format: str
+    location: str
+    path: str | None = None
 
 
 class PipelineInfo(BaseModel):
+    sources: dict[str, PipelineSource] = {}
     enabled: bool = True
     generation: int = 0
     signature: str = "original"
@@ -328,7 +347,10 @@ class WorkspaceInfo(BaseModel):
     maps: list[dict[str, Any]] = []
     active_map: str | None = None
     reconstruction_component: str = "magnitude"
+    reconstruction_label: str = "Reconstruction"
     reconstruction_coil: int | None = None
+    reconstruction_unavailable: str | None = None
+    reconstruction_encoding: str | None = None
     coil_count: int = 0
     unwrap_phase: bool = True
     kspace_mode: str = "log_magnitude"
@@ -402,6 +424,11 @@ class TaskCommand(Command):
         "save",
         "export",
     ]
+    options: dict[str, Any] = {}
+
+
+class NoiseEstimateCommand(Command):
+    revision: int = Field(ge=0)
     options: dict[str, Any] = {}
 
 

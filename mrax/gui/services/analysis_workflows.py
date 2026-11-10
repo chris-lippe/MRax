@@ -640,18 +640,17 @@ def run_operation(workspace, operation, options, progress):
         progress(2, 2, "Drift correction stored")
         return workspace, {"key": key, "summary": json_value(summary)}
     if operation in {"reconstruct", "_reconstruct_step"}:
-        progress(0, 1, "Loading raw data and reconstructing")
+        if options.get("view") != "k_space":
+            from .reconstruction import run_reconstruction
+
+            return workspace, run_reconstruction(workspace, options, progress, device=device)
+        progress(0, 1, "Loading raw k-space")
         session.prepare_raw_view(
             str(options.get("view", "mrax_reconstruction")),
             progress_callback=progress,
             device=device,
         )
-        workspace.view_label = {
-            "mrax_reconstruction": "MRax reconstruction",
-            "vendor_vs_mrax": "Vendor vs MRax",
-            "vendor_mrax_diff": "Vendor MRax Diff",
-            "k_space": "K-space",
-        }.get(str(options.get("view")), "MRax reconstruction")
+        workspace.view_label = "K-space"
         progress(1, 1, "Reconstruction ready")
         return workspace, {"reconstructed": True}
     raise ValueError("Unknown scientific operation")

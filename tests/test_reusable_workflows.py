@@ -297,7 +297,8 @@ def test_reconstruction_recipe_reuses_target_raw_data_and_retains_processing(tmp
     apply(workspace, load_workflow(path))
     original = np.asarray(workspace.session.original_image_array).copy()
     apply(workspace, processing_document())
-    assert [row["kind"] for row in pipeline_info(workspace)["steps"]] == ["reconstruct", "process"]
+    assert [row["kind"] for row in pipeline_info(workspace)["steps"]] == ["process"]
+    np.testing.assert_allclose(workspace.session.image_array, gaussian_filter(original, (0, 1, 1, 0), mode="mirror"), rtol=1e-5, atol=1e-6)
     values = document.model_dump()
     values["steps"][0]["settings"]["component"] = "phase"
     apply(workspace, WorkflowDocument.model_validate(values))
@@ -305,7 +306,7 @@ def test_reconstruction_recipe_reuses_target_raw_data_and_retains_processing(tmp
     assert np.all(np.isfinite(workspace.session.image_array))
     np.testing.assert_array_equal(workspace.session.original_image_array, original)
     no_raw, _ = phantom()
-    with pytest.raises(ValueError, match="raw data"):
+    with pytest.raises(ValueError, match="k-space"):
         apply(no_raw, document)
 
 

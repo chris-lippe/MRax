@@ -45,8 +45,33 @@ def synthetic_t2_session() -> GuiSession:
     return session
 
 
+def synthetic_tutorial_session() -> GuiSession:
+    """T2 workflow practice with an independent, prepared Cartesian acquisition."""
+    from mrax.data_struct import AcquisitionData
+    from mrax.reco import fftnc
+
+    session = synthetic_t2_session()
+    session.rename_study("Tutorial — synthetic T2")
+    image = np.asarray(session.image_array, dtype=np.complex64)
+    samples = np.asarray(fftnc(image[:, None], axes=(-3, -2, -1)))
+    acquisition = AcquisitionData(samples, tuple(image.shape[1:]), ("x", "y", "z"))
+    acquisition.require_prepared()
+    session.current_experiment.update(raw_kspace=samples, acquisition=acquisition)
+    session.current_experiment["extra_metadata"]["synthetic_reference"] = {
+        "T2_ms": SYNTHETIC_T2_MS,
+        "frequency_MHz": 100,
+        "description": "Independent T2 phantom",
+    }
+    session.study.datasets[0].kspace = samples
+    session.study.datasets[0].acquisition = acquisition
+    return session
+
+
 def synthetic_multimodal_session() -> GuiSession:
     """Independent signed/complex, coil and motion fixtures on declared grids."""
+    from mrax.data_struct import AcquisitionData
+    from mrax.reco import fftnc
+
     session = synthetic_t2_session()
     session.rename_study("Synthetic multimodal study")
     base = np.asarray(session.image_array[:2], dtype=np.float64) / 1e6 - 0.5
@@ -54,15 +79,19 @@ def synthetic_multimodal_session() -> GuiSession:
     coils = np.stack([complex_image, complex_image * np.exp(1j * 0.4)], axis=1)
     magnitude = np.sqrt(np.sum(np.abs(coils) ** 2, axis=1))
     geometry = dict(session.current_experiment["spatial_geometry"])
+    samples = np.asarray(fftnc(coils, axes=(-3, -2, -1)))
     session.add_experiment(
         "Complex coils",
         complex_image,
         dims={"frame": 2, "x": 24, "y": 32, "z": 3},
         model_name="identity",
-        kspace=np.fft.fft2(coils, axes=(-3, -2)),
+        kspace=samples,
         processed={"raw_reconstruction": magnitude, "raw_reconstruction_coils": coils},
         extra_metadata={"spatial_geometry": geometry},
     )
+    acquisition = AcquisitionData(samples, tuple(complex_image.shape[1:]), ("x", "y", "z"))
+    session.current_experiment["acquisition"] = acquisition
+    session.study.datasets[-1].acquisition = acquisition
     signed = np.real(complex_image).copy()
     signed[0, 0, 0, 0] = np.nan
     signed[0, 0, 1, 0] = np.inf

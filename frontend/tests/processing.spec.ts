@@ -351,32 +351,34 @@ save_workspace_bundle(StudyWorkspace(key="raw", label=session.study_name, sessio
   await expect(input).toBeVisible();
   await expect(input).toHaveValue('vendor');
   await expect(
-    input.getByRole('option', { name: 'MRax reconstruction', exact: true }),
-  ).toHaveJSProperty('disabled', true);
+    input.getByRole('option', { name: 'Reconstruction (.mrec)', exact: true }),
+  ).toHaveJSProperty('disabled', false);
   const jobs: string[] = [];
   page.on('request', (request) => {
     if (request.url().endsWith('/tasks')) jobs.push(request.postDataJSON().operation);
   });
   const view = page.getByRole('combobox', { name: 'View', exact: true });
   await expect(
-    view.getByRole('option', { name: 'MRax reconstruction', exact: true }),
+    view.getByRole('option', { name: 'Cartesian Fourier', exact: true }),
   ).toHaveAttribute('disabled', '');
   await selectWorkflow(page, 'Reconstruct');
-  await page.getByRole('button', { name: 'Reconstruct images', exact: true }).click();
+  await page.getByRole('button', { name: 'Apply reconstruction', exact: true }).click();
   await expect(page.locator('.job-status strong')).toHaveText('Operation complete');
   await expect(
     page
       .getByRole('group', { name: 'Reconstruction display', exact: true })
-      .getByRole('button', { name: 'Vendor vs MRax', exact: true }),
+      .getByRole('button', { name: 'Vendor comparison', exact: true }),
   ).toHaveAttribute('aria-pressed', 'true');
   const reconstructed = await slice();
   expect(reconstructed).toHaveLength(original.length);
   reconstructed.forEach((value, index) => expect(value).toBeCloseTo(original[index] * 2, 5));
   await expect(input).toHaveValue('mrax');
-  await expect(page.getByRole('button', { name: 'Reconstruct images', exact: true })).toBeEnabled();
+  await expect(
+    page.getByRole('button', { name: 'Apply reconstruction', exact: true }),
+  ).toBeEnabled();
   await expect(
     page.getByRole('region', { name: 'Processing pipeline', exact: true }),
-  ).toContainText('Image reconstruction');
+  ).toContainText('Cartesian Fourier');
   expect((await opened(request))[0].pipeline.steps).toHaveLength(1);
   await selectWorkflow(page, 'View', 'Image display');
   await page.getByRole('button', { name: 'Image', exact: true }).click();
@@ -416,8 +418,12 @@ save_workspace_bundle(StudyWorkspace(key="raw", label=session.study_name, sessio
   await expect(input).toHaveValue('mrax');
   await pipeline.getByRole('button', { name: 'Processed', exact: true }).click();
   await expect.poll(async () => (await opened(request))[0].pipeline.enabled).toBe(true);
+  await expect(pipeline.getByRole('button', { name: 'Processed', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   await pipeline
-    .getByRole('listitem', { name: 'Image reconstruction', exact: true })
+    .getByRole('listitem', { name: 'Cartesian Fourier', exact: true })
     .getByRole('button', { name: 'Remove', exact: true })
     .click();
   await pipeline.getByRole('button', { name: 'Apply pipeline', exact: true }).click();

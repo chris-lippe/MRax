@@ -59,8 +59,8 @@ export function ViewerControls({
             {(
               [
                 ['Image', 'Experiment'],
-                ['MRax reconstruction', 'MRax'],
-                ['comparison', 'Vendor vs MRax'],
+                ['MRax reconstruction', workspace.reconstruction_label],
+                ['comparison', 'Vendor comparison'],
                 ['Vendor MRax Diff', 'Difference'],
                 ['K-space', 'K-space'],
               ] as const

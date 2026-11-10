@@ -198,6 +198,7 @@ def register_workflow_routes(app, get_record, check_revision):
                 document,
                 command.experiments,
                 command.bindings,
+                mode=command.mode,
             )
         return {"ready": all(row["ready"] for row in checks), "targets": checks}
 
@@ -211,6 +212,7 @@ def register_workflow_routes(app, get_record, check_revision):
                 document,
                 command.experiments,
                 command.bindings,
+                mode=command.mode,
             )
             if not all(row["ready"] for row in checks):
                 raise ValueError(

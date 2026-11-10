@@ -87,7 +87,7 @@ test('View Metadata replaces study details with editable paths, names and read-o
   await expect(page.getByRole('button', { name: 'Study details', exact: true })).toHaveCount(0);
   await expect(
     page
-      .getByRole('complementary', { name: 'Data & studies', exact: true })
+      .getByRole('complementary', { name: 'Data & Studies', exact: true })
       .getByRole('button', { name: 'Metadata', exact: true }),
   ).toHaveCount(0);
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -294,7 +294,7 @@ test('drafts follow experiments and require conflict resolution when values chan
   await page.getByRole('button', { name: 'Rename experiment', exact: true }).click();
   await expect(
     page
-      .getByRole('region', { name: 'Experiments', exact: true })
+      .getByRole('region', { name: /^Experiments in / })
       .getByRole('button', { name: 'Renamed phantom', exact: true }),
   ).toHaveAttribute('aria-current', 'true');
   await openMetadataBrowser(page, 'Experiment metadata');

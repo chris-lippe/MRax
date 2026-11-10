@@ -46,9 +46,9 @@ for (const viewport of [
     }
     for (const theme of ['light', 'dark'] as const) {
       await selectTheme(page, theme);
-      for (const name of ['Image viewer', 'ROI signal', 'Data & studies', 'Analysis controls']) {
+      for (const name of ['Image viewer', 'ROI signal', 'Data & Studies', 'Analysis controls']) {
         const region = page.getByRole(
-          name === 'Data & studies' || name === 'Analysis controls' ? 'complementary' : 'region',
+          name === 'Data & Studies' || name === 'Analysis controls' ? 'complementary' : 'region',
           { name, exact: true },
         );
         const box = await region.boundingBox();
@@ -131,20 +131,50 @@ test('Settings defaults to the system appearance and preserves explicit override
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
+test('one compact header keeps workflow navigation reachable in narrower desktop windows', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.evaluate(() => {
+    document.documentElement.dataset.desktop = 'true';
+    document.documentElement.style.setProperty('--window-controls-width', '138px');
+  });
+  for (const width of [760, 1120, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    const header = page.getByRole('banner', { name: 'MRax', exact: true });
+    const bounds = await header.boundingBox();
+    expect(bounds!.height).toBeLessThanOrEqual(50);
+    const navigation = header.getByRole('tablist', { name: 'Workflow sections' });
+    const analyze = navigation.getByRole('tab', { name: 'Analyze', exact: true });
+    await analyze.focus();
+    await expect(analyze).toBeFocused();
+    await expect(analyze).toBeInViewport();
+    const analyzeBounds = await analyze.boundingBox();
+    expect(analyzeBounds!.x + analyzeBounds!.width).toBeLessThanOrEqual(width - 138);
+    await navigation.getByRole('tab', { name: 'View', exact: true }).focus();
+    await expect(navigation.getByRole('tab', { name: 'View', exact: true })).toBeFocused();
+  }
+});
+
 test('workflow navigation exposes scientific tasks directly and preserves drafts', async ({
   page,
 }) => {
   await page.goto('/');
-  const logo = page.getByRole('img', { name: 'MRax logo', exact: true });
-  await expect(logo).toBeVisible();
-  await expect
-    .poll(() =>
-      logo.evaluate(
-        (element: HTMLImageElement) => element.complete && element.naturalWidth === 775,
-      ),
-    )
-    .toBe(true);
-  await expect(logo).toHaveAttribute('src', /\.svg(?:\?|$)/);
+  const header = page.getByRole('banner', { name: 'MRax', exact: true });
+  await expect(header).toBeVisible();
+  await expect(header.getByRole('img')).toHaveCount(0);
+  const headerBounds = await header.boundingBox();
+  expect(headerBounds!.height).toBeLessThanOrEqual(50);
+  const studyBounds = await page
+    .getByRole('complementary', { name: 'Data & Studies', exact: true })
+    .boundingBox();
+  const mainBounds = await page.locator('main').boundingBox();
+  expect(studyBounds!.y).toBe(headerBounds!.height);
+  expect(headerBounds!.x).toBe(0);
+  expect((await page.locator('.header-workflows').boundingBox())!.x).toBe(mainBounds!.x);
+  expect(
+    (await header.getByRole('heading', { name: 'Data & Studies', exact: true }).boundingBox())!.y,
+  ).toBeLessThan(headerBounds!.height);
   await loadExample(page);
   const navigation = page.getByRole('tablist', { name: 'Workflow sections' });
   await expect(navigation.getByRole('tab')).toHaveText([

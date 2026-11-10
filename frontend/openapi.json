@@ -572,6 +572,11 @@
             "title": "Name",
             "type": "string"
           },
+          "reconstruction_label": {
+            "default": "Reconstruction",
+            "title": "Reconstruction Label",
+            "type": "string"
+          },
           "rois": {
             "items": {
               "type": "string"
@@ -853,6 +858,68 @@
           "runs"
         ],
         "title": "MaskPreview",
+        "type": "object"
+      },
+      "NavigationCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "default": true,
+            "title": "Commit",
+            "type": "boolean"
+          },
+          "include_images": {
+            "default": true,
+            "title": "Include Images",
+            "type": "boolean"
+          },
+          "indices": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "maxProperties": 16,
+            "minProperties": 1,
+            "title": "Indices",
+            "type": "object"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "view_revision": {
+            "minimum": 0.0,
+            "title": "View Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "view_revision",
+          "indices"
+        ],
+        "title": "NavigationCommand",
+        "type": "object"
+      },
+      "NoiseEstimateCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Options",
+            "type": "object"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "NoiseEstimateCommand",
         "type": "object"
       },
       "OverlayChoice": {
@@ -1194,6 +1261,14 @@
             "title": "Signature",
             "type": "string"
           },
+          "sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PipelineSource"
+            },
+            "default": {},
+            "title": "Sources",
+            "type": "object"
+          },
           "steps": {
             "default": [],
             "items": {
@@ -1239,6 +1314,44 @@
         "title": "PipelineProgress",
         "type": "object"
       },
+      "PipelineSource": {
+        "properties": {
+          "format": {
+            "title": "Format",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "image",
+              "kspace"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          }
+        },
+        "required": [
+          "kind",
+          "format",
+          "location"
+        ],
+        "title": "PipelineSource",
+        "type": "object"
+      },
       "PipelineStep": {
         "properties": {
           "enabled": {
@@ -1277,6 +1390,18 @@
             "title": "Method",
             "type": "string"
           },
+          "noise_estimate": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Noise Estimate"
+          },
           "options": {
             "additionalProperties": true,
             "title": "Options",
@@ -1312,6 +1437,14 @@
               }
             ],
             "title": "Result Key"
+          },
+          "result_maps": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Result Maps",
+            "type": "array"
           },
           "version": {
             "title": "Version",
@@ -2722,7 +2855,10 @@
             "type": "string"
           },
           "format_version": {
-            "const": 1,
+            "enum": [
+              1,
+              2
+            ],
             "title": "Format Version",
             "type": "integer"
           },
@@ -3127,6 +3263,33 @@
             "default": "magnitude",
             "title": "Reconstruction Component",
             "type": "string"
+          },
+          "reconstruction_encoding": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconstruction Encoding"
+          },
+          "reconstruction_label": {
+            "default": "Reconstruction",
+            "title": "Reconstruction Label",
+            "type": "string"
+          },
+          "reconstruction_unavailable": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconstruction Unavailable"
           },
           "registrations": {
             "default": [],
@@ -4513,6 +4676,100 @@
         "summary": "Inspect"
       }
     },
+    "/api/workspaces/{key}/navigate": {
+      "post": {
+        "operationId": "navigate_api_workspaces__key__navigate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NavigationCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Navigate"
+      }
+    },
+    "/api/workspaces/{key}/noise-estimate": {
+      "post": {
+        "operationId": "noise_estimate_api_workspaces__key__noise_estimate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoiseEstimateCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Noise Estimate"
+      }
+    },
     "/api/workspaces/{key}/parameters": {
       "get": {
         "operationId": "parameters_api_workspaces__key__parameters_get",
@@ -4564,6 +4821,43 @@
           }
         },
         "summary": "Parameters"
+      }
+    },
+    "/api/workspaces/{key}/pipeline-blocks": {
+      "get": {
+        "operationId": "pipeline_blocks_api_workspaces__key__pipeline_blocks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pipeline Blocks"
       }
     },
     "/api/workspaces/{key}/preview-fit": {
@@ -4652,6 +4946,43 @@
           }
         },
         "summary": "Processing"
+      }
+    },
+    "/api/workspaces/{key}/reconstruction": {
+      "get": {
+        "operationId": "reconstruction_api_workspaces__key__reconstruction_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconstruction"
       }
     },
     "/api/workspaces/{key}/roi-mask": {

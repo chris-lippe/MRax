@@ -52,7 +52,11 @@ export function BrukerImportOptions({
     void (async () => {
       try {
         const extra = JSON.parse(supplied.current) as Options;
-        const preview = await api<{ kind: string; experiments?: Experiment[] }>(
+        const preview = await api<{
+          kind: string;
+          experiments?: Experiment[];
+          field_strength_mhz?: number | null;
+        }>(
           '/api/files/preview',
           'POST',
           {
@@ -86,17 +90,12 @@ export function BrukerImportOptions({
             ]),
           ),
         );
-        const frequencies = [
-          ...new Set(
-            experiments.map((row) => row.field_strength_mhz).filter((value) => value !== null),
-          ),
-        ];
         setFrequency(
           extra.field_strength_mhz !== undefined
             ? String(extra.field_strength_mhz)
-            : frequencies.length === 1
-              ? String(frequencies[0])
-              : '',
+            : preview.field_strength_mhz == null
+              ? ''
+              : String(preview.field_strength_mhz),
         );
         setRaw(Boolean(extra.load_raw_kspace));
         if (preview.kind === 'bruker')

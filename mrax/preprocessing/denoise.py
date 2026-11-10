@@ -174,19 +174,23 @@ def denoise_filter(
 
     if method_key in ("gaussian", "gauss"):
         if preserve_nan:
+
             def func(x):
                 return _nan_gaussian_filter(x, sigma, mode=mode, truncate=truncate)
         else:
+
             def func(x):
                 return _gaussian_filter_jax(x, sigma, mode=mode, truncate=truncate)
     elif method_key in ("median", "med"):
         if preserve_nan:
             raise ValueError("preserve_nan is only supported for gaussian filtering")
+
         def func(x):
             return _median_filter_jax(x, size, mode=mode)
     elif method_key in ("uniform", "box", "boxcar", "mean"):
         if preserve_nan:
             raise ValueError("preserve_nan is only supported for gaussian filtering")
+
         def func(x):
             return _uniform_filter_jax(x, size, mode=mode)
     else:
@@ -364,16 +368,9 @@ def _runtime_import(module: str):
 
 
 def _estimate_sigma(data: ArrayLike) -> float:
-    arr = jnp.asarray(data, dtype=float)
-    diffs = []
-    for axis in range(arr.ndim):
-        if arr.shape[axis] > 1:
-            diffs.append(jnp.diff(arr, axis=axis))
-    if not diffs:
-        return float(jnp.std(arr))
-    stacked = jnp.concatenate([d.reshape(-1) for d in diffs])
-    mad = jnp.median(jnp.abs(stacked))
-    return float(mad / (0.6745 * jnp.sqrt(2.0)))
+    from .noise import estimate_noise_sigma
+
+    return estimate_noise_sigma(data)
 
 
 def denoise_bm3d(
@@ -381,10 +378,17 @@ def denoise_bm3d(
     *args,
     sigma: float | None = None,
     stage: str = "full",
+    noise_mask=None,
+    noise_model: str = "auto",
+    noise_coils: int = 1,
     **kwargs,
 ) -> jnp.ndarray:
     """BM3D denoising via the external ``bm3d`` package.
 
+    ``sigma`` is the noise standard deviation in input intensity units. If unset,
+    estimate it from local detrended MRI patches, excluding zero-filled background.
+    ``noise_mask``, ``noise_model`` and ``noise_coils`` select the estimation
+    region and assumptions; see :func:`mrax.preprocessing.estimate_noise`.
     Pass package-specific options through ``kwargs``.
     """
 
@@ -394,7 +398,17 @@ def denoise_bm3d(
         raise ImportError("bm3d.bm3d not found")
     if args:
         return bm3d_fn(np.asarray(array), *args, **kwargs)
-    sigma_psd = float(sigma) if sigma is not None else _estimate_sigma(array)
+    from .noise import estimate_noise_sigma
+
+    sigma_psd = (
+        float(sigma)
+        if sigma is not None
+        else estimate_noise_sigma(array, mask=noise_mask, model=noise_model, coils=noise_coils)
+    )
+    if not math.isfinite(sigma_psd) or sigma_psd < 0:
+        raise ValueError("Noise sigma must be finite and non-negative")
+    if sigma_psd == 0 and "blockmatches" not in kwargs:
+        return np.asarray(array).copy()
     ext_kwargs = dict(kwargs)
     if "stage_arg" not in ext_kwargs:
         stage_key = stage.lower()
@@ -412,10 +426,17 @@ def denoise_bm4d(
     *args,
     sigma: float | None = None,
     stage: str = "full",
+    noise_mask=None,
+    noise_model: str = "auto",
+    noise_coils: int = 1,
     **kwargs,
 ) -> jnp.ndarray:
     """BM4D denoising via the external ``bm4d`` package.
 
+    ``sigma`` is the noise standard deviation in input intensity units. If unset,
+    estimate it from local detrended MRI patches, excluding zero-filled background.
+    ``noise_mask``, ``noise_model`` and ``noise_coils`` select the estimation
+    region and assumptions; see :func:`mrax.preprocessing.estimate_noise`.
     Pass package-specific options through ``kwargs``.
     """
 
@@ -425,7 +446,17 @@ def denoise_bm4d(
         raise ImportError("bm4d.bm4d not found")
     if args:
         return bm4d_fn(np.asarray(array), *args, **kwargs)
-    sigma_psd = float(sigma) if sigma is not None else _estimate_sigma(array)
+    from .noise import estimate_noise_sigma
+
+    sigma_psd = (
+        float(sigma)
+        if sigma is not None
+        else estimate_noise_sigma(array, mask=noise_mask, model=noise_model, coils=noise_coils)
+    )
+    if not math.isfinite(sigma_psd) or sigma_psd < 0:
+        raise ValueError("Noise sigma must be finite and non-negative")
+    if sigma_psd == 0 and "blockmatches" not in kwargs:
+        return np.asarray(array).copy()
     ext_kwargs = dict(kwargs)
     if "stage_arg" not in ext_kwargs:
         stage_key = stage.lower()
@@ -436,6 +467,7 @@ def denoise_bm4d(
         else:
             ext_kwargs["stage_arg"] = module.BM4DStages.ALL_STAGES
     return bm4d_fn(np.asarray(array), sigma_psd, **ext_kwargs)
+
 
 __all__ = [
     "denoise_filter",

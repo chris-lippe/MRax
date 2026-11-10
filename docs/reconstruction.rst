@@ -2,7 +2,7 @@ Reconstruction
 ==============
 
 Use ``reconstruct_acquisition`` or ``ReconstructionPipeline`` to reconstruct imported
-raw data with Cartesian FFT, non-Cartesian gridding, variational or model-based
+raw data with Cartesian FFT, non-Cartesian gridding or NUFFT adjoint, variational or model-based
 methods. The imported acquisition supplies the sampling and geometry settings.
 
 .. code-block:: python
@@ -95,3 +95,9 @@ that preserves mean image intensity.
 Check geometry and absolute scaling before comparing methods. For different
 correction or regularization choices, also compare resolution, contrast, noise,
 phase and artifacts.
+
+The browser's **Reconstruct** editor exposes the same stages and ships editable
+``.mrec`` presets. For sampled acquisitions, ``method="nufft"`` applies the NUFFT
+adjoint with optional density compensation; ``method="variational"`` solves the
+measured-sample objective using the NUFFT encoding operator. An adjoint is not an
+iterative inverse. See :doc:`workflows` for saving and sharing stage plans.

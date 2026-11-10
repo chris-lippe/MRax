@@ -103,6 +103,7 @@ exclude = [
 version = { attr = "mrax._version.MRAX_VERSION" }
 
 [tool.setuptools.package-data]
+"mrax.reco" = ["presets/*.mrec"]
 "mrax.library" = ["parameter_library.toml"]
 "mrax.io.definitions" = ["*.toml"]
 "mrax.web" = ["static/*", "static/assets/*"]

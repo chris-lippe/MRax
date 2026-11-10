@@ -47,8 +47,8 @@ test('one study browser and a visible workflow keep selection, metadata and acti
   await expect(page.getByRole('tab', { name: 'Data', exact: true })).toHaveCount(0);
   const files = await showDataControls(page);
   await expect(page.getByRole('button', { name: 'Import data', exact: true })).toHaveCount(1);
-  const sidebar = page.getByRole('complementary', { name: 'Data & studies', exact: true });
-  await expect(sidebar.getByRole('heading', { name: 'Data & studies', exact: true })).toHaveCount(
+  const sidebar = page.getByRole('complementary', { name: 'Data & Studies', exact: true });
+  await expect(sidebar.getByRole('heading', { name: 'Data & Studies', exact: true })).toHaveCount(
     0,
   );
   await expect(files).toHaveAttribute('aria-orientation', 'vertical');
@@ -114,7 +114,9 @@ test('one study browser and a visible workflow keep selection, metadata and acti
   await expect(page.getByTestId('roi-surface')).toBeVisible();
   await expect(page.locator('.job-status')).toHaveCount(0);
   await expect(
-    page.getByRole('region', { name: 'Experiments', exact: true }).getByRole('button'),
+    page
+      .getByRole('region', { name: 'Experiments in Synthetic multimodal study', exact: true })
+      .getByRole('button'),
   ).toHaveCount(5);
   await page.screenshot({ path: testInfo.outputPath('ux-study-browser.png') });
   await page.setViewportSize({ width: 1440, height: 720 });
@@ -162,24 +164,22 @@ test('compact study panel creates, imports, saves and reopens workspaces with on
 }, testInfo) => {
   await page.setViewportSize({ width: 700, height: 800 });
   await page.goto('/');
-  const studies = page.getByRole('button', { name: 'Data & studies', exact: true });
-  await studies.click();
+  const studies = page.getByRole('complementary', { name: 'Data & Studies', exact: true });
+  await expect(studies).toBeVisible();
   await clickDataControl(page, 'New study');
   await expect(page.getByRole('region', { name: 'Metadata browser', exact: true })).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await closeMetadataBrowser(page);
   await expect(page.getByRole('region', { name: 'Image viewer', exact: true })).toBeVisible();
 
-  await studies.click();
   await clickDataControl(page, 'Import data');
   await expect(
     page.getByRole('dialog', { name: 'Import a study or experiment', exact: true }),
   ).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(1);
   await page.getByRole('button', { name: 'Close importer', exact: true }).click();
-  await expect(studies).toBeFocused();
+  await expect(studies.getByRole('button', { name: 'Import data', exact: true })).toBeFocused();
 
-  await studies.click();
   await clickDataControl(page, 'Import data');
   await page.getByLabel('Import format', { exact: true }).selectOption('blank');
   await page.getByLabel('Experiment name', { exact: true }).fill('Calibration');
@@ -189,7 +189,6 @@ test('compact study panel creates, imports, saves and reopens workspaces with on
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('img', { name: /3 by 4 quantitative image/ })).toBeVisible();
 
-  await studies.click();
   const saved = testInfo.outputPath('sidebar-workspace.mrax');
   await saveWorkspace(page, saved);
   await openWorkspace(page, saved);
@@ -198,8 +197,7 @@ test('compact study panel creates, imports, saves and reopens workspaces with on
   await expect
     .poll(async () => (await (await request.get('/api/workspaces')).json()).length)
     .toBe(2);
-  await expect(studies).toBeFocused();
-  await studies.click();
+  await expect(studies.getByRole('button', { name: 'Open workspace', exact: true })).toBeFocused();
   const exportDialog = await openExport(page);
   await expect(page.getByRole('dialog')).toHaveCount(1);
   await exportDialog.getByText('Packages, ROI sets and reports', { exact: true }).click();
@@ -212,5 +210,5 @@ test('compact study panel creates, imports, saves and reopens workspaces with on
   expect((await stat(destination)).isDirectory()).toBe(true);
   await expect(page.getByRole('dialog')).toHaveCount(1);
   await closeExport(page);
-  await expect(studies).toBeFocused();
+  await expect(studies.getByRole('button', { name: 'Export data', exact: true })).toBeFocused();
 });

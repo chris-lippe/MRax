@@ -151,24 +151,18 @@ def _detect_bruker_frame_count(visu: dict[str, Any], method: dict[str, Any]) -> 
 def _detect_bruker_field_strength_mhz(
     method: dict[str, Any], visu: dict[str, Any], scan_dir: Path
 ) -> float | None:
-    values = []
-    for key in ("PVM_FrqWork", "BF1", "SFO1", "ACQ_imaging_frequency"):
-        values.extend(_numeric_values(method.get(key)))
-        values.extend(_numeric_values(visu.get(key)))
+    from mrax.io.bruker_frequency import bruker_imaging_frequency
+
+    acqp = {}
     acqp_path = scan_dir / "acqp"
     if acqp_path.is_file():
         try:
             from mrax.io.bruker_parameters import parse_jcamp
 
             acqp = parse_jcamp(acqp_path)
-            for key in ("BF1", "SFO1", "ACQ_imaging_frequency"):
-                values.extend(_numeric_values(acqp.get(key)))
         except Exception:
             _LOG.debug("Ignored optional GUI operation failure", exc_info=True)
-    for value in values:
-        if 1.0 <= float(value) <= 2000.0:
-            return float(value)
-    return None
+    return bruker_imaging_frequency(method, visu, acqp)
 
 
 def _numeric_values(value: Any) -> list[float]:

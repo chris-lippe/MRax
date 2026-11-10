@@ -109,6 +109,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
   const address = useRef<HTMLInputElement | null>(null);
   const resolve = useRef<((value: FileSelection | null) => void) | null>(null);
   const origin = useRef<HTMLElement | null>(null);
+  const focusWait = useRef<MutationObserver | null>(null);
   const last = useRef<{ root: string; path: string } | null>(null);
   const generation = useRef(0);
   const saving = request?.mode.startsWith('save-');
@@ -212,6 +213,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
     if (!saving || entry.directory === folderMode) setName(entry.name);
   }
   const choose: Choose = (options) => {
+    focusWait.current?.disconnect();
     if (resolve.current) return Promise.reject(new Error('Close the current file dialog first'));
     const opening = ++generation.current;
     origin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -260,6 +262,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
   useEffect(
     () => () => {
       generation.current++;
+      focusWait.current?.disconnect();
       resolve.current?.(null);
     },
     [],
@@ -378,7 +381,32 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
             }}
             onCloseAutoFocus={(event) => {
               event.preventDefault();
-              origin.current?.focus();
+              const trigger = origin.current;
+              const serial = generation.current;
+              requestAnimationFrame(() => {
+                if (!trigger?.isConnected || serial !== generation.current) return;
+                // Loading a selected workspace temporarily disables its initiating button.
+                const restore = () => {
+                  if (serial !== generation.current || !trigger.isConnected) {
+                    focusWait.current?.disconnect();
+                    return;
+                  }
+                  if (trigger.matches(':disabled')) return;
+                  focusWait.current?.disconnect();
+                  focusWait.current = null;
+                  if (
+                    document.activeElement === document.body ||
+                    document.activeElement === trigger
+                  )
+                    trigger.focus({ preventScroll: true });
+                };
+                focusWait.current = new MutationObserver(restore);
+                focusWait.current.observe(trigger, {
+                  attributes: true,
+                  attributeFilter: ['disabled'],
+                });
+                restore();
+              });
             }}
           >
             <Dialog.Title>{request?.title ?? 'Choose a file'}</Dialog.Title>
@@ -387,7 +415,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
               address bar, standard folders or favorites to navigate.
             </Dialog.Description>
             <Dialog.Close className="drawer-close" aria-label="Close file dialog">
-              ×
+              <WorkbenchIcon name="close" />
             </Dialog.Close>
             <div className="file-navigation">
               <div className="file-history" role="group" aria-label="Folder navigation">

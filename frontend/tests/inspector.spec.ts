@@ -125,7 +125,7 @@ test('each task exposes its own groups and keeps advanced controls accessible', 
   const controls = page.getByRole('complementary', { name: 'Analysis controls', exact: true });
   const tasks = [
     ['View', 'Image display', ['Presentation', 'Appearance']],
-    ['Reconstruct', undefined, ['Raw data', 'Output']],
+    ['Reconstruct', undefined, ['Reconstruction pipeline', 'Output']],
     ['Preprocess', 'Denoising', ['Denoiser and input', 'Settings', 'Region']],
     ['Register', 'Image alignment', ['Reference image', 'Moving image', 'Alignment']],
     ['Register', 'Drift correction', ['Motion model', 'Reference and solver']],

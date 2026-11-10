@@ -116,7 +116,7 @@ export function TimecourseControls({
                   <option value="original">Original image data</option>
                   <option value="view">Image with active corrections</option>
                   <option value="reconstruction" disabled={!w?.has_reconstruction}>
-                    MRax reconstruction
+                    {w?.reconstruction_label ?? 'Reconstruction'}
                   </option>
                 </select>
               </label>

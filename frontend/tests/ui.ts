@@ -22,9 +22,7 @@ export async function showStudies(page: Page) {
   const tools = page.getByRole('dialog', { name: 'Analysis controls', exact: true });
   if (await tools.isVisible())
     await tools.getByRole('button', { name: 'Close panel', exact: true }).click();
-  const studies = page.getByRole('complementary', { name: 'Data & studies', exact: true });
-  if (!(await studies.isVisible()))
-    await page.getByRole('button', { name: 'Data & studies', exact: true }).click();
+  const studies = page.getByRole('complementary', { name: 'Data & Studies', exact: true });
   await expect(studies).toBeVisible();
   return studies;
 }
@@ -109,9 +107,6 @@ export async function selectWorkflow(page: Page, name: string, task?: string) {
 export async function selectTheme(page: Page, theme: 'light' | 'dark') {
   const controls = page.getByRole('dialog', { name: 'Analysis controls', exact: true });
   const restoreControls = await controls.isVisible();
-  const restoreStudies = await page
-    .getByRole('dialog', { name: 'Data & studies', exact: true })
-    .isVisible();
   await openSettings(page);
   await page.getByRole('tab', { name: 'Appearance', exact: true }).click();
   const names = { light: 'Light theme', dark: 'Dark theme' };
@@ -125,9 +120,6 @@ export async function selectTheme(page: Page, theme: 'light' | 'dark') {
     .getByRole('dialog', { name: 'Settings', exact: true })
     .getByRole('button', { name: 'Done', exact: true })
     .click();
-  const studies = page.getByRole('dialog', { name: 'Data & studies', exact: true });
-  if (!restoreStudies && (await studies.isVisible()))
-    await studies.getByRole('button', { name: 'Close panel', exact: true }).click();
   if (restoreControls) await page.getByRole('button', { name: 'Controls', exact: true }).click();
 }
 
@@ -153,8 +145,15 @@ export async function openMetadataBrowser(page: Page, category = 'Study overview
 }
 
 export async function selectExperiment(page: Page, name: string) {
+  const group = page
+    .locator('.study-group')
+    .filter({ has: page.locator('.study-item[aria-current="true"]') });
+  const expand = group.getByRole('button', { name: /^Expand study:/ });
+  if (await expand.count()) await expand.click();
   const experiment = page
-    .getByRole('region', { name: 'Experiments', exact: true })
+    .locator('.study-group')
+    .filter({ has: page.locator('.study-item[aria-current="true"]') })
+    .getByRole('region', { name: /^Experiments in / })
     .getByRole('button', { name, exact: true });
   await experiment.click();
   await expect(experiment).toHaveAttribute('aria-current', 'true');

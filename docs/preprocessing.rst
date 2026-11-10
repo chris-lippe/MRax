@@ -51,6 +51,19 @@ in the optional ``denoise-external`` extra. Install it with
 use under their own licenses. BM3D follows Dabov et al.
 [Dabov2007]_; BM4D follows Maggioni et al. [Maggioni2013]_.
 
+Noise ``sigma`` is a standard deviation in the input image's intensity units.
+Leaving it unset uses robust local patches and fine-scale differences to reduce
+edge and texture contamination, preferring signal-bearing regions in magnitude
+images and excluding zero-filled padding. Uniform signal ROIs can instead use
+``noise_model="gaussian"`` to estimate locally detrended variation. ``estimate_noise``
+returns sigma, the patch range and warnings about low SNR, spatial variation or
+correlation. ``noise_mask`` restricts estimation without restricting denoising.
+For a signal-free magnitude ROI, use ``noise_model="background"`` and set
+``noise_coils`` to the effective number of independent complex channels (one for
+Rician noise; this may differ from the receiver count). A single sigma remains an
+approximation: it does not correct magnitude bias, correlated noise or artifacts.
+Set sigma explicitly when it is known.
+
 Drift Correction
 ----------------
 

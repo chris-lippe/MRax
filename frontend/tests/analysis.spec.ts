@@ -86,7 +86,7 @@ test('complex views, planes, integer labels, brush, and undo use the real backen
   await selectWorkflow(page, 'Reconstruct');
   await page
     .getByRole('group', { name: 'Reconstruction display', exact: true })
-    .getByRole('button', { name: 'MRax', exact: true })
+    .getByRole('button', { name: 'Cartesian Fourier', exact: true })
     .click();
   await page.getByLabel('Reconstruction component', { exact: true }).selectOption('phase');
   await page.getByLabel('Coil', { exact: true }).selectOption('0');

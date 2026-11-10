@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
+import { WorkbenchIcon } from './WorkbenchIcon';
 import { api, type Job, type Options, type Workspace } from './api';
 import { NumberField } from './Controls';
 import { useFileSystem, type FileSelection } from './FileSystemDialog';
@@ -86,7 +87,7 @@ export function FileDialog({
             Open a data file or a study folder. Select the Bruker study folder directly.
           </Dialog.Description>
           <Dialog.Close className="drawer-close" aria-label="Close importer">
-            ×
+            <WorkbenchIcon name="close" />
           </Dialog.Close>
           <label className="import-destination">
             Import destination

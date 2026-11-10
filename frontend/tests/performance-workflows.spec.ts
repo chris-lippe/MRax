@@ -22,7 +22,17 @@ test('Bruker import reviews headers and imports only selected experiments and re
   await mkdir(source, { recursive: true });
   execFileSync('python', [
     '-c',
-    'import sys,shutil,numpy as np; from pathlib import Path; sys.path.insert(0,str(Path.cwd().parent/"tests")); from _synthetic import _write_minimal_bruker_scan; p=Path(sys.argv[1]); _write_minimal_bruker_scan(p); shutil.copytree(p/"1",p/"2"); shutil.copytree(p/"2"/"pdata"/"1",p/"2"/"pdata"/"2"); (np.arange(4,dtype=np.int16)+100).tofile(p/"2"/"pdata"/"2"/"2dseq")',
+    `import sys,shutil,numpy as np
+from pathlib import Path
+sys.path.insert(0,str(Path.cwd().parent/"tests"))
+from _synthetic import _write_minimal_bruker_scan
+p=Path(sys.argv[1]); _write_minimal_bruker_scan(p); shutil.copytree(p/"1",p/"2")
+shutil.copytree(p/"2"/"pdata"/"1",p/"2"/"pdata"/"2")
+(np.arange(4,dtype=np.int16)+100).tofile(p/"2"/"pdata"/"2"/"2dseq")
+for scan,frequency in (("1",400.123),("2",400.125)):
+ method=p/scan/"method"
+ method.write_text(method.read_text().replace("##END=",f"##$PVM_FrqWork=( 1 )\\n{frequency}\\n##END="))
+`,
     source,
   ]);
   await page.goto('/');
@@ -31,12 +41,14 @@ test('Bruker import reviews headers and imports only selected experiments and re
   await chooseFilePath(page, source, 'Open', false, true);
   const selection = page.getByRole('region', { name: 'Bruker import selection', exact: true });
   await expect(selection).toBeVisible();
+  await expect(selection.getByLabel('Import frequency (MHz)', { exact: true })).toHaveValue(
+    '400.124',
+  );
   expect(await (await request.get('/api/workspaces')).json()).toHaveLength(0);
   await selection.getByRole('button', { name: 'Select none', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Import study', exact: true })).toBeDisabled();
   await selection.getByLabel('Reconstruction for 2', { exact: true }).selectOption('2');
   await selection.getByLabel('Import experiment 2', { exact: true }).check();
-  await selection.getByLabel('Import frequency (MHz)', { exact: true }).fill('400');
   await expect(
     selection.getByRole('checkbox', { name: 'Load raw k-space', exact: true }),
   ).not.toBeChecked();
@@ -54,6 +66,19 @@ test('Bruker import reviews headers and imports only selected experiments and re
   });
   const [workspace] = await (await request.get('/api/workspaces')).json();
   expect(workspace.experiments).toEqual(['2']);
+  const inspected = await (
+    await request.get('/api/workspaces/' + workspace.id + '/inspect')
+  ).json();
+  expect(inspected.study_globals.field_strength_mhz.unit).toBe('MHz');
+  expect(inspected.study_globals.field_strength_mhz.values).toBeCloseTo(400.124, 4);
+  const chain = page.getByRole('region', { name: 'Processing pipeline', exact: true });
+  await chain.getByRole('button', { name: 'Show processing steps', exact: true }).click();
+  const input = chain.getByRole('listitem', { name: 'Pipeline input', exact: true });
+  await expect(input).toContainText('Image data');
+  await expect(input).toContainText('Bruker');
+  await expect(input).toContainText('Synthetic selected study/2/pdata/2/2dseq');
+  await expect(input).toHaveAttribute('title', source + '/2/pdata/2/2dseq');
+  await page.screenshot({ path: info.outputPath('bruker-source.png') });
   const data = await (await request.get('/api/workspaces/' + workspace.id + '/slice')).body();
   const values = new Float32Array(
     data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
@@ -61,7 +86,7 @@ test('Bruker import reviews headers and imports only selected experiments and re
   expect([...values].sort((a, b) => a - b)).toEqual([210, 212, 214, 216]);
 });
 
-test('returning to recently viewed frames uses cached planes', async ({ page }) => {
+test('frame navigation delivers planes without separate image requests', async ({ page }) => {
   await page.goto('/');
   await loadExample(page);
   const image = page.getByRole('img', { name: /24 by 32 quantitative image/ });
@@ -74,12 +99,12 @@ test('returning to recently viewed frames uses cached planes', async ({ page }) 
   await slider.focus();
   await slider.press('ArrowRight');
   await expect(image).toHaveAttribute('aria-label', /frame 2, slice 1/);
-  expect(slices).toBe(1);
+  expect(slices).toBe(0);
   await slider.press('ArrowLeft');
   await expect(image).toHaveAttribute('aria-label', /frame 1, slice 1/);
   await slider.press('ArrowRight');
   await expect(image).toHaveAttribute('aria-label', /frame 2, slice 1/);
-  expect(slices).toBe(1);
+  expect(slices).toBe(0);
   await expect(slider).toBeFocused();
 });
 

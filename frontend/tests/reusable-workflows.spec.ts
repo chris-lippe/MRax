@@ -100,7 +100,7 @@ test('processing workflows save, edit, share across studies and batch experiment
   await modal.getByRole('button', { name: /Shared Gaussian/ }).click();
   await modal.getByRole('button', { name: 'Edit definition', exact: true }).click();
   const editor = modal.getByLabel('Workflow JSON definition', { exact: true });
-  await editor.fill(JSON.stringify({ ...saved.document, format_version: 2 }));
+  await editor.fill(JSON.stringify({ ...saved.document, format_version: 99 }));
   await modal.getByRole('button', { name: 'Keep workflow changes', exact: true }).click();
   await expect(modal.getByRole('alert')).toContainText(/Unsupported|format_version/);
   await modal.getByRole('button', { name: 'Close workflows', exact: true }).click();
@@ -180,12 +180,14 @@ test('reconstruction workflows capture component choices and reuse the target ra
   const result = (await workspaces(request))[0];
   expect(result.pipeline.steps[0]).toMatchObject({
     kind: 'reconstruct',
-    options: { component: 'phase' },
+    options: {
+      workflow: { kind: 'reconstruction', steps: [{ settings: { component: 'phase' } }] },
+    },
   });
   await modal.getByRole('button', { name: 'Done', exact: true }).click();
   await selectTheme(page, 'dark');
   await page.getByRole('button', { name: 'Reconstruction workflows', exact: true }).click();
-  await modal.getByRole('button', { name: /Reconstruction workflow/ }).click();
+  await modal.getByRole('button', { name: /Cartesian Fourier/ }).click();
   expect(await modal.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: info.outputPath('reconstruction-workflow-dark.png') });
 });

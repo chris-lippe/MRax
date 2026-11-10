@@ -63,6 +63,7 @@ export function AnalysisPanel(
         {['preprocess', 'registration', 'analyze'].includes(section) && (
           <button
             className="secondary small workflow-library-trigger"
+            data-tutorial="processing-workflows"
             disabled={blocked.busy}
             onClick={() => props.openWorkflows?.('processing')}
           >
@@ -104,7 +105,7 @@ export function AnalysisPanel(
           <RoiControls {...blocked} task={task} />
         </div>
         <div hidden={task !== 'reconstruction'}>
-          <ReconstructionControls {...blocked} />
+          <ReconstructionControls {...blocked} active={task === 'reconstruction'} />
         </div>
         <div hidden={task !== 'mask-import'}>
           <MaskImportControls {...blocked} />

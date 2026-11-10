@@ -50,3 +50,22 @@ test('tiny image planes cannot create an unbounded number of cache entries', () 
   expect(cache.get(JSON.stringify(['study', 128]))).toBeDefined();
   expect(cache.bytes).toBe(128 * 4);
 });
+
+test('shared packet buffers are budgeted once and stay charged until every view is removed', () => {
+  const cache = new ImagePlaneCache(32);
+  const packet = new ArrayBuffer(32);
+  const first = JSON.stringify(['first', 0]);
+  const second = JSON.stringify(['second', 0]);
+  cache.set(first, new Float32Array(packet, 0, 4));
+  cache.set(second, new Float32Array(packet, 16, 4));
+  expect(cache.bytes).toBe(32);
+  cache.clearWorkspace('first');
+  expect(cache.bytes).toBe(32);
+  expect(cache.get(second)).toBeDefined();
+  cache.clearWorkspace('second');
+  expect(cache.bytes).toBe(0);
+  const oversized = new Float32Array(new ArrayBuffer(64), 0, 1);
+  cache.set(first, oversized);
+  expect(cache.get(first)).toBeUndefined();
+  expect(cache.bytes).toBe(0);
+});

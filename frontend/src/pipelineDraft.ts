@@ -48,17 +48,58 @@ export function newPipelineDraft(w: Workspace): PipelineDraft {
     baseline: JSON.stringify(steps.map(stepSpec)),
   };
 }
-export function draftProblem(draft: PipelineDraft) {
+export function draftProblem(draft: PipelineDraft, workspace?: Workspace) {
   try {
     if (draft.steps.length > 64) return 'Use at most 64 steps.';
     for (const [index, step] of draft.steps.entries()) {
       try {
-        stepOptions(step);
+        const options = stepOptions(step);
+        if (step.enabled && ['reconstruct', 'fit'].includes(step.kind)) {
+          const document = options.workflow as
+            | {
+                name?: string;
+                kind?: string;
+                bindings?: { id: string }[];
+                steps?: { settings: Options }[];
+              }
+            | undefined;
+          if (document) {
+            if (!document.name?.trim()) return 'Give each workflow block a name.';
+            if (document.kind !== (step.kind === 'reconstruct' ? 'reconstruction' : 'fitting'))
+              return 'Choose the matching workflow for each block.';
+            const bindings = options.bindings as Record<string, string> | undefined;
+            if (document.bindings?.some((binding) => !bindings?.[binding.id]))
+              return 'Assign every workflow block input.';
+          }
+          if (step.kind === 'reconstruct' && workspace) {
+            if (!workspace.can_reconstruct)
+              return (
+                workspace.reconstruction_unavailable ?? 'This experiment has no valid k-space data.'
+              );
+            const pipeline = (document?.steps?.[0]?.settings.pipeline ?? options.pipeline) as
+              { encoding?: string; stages?: { kind: string; enabled?: boolean }[] } | undefined;
+            if (
+              pipeline?.encoding &&
+              !['any', workspace.reconstruction_encoding].includes(pipeline.encoding)
+            )
+              return 'The reconstruction workflow is incompatible with this acquisition encoding.';
+            if (
+              workspace.reconstruction_encoding === 'cartesian' &&
+              pipeline?.stages?.some((stage) => stage.enabled !== false && stage.kind === 'nufft')
+            )
+              return 'NUFFT reconstruction requires non-Cartesian k-space.';
+          }
+        }
       } catch (failure) {
         return 'Step ' + (index + 1) + ': ' + String(failure);
       }
       if (step.kind === 'reconstruct' && index !== 0)
         return 'Reconstruction defines the source and stays first.';
+      if (
+        step.kind === 'reconstruct' &&
+        draft.steps.slice(0, index).some((row) => row.kind === 'reconstruct')
+      )
+        return 'Use one reconstruction block, first.';
     }
     return '';
   } catch (failure) {
@@ -104,6 +145,7 @@ export function insertedStep(
     enabled: true,
     options,
     plane_dims: [],
+    result_maps: [],
   };
 }
 export function movedSteps(steps: DraftStep[], id: string, destination: number) {

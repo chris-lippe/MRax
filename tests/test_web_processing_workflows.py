@@ -166,6 +166,102 @@ def test_denoise_fit_statistics_and_save_form_one_workflow(client):
     assert r["fit_info"]["roi_names"] == ["Tissue"]
 
 
+@pytest.mark.parametrize("method", ["bm3d", "bm4d"])
+@pytest.mark.parametrize("complex_data", [False, True])
+def test_bm_tasks_denoise_zero_padded_images_without_changing_the_source(client, method, complex_data):
+    pytest.importorskip(method)
+    w = create(client)
+    workspace = client.app.state.records[w["id"]].workspace
+    truth = np.zeros((1, 32, 32, 12))
+    truth[:, 8:24, 8:24, 3:9] = 1e6
+    noisy = np.where(truth != 0, truth + np.random.default_rng(42).normal(0, 80000, truth.shape), 0)
+    if complex_data:
+        truth = truth * (1 + 0.5j)
+        noisy = noisy * (1 + 0.5j)
+    workspace.session.add_experiment(
+        "Padded synthetic phantom", noisy, dims={"frame": 1, "x": 32, "y": 32, "z": 12},
+        model_name="identity",
+    )
+    w = view(client, latest(client, w), z=6)
+    source = np.asarray(workspace.session.original_image_array).copy()
+    image_before = client.get(f"/api/workspaces/{w['id']}/slice").content
+    w, _ = job(client, w, "process", method=method, input="image",
+               axes=["x", "y"] if method == "bm3d" else ["x", "y", "z"],
+               parameters={"sigma": None, "stage": "full", "complex_mode": "real_imag"})
+    workspace = client.app.state.records[w["id"]].workspace
+    result = np.asarray(workspace.session.image_array)
+    assert np.mean(np.abs(result - truth) ** 2) < 0.25 * np.mean(np.abs(noisy - truth) ** 2)
+    assert np.iscomplexobj(result) == complex_data
+    np.testing.assert_array_equal(workspace.session.original_image_array, source)
+    assert len(w["pipeline"]["steps"]) == 1
+    assert w["pipeline"]["steps"][0]["options"]["method"] == method
+    assert client.get(f"/api/workspaces/{w['id']}/slice").content != image_before
+
+
+@pytest.mark.parametrize("method", ["bm3d", "bm4d"])
+def test_noise_preview_roi_pipeline_persistence_and_replacement_use_the_same_input(client, tmp_path, method):
+    pytest.importorskip(method)
+    w = create(client)
+    workspace = client.app.state.records[w["id"]].workspace
+    rng = np.random.default_rng(35)
+    truth = np.zeros((2, 32, 32, 12))
+    truth[:, 8:24, 8:24, 3:9] = 1e6
+    image = np.hypot(truth + rng.normal(0, 40000, truth.shape), rng.normal(0, 40000, truth.shape))
+    workspace.session.add_experiment("MRI noise", image, dims={"frame": 2, "x": 32, "y": 32, "z": 12}, model_name="identity")
+    image = np.asarray(workspace.session.image_array).copy()
+    mask = np.zeros((32, 32, 12), dtype=bool)
+    mask[:8, :8, 0] = True  # A noise ROI on one slice also serves the other blocks.
+    workspace.session.rois = [ROI("Noise reference", mask, dims=("x", "y", "z"))]
+    options = {"method": method, "input": "image", "component": "auto",
+               "axes": ["x", "y"] if method == "bm3d" else ["x", "y", "z"],
+               "parameters": {"sigma": None, "noise_model": "background", "noise_coils": 1},
+               "noise_roi_names": ["Noise reference"]}
+    before = latest(client, w)
+    response = client.post(f"/api/workspaces/{w['id']}/noise-estimate", json={"revision": before["revision"], "options": options})
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert preview["sigma"] == pytest.approx(40000, rel=0.2)
+    assert latest(client, w) == before
+    w, _ = job(client, before, "process", **options)
+    actual = w["pipeline"]["steps"][0]["noise_estimate"]
+    assert actual == preview
+    assert actual["scope"] == "roi"
+    source = client.app.state.records[w["id"]].workspace
+    np.testing.assert_array_equal(source.session.original_image_array, image)
+    assert not np.array_equal(source.session.image_array, image)
+    response = client.post(f"/api/workspaces/{w['id']}/noise-estimate", json={"revision": w["revision"], "options": options})
+    assert response.json() == preview  # Not estimated from the denoised output.
+    save_workspace_bundle(source, tmp_path / "noise.mrax")
+    restored = load_workspace_bundle(tmp_path / "noise.mrax", tmp_path / "restored", key="restored")
+    step = next(iter(restored.pipelines.values()))["steps"][0]
+    assert step["noise_estimate"] == actual
+    np.testing.assert_array_equal(step["noise_mask"]["mask"], mask)
+    from mrax.gui.services.pipeline import change_pipeline
+    from mrax.gui.services.reusable_workflows import capture_workflow, validate_workflow_targets
+    from mrax.workflows import dumps_workflow, loads_workflow
+
+    document, bindings = capture_workflow(source, "processing")
+    portable = loads_workflow(dumps_workflow(document))
+    assert portable.steps[0].settings["noise_roi_names"][0]["$binding"] in bindings
+    validate_workflow_targets(source, portable, ["MRI noise"], {"MRI noise": bindings})
+    # Frozen noise masks survive later edits to the visible ROI.
+    source.session.rois = []
+    change_pipeline(source, {"action": "toggle", "step_id": step["id"], "enabled": True}, lambda *_: None)
+    assert next(iter(source.pipelines.values()))["steps"][0]["noise_estimate"] == actual
+    run_processing(source, {**options, "noise_roi_names": None, "parameters": {"sigma": 0}}, lambda *_: None)
+    np.testing.assert_array_equal(source.session.image_array, image)
+
+
+def test_noise_preview_validates_revision_roi_and_does_not_mutate_the_workspace(client):
+    w = create(client)
+    options = {"method": "bm3d", "input": "image", "axes": ["x", "y"], "noise_roi_names": []}
+    before = latest(client, w)
+    for revision, expected in [(w["revision"] + 1, 409), (w["revision"], 422)]:
+        response = client.post(f"/api/workspaces/{w['id']}/noise-estimate", json={"revision": revision, "options": options})
+        assert response.status_code == expected, response.text
+    assert latest(client, w) == before
+
+
 @pytest.mark.parametrize(
     "method,parameters",
     [

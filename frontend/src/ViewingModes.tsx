@@ -48,6 +48,7 @@ export function ViewingModes({
       </div>
       <button
         className="secondary full"
+        data-tutorial="view-compare-original"
         disabled={busy}
         onClick={() => void changeView({ scene: { comparison: originalComparison(workspace) } })}
       >

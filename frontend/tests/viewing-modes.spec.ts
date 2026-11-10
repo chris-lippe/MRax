@@ -136,12 +136,9 @@ test('pair frame and slice controls stay responsive through slow image updates',
   const before = await current(request);
   await page.getByRole('button', { name: 'Overlay', exact: true }).click();
   await expect(page.getByRole('img', { name: /^Image A:/ })).toBeVisible();
-  await page.route('**/api/workspaces/*/view', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    await route.continue();
-  });
-  await page.route('**/api/workspaces/*/comparison', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  await page.route('**/api/workspaces/*/navigate', async (route) => {
+    if (route.request().postDataJSON().commit)
+      await new Promise((resolve) => setTimeout(resolve, 250));
     await route.continue();
   });
   for (const name of ['Frame', 'Slice']) {

@@ -1,8 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { Options, Tool, Workspace } from './api';
 import type { ViewingContext } from './viewing';
 import type { Workflow, WorkflowTasks } from './WorkflowNav';
 import { WorkbenchIcon } from './WorkbenchIcon';
+import { findTutorialTarget, measureTutorialTarget, type ScrollCue } from './tutorialGeometry';
+import { tutorialSteps, type TutorialStepId } from './tutorialSteps';
 
 export type TutorialSession = {
   studyId: string;
@@ -18,56 +20,15 @@ export type TutorialSession = {
   initialFrame: number;
   initialSlice: number;
   step: number;
+  completed: TutorialStepId[];
 };
-
-export const tutorialSteps = [
-  {
-    title: 'Your practice study',
-    text: 'This synthetic T2 study has eight echoes and three slices. The study browser selects studies and experiments. The tutorial uses this study throughout; your other studies remain open.',
-    action: '',
-  },
-  {
-    title: 'Inspect the image',
-    text: 'Move the Echo or Slice slider. Arrow keys also adjust a focused slider. Use the mouse wheel to zoom and drag to pan; the View controls expose brightness and contrast.',
-    action: 'Open image controls',
-  },
-  {
-    title: 'Apply denoising',
-    text: 'Open Denoising under Preprocess, keep the Gaussian denoiser, and apply it. The processing pipeline retains the original image.',
-    action: 'Open Denoising',
-  },
-  {
-    title: 'Compare with the original',
-    text: 'Choose Compare with original above the image, then move the split divider. The divider can also be focused and adjusted with arrow keys.',
-    action: 'Show comparison controls',
-  },
-  {
-    title: 'Draw an ROI',
-    text: 'Open Segment, activate Draw rectangle, and drag over part of the phantom. The ROI is shared with viewing, fitting and analysis.',
-    action: 'Open Segment',
-  },
-  {
-    title: 'Fit a parameter map',
-    text: 'Open Fit and run the full map fit with the T2 model. You can limit fitting to your ROI. The synthetic reference T2 is 80 ms.',
-    action: 'Open Fit',
-  },
-  {
-    title: 'Review the result',
-    text: 'Open ROI map statistics under Analyze. Select t2 in the Map control above the image and in Statistics map to view the fitted T2 values inside your ROI.',
-    action: 'Open map statistics',
-  },
-  {
-    title: 'Save or export',
-    text: 'Save workspace keeps the study, pipeline, masks and fit results together. Export data writes selected images, masks or maps. Saving a file is optional in this tutorial; the practice study stays open when you finish.',
-    action: 'Show data controls',
-  },
-] as const;
 
 export function Tutorial({
   session,
   workspace,
   context,
   drawing,
+  pipelineChanged,
   blocked,
   canResume,
   onStep,
@@ -79,101 +40,150 @@ export function Tutorial({
   workspace: Workspace | null;
   context: ViewingContext;
   drawing: boolean;
+  pipelineChanged: boolean;
   blocked: boolean;
   canResume: boolean;
-  onStep: (step: number) => void;
+  onStep: (step: number, completed?: boolean) => void;
   onOpen: () => void;
   onResume: () => void;
   onEnd: () => void;
 }) {
   const card = useRef<HTMLElement>(null);
+  const guidanceId = useId();
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => setCollapsed(false), [session.step]);
   const step = tutorialSteps[session.step];
   const owned = workspace?.id === session.studyId;
   const comparison = workspace?.scene.comparison;
+  const [editedPipeline, setEditedPipeline] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  useEffect(() => {
+    if (owned && step.id === 'pipeline' && pipelineChanged) setEditedPipeline(true);
+  }, [owned, step.id, pipelineChanged]);
+  const inContext =
+    step.context?.section === context.section && step.context?.task === context.task;
   const complete =
     owned &&
-    (session.step === 0 ||
-      (session.step === 1 &&
+    (session.completed.includes(step.id) ||
+      step.id === 'study' ||
+      (step.id === 'navigate' &&
         (workspace.frame !== session.initialFrame || workspace.z !== session.initialSlice)) ||
-      (session.step === 2 &&
+      (step.id === 'metadata' && inContext) ||
+      (step.id === 'reconstruct' &&
+        workspace.has_reconstruction &&
+        workspace.pipeline.steps.some((s) => s.kind === 'reconstruct' && s.enabled)) ||
+      (step.id === 'denoise' &&
         workspace.pipeline.steps.some((s) => s.family === 'denoise' && s.enabled)) ||
-      (session.step === 3 && comparison?.enabled && comparison.position !== 0.5) ||
-      (session.step === 4 && workspace.rois.some((r) => r.enabled && r.pixels > 0)) ||
-      (session.step === 5 &&
+      (step.id === 'pipeline' && editedPipeline && !pipelineChanged) ||
+      (step.id === 'compare' && comparison?.enabled && comparison.position !== 0.5) ||
+      (step.id === 'register' && inContext) ||
+      (step.id === 'roi' && workspace.rois.some((r) => r.enabled && r.pixels > 0)) ||
+      (step.id === 'mask' &&
+        workspace.rois.some(
+          (r) =>
+            r.enabled && r.pixels > 0 && (r.metadata.consolidated || r.metadata.kind === 'mask'),
+        )) ||
+      (step.id === 'fit' &&
         workspace.maps.some((map) => map.name === 't2') &&
         !workspace.pipeline.fits_stale) ||
-      (session.step === 6 &&
-        context.section === 'analyze' &&
-        context.task === 'statistics' &&
-        workspace.active_map === 't2') ||
-      session.step === 7);
+      (step.id === 'statistics' && inContext && workspace.active_map === 't2') ||
+      (step.id === 'signal' && inContext && Boolean(workspace.timecourse)) ||
+      (step.id === 'workflows' && inContext) ||
+      step.id === 'files');
   let selector = '';
   if (owned) {
-    if (session.step === 0) selector = '.study-item[aria-current="true"]';
-    if (session.step === 1) selector = '.dimension-controls';
-    if (session.step === 2)
-      selector =
-        context.section === 'preprocess'
-          ? '[data-tutorial="denoise-apply"]'
-          : '#workflow-preprocess';
-    if (session.step === 3)
-      selector = comparison?.enabled ? '.comparison-divider' : '[data-tutorial="compare-original"]';
-    if (session.step === 4)
-      selector =
-        context.section === 'rois'
-          ? drawing
-            ? '[data-testid="roi-surface"]'
-            : '[data-tutorial="roi-start"]'
-          : '#workflow-rois';
-    if (session.step === 5)
-      selector = context.section === 'fit' ? '[data-tutorial="fit-apply"]' : '#workflow-fit';
-    if (session.step === 6)
-      selector =
-        context.section === 'analyze'
-          ? workspace.active_map === 't2'
-            ? '#analysis-controls [aria-label="Statistics"]'
-            : '.viewer-controls [aria-label="Map"]'
-          : '#workflow-analyze';
-    if (session.step === 7) selector = '[aria-label="Workspace files"]';
+    if (step.id === 'study') selector = '.study-item[aria-current="true"]';
+    if (step.id === 'navigate') selector = '.dimension-controls:not([hidden])';
+    if (step.id === 'metadata')
+      selector = inContext ? '[aria-label="Metadata browser"]' : '#workflow-image';
+    if (step.id === 'reconstruct')
+      selector = inContext ? '[data-tutorial="reconstruct-apply"]' : '#workflow-reconstruct';
+    if (step.id === 'denoise')
+      selector = inContext ? '[data-tutorial="denoise-apply"]' : '#workflow-preprocess';
+    if (step.id === 'pipeline')
+      selector = pipelineChanged
+        ? '[data-tutorial="pipeline-discard"]'
+        : '[aria-label="Show processing steps"], [data-tutorial="pipeline-denoise-edit"]';
+    if (step.id === 'compare')
+      selector = inContext
+        ? comparison?.enabled
+          ? '.comparison-divider'
+          : '[data-tutorial="view-compare-original"]'
+        : '#workflow-image';
+    if (step.id === 'register')
+      selector = inContext
+        ? '#analysis-controls [aria-label="Reference image"]'
+        : '#workflow-registration';
+    if (step.id === 'roi')
+      selector = inContext
+        ? drawing
+          ? '[data-testid="roi-surface"]'
+          : '[data-tutorial="roi-start"]'
+        : '#workflow-rois';
+    if (step.id === 'mask')
+      selector = inContext ? '[data-tutorial="roi-pixel-mask"]' : '#workflow-rois';
+    if (step.id === 'fit') selector = inContext ? '[data-tutorial="fit-apply"]' : '#workflow-fit';
+    if (step.id === 'statistics')
+      selector = inContext
+        ? workspace.active_map === 't2'
+          ? '#analysis-controls [aria-label="Statistics"]'
+          : '.viewer-controls [aria-label="Map"]'
+        : '#workflow-analyze';
+    if (step.id === 'signal')
+      selector = inContext ? '[aria-label="Scientific signal viewer"]' : '#workflow-image';
+    if (step.id === 'workflows')
+      selector = inContext ? '[data-tutorial="processing-workflows"]' : '#workflow-preprocess';
+    if (step.id === 'files') selector = '[aria-label="Workspace files"]';
   }
   const [geometry, setGeometry] = useState<{
     target: { left: number; top: number; width: number; height: number } | null;
+    cue: ScrollCue | null;
     left: number;
     top: number;
     width: number;
   } | null>(null);
   useLayoutEffect(() => {
-    const target = selector
-      ? [...document.querySelectorAll<HTMLElement>(selector)].find(
-          (el) => el.getClientRects().length,
-        )
-      : undefined;
-    target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    let frame = 0;
+    let observedTarget: HTMLElement | null = null;
+    const schedule = () => {
+      if (!frame)
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          position();
+        });
+    };
+    const observer = new ResizeObserver(schedule);
+    if (card.current) observer.observe(card.current);
     const position = () => {
+      const modal = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].some(
+        (element) => element.getClientRects().length,
+      );
+      setDialogOpen(modal);
+      const target = findTutorialTarget(selector);
+      if (target !== observedTarget) {
+        observer.disconnect();
+        if (card.current) observer.observe(card.current);
+        for (let element = target; element; element = element.parentElement)
+          observer.observe(element);
+        observedTarget = target;
+      }
+      const measured = measureTutorialTarget(target);
       const width = Math.min(380, window.innerWidth - 32);
       const height = card.current?.offsetHeight ?? 240;
-      const rect = target?.getBoundingClientRect();
+      const rect = measured.anchor;
       let left = window.innerWidth - width - 16;
       let top = Math.max(76, window.innerHeight - height - 16);
       if (rect) {
-        if (window.innerWidth - rect.right > width + 24) left = rect.right + 16;
+        const right = rect.left + rect.width;
+        const bottom = rect.top + rect.height;
+        if (window.innerWidth - right > width + 24) left = right + 16;
         else if (rect.left > width + 24) left = rect.left - width - 16;
         else left = Math.min(Math.max(16, rect.left), window.innerWidth - width - 16);
-        top =
-          rect.bottom + height + 24 < window.innerHeight
-            ? rect.bottom + 12
-            : rect.top - height - 12;
+        top = bottom + height + 24 < window.innerHeight ? bottom + 12 : rect.top - height - 12;
       }
       const next = {
-        target:
-          rect && rect.width && rect.height
-            ? {
-                left: rect.left - 3,
-                top: rect.top - 3,
-                width: rect.width + 6,
-                height: rect.height + 6,
-              }
-            : null,
+        target: measured.target,
+        cue: measured.cue,
         left: Math.max(16, left),
         top: Math.max(16, Math.min(top, window.innerHeight - height - 16)),
         width,
@@ -181,28 +191,66 @@ export function Tutorial({
       setGeometry((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next));
     };
     position();
-    const observer = new ResizeObserver(position);
-    if (target) observer.observe(target);
-    if (card.current) observer.observe(card.current);
-    window.addEventListener('resize', position);
-    window.addEventListener('scroll', position, true);
+    const mutations = new MutationObserver((records) => {
+      if (
+        records.some(
+          (record) =>
+            !(
+              record.target instanceof Element ? record.target : record.target.parentElement
+            )?.closest('[data-tutorial-overlay]'),
+        )
+      )
+        schedule();
+    });
+    mutations.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['open', 'hidden', 'class', 'style'],
+    });
+    window.addEventListener('resize', schedule);
+    window.addEventListener('scroll', schedule, true);
     return () => {
       observer.disconnect();
-      window.removeEventListener('resize', position);
-      window.removeEventListener('scroll', position, true);
+      mutations.disconnect();
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', schedule);
+      window.removeEventListener('scroll', schedule, true);
     };
-  }, [selector, session.step]);
+  }, [selector, session.step, dialogOpen]);
   useEffect(() => {
-    card.current?.focus({ preventScroll: true });
-  }, [session.step]);
+    if (!dialogOpen) card.current?.focus({ preventScroll: true });
+  }, [session.step, dialogOpen]);
+  if (dialogOpen) return null;
   return (
     <>
       {owned && geometry?.target && (
-        <div className="tutorial-spotlight" aria-hidden="true" style={geometry.target} />
+        <div
+          className="tutorial-spotlight"
+          data-tutorial-overlay
+          aria-hidden="true"
+          style={geometry.target}
+        />
+      )}
+      {owned && geometry?.cue && (
+        <button
+          className="tutorial-scroll-cue"
+          data-tutorial-overlay
+          data-direction={geometry.cue.direction}
+          style={{ left: geometry.cue.left, top: geometry.cue.top }}
+          aria-label={`Scroll ${geometry.cue.direction} to the tutorial control`}
+          title={`Scroll ${geometry.cue.direction} to the tutorial control`}
+          onClick={() =>
+            findTutorialTarget(selector)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+          }
+        >
+          <WorkbenchIcon name="up" />
+        </button>
       )}
       <aside
         ref={card}
         className="tutorial-card"
+        data-tutorial-overlay
         role="region"
         aria-label="Workflow tutorial"
         tabIndex={-1}
@@ -214,55 +262,85 @@ export function Tutorial({
       >
         <header>
           <span>
-            Step {session.step + 1} of {tutorialSteps.length}
+            {collapsed ? step.title : `Step ${session.step + 1} of ${tutorialSteps.length}`}
           </span>
-          <button className="icon-button" aria-label="End tutorial" onClick={onEnd}>
-            <WorkbenchIcon name="close" />
-          </button>
-        </header>
-        <h2>{step.title}</h2>
-        <p>{owned ? step.text : 'Tutorial paused. Return to its synthetic study to continue.'}</p>
-        {!owned && !canResume && (
-          <p>The practice study has been closed. Start another tutorial from Settings.</p>
-        )}
-        {!owned && canResume && (
-          <button className="secondary" disabled={blocked} onClick={onResume}>
-            Return to tutorial study
-          </button>
-        )}
-        {owned && step.action && (
-          <button className="secondary" disabled={blocked} onClick={onOpen}>
-            {step.action}
-          </button>
-        )}
-        <p className="tutorial-progress" role="status" aria-live="polite">
-          {owned && complete
-            ? 'Step complete.'
-            : owned
-              ? 'Complete the action above to continue.'
-              : 'Paused.'}
-        </p>
-        <div className="tutorial-actions">
-          <button
-            className="secondary"
-            disabled={blocked || session.step === 0}
-            onClick={() => onStep(session.step - 1)}
-          >
-            Back
-          </button>
-          {session.step < tutorialSteps.length - 1 ? (
+          <div className="tutorial-window-actions">
             <button
-              className="primary"
-              disabled={blocked || !complete}
-              onClick={() => onStep(session.step + 1)}
+              className="icon-button tutorial-collapse"
+              aria-label={collapsed ? 'Expand tutorial guidance' : 'Collapse tutorial guidance'}
+              aria-expanded={!collapsed}
+              aria-controls={guidanceId}
+              onClick={() => setCollapsed(!collapsed)}
             >
-              Next
+              <WorkbenchIcon name="chevron" />
             </button>
-          ) : (
-            <button className="primary" disabled={blocked || !owned} onClick={onEnd}>
-              Finish tutorial
+            <button className="icon-button" aria-label="End tutorial" onClick={onEnd}>
+              <WorkbenchIcon name="close" />
+            </button>
+          </div>
+        </header>
+        <div id={guidanceId} hidden={collapsed}>
+          <h2>{step.title}</h2>
+          <p>{owned ? step.text : 'Tutorial paused. Return to its synthetic study to continue.'}</p>
+          {owned && geometry?.cue && (
+            <p className="tutorial-scroll-hint" role="status">
+              Scroll {geometry.cue.direction} in the indicated panel to reach the control. You can
+              also use the arrow button.
+            </p>
+          )}
+          {!owned && !canResume && (
+            <p>The practice study has been closed. Start another tutorial from Settings.</p>
+          )}
+          {!owned && canResume && (
+            <button className="secondary" disabled={blocked} onClick={onResume}>
+              Return to tutorial study
             </button>
           )}
+          {owned && step.action && (
+            <button className="secondary" disabled={blocked} onClick={onOpen}>
+              {step.action}
+            </button>
+          )}
+          <p className="tutorial-progress" role="status" aria-live="polite">
+            {owned && complete
+              ? 'Step complete.'
+              : owned
+                ? step.optional
+                  ? 'Optional. Open the controls or skip this step.'
+                  : 'Complete the action above, or skip this step.'
+                : 'Paused.'}
+          </p>
+          <div className="tutorial-actions">
+            <button
+              className="secondary"
+              disabled={blocked || !owned || session.step === 0}
+              onClick={() => onStep(session.step - 1)}
+            >
+              Back
+            </button>
+            {session.step < tutorialSteps.length - 1 ? (
+              <>
+                <button
+                  className="secondary"
+                  disabled={blocked || !owned}
+                  onClick={() => onStep(session.step + 1)}
+                >
+                  Skip step
+                </button>
+                <button
+                  className="primary"
+                  disabled={blocked || !complete}
+                  onClick={() => onStep(session.step + 1, true)}
+                >
+                  Next
+                </button>
+              </>
+            ) : (
+              <button className="primary" disabled={blocked || !owned} onClick={onEnd}>
+                Finish tutorial
+              </button>
+            )}
+          </div>
         </div>
       </aside>
     </>

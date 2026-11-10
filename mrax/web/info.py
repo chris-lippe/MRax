@@ -6,6 +6,7 @@ import numpy as np
 
 from mrax.gui.models import model_choices
 from mrax.gui.services.pipeline import display_session, display_steps, pipeline_info, project_roi
+from mrax.gui.services.reconstruction import reconstruction_label
 from mrax.gui.services.roi_tools import roi_runs
 from mrax.gui.services.scene import experiment_catalog, render_overlay, scene_info, scene_settings
 from mrax.gui.services.state import _fit_settings_to_dict, _preview_result_to_json
@@ -179,7 +180,10 @@ def workspace_info(record):
     )
     if loaded and mode == "Image":
         unit = (session.current_experiment.get("extra_metadata") or {}).get("image_unit", unit)
-    latest_fit = workspace.fit_results_by_experiment.get(session.selected_experiment or "")
+    from mrax.gui.services.pipeline_blocks import fit_result_for_map, reconstruction_available
+
+    latest_fit = fit_result_for_map(workspace)
+    can_reconstruct, reconstruction_unavailable = reconstruction_available(session)
     registrations = [
         {
             "key": key,
@@ -230,6 +234,7 @@ def workspace_info(record):
             "maps": [{"name": name, "unit": session.map_unit(name)} for name in map_names],
             "active_map": session.active_map,
             "reconstruction_component": session.active_reconstruction_component,
+            "reconstruction_label": reconstruction_label(workspace),
             "reconstruction_coil": session.active_reconstruction_coil,
             "coil_count": session.reconstruction_coil_count if loaded else 0,
             "unwrap_phase": session.active_reconstruction_unwrap_phase,
@@ -239,8 +244,10 @@ def workspace_info(record):
             "has_kspace": session.current_experiment.get("raw_kspace") is not None
             if loaded
             else False,
-            "can_reconstruct": session.can_reconstruct_raw_data() if loaded else False,
-            "can_load_raw": session.can_lazy_load_raw_data() if loaded else False,
+            "can_reconstruct": can_reconstruct,
+            "reconstruction_unavailable": reconstruction_unavailable,
+            "reconstruction_encoding": getattr(session.current_experiment.get("acquisition"), "kind", None) if loaded else None,
+            "can_load_raw": session.can_lazy_load_raw_data(require_acquisition=True) if loaded else False,
             "rois": rois,
             "selected_roi": None if selected_roi is None else selected_roi.name,
             "roi_undo": bool(workspace.roi_history),

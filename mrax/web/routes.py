@@ -32,6 +32,7 @@ from mrax.gui.services.export import (
 )
 from mrax.gui.services.export_workflow import export_destination_options
 from mrax.gui.services.mask_preview import native_mask_preview
+from mrax.gui.services.noise_estimation import preview_noise
 from mrax.gui.services.processing import processing_catalog, rename_processing_sources
 from mrax.gui.services.roi_tools import remember_rois, roi_command
 from mrax.gui.services.scene import rename_scene_roi, show_registration_layer
@@ -47,6 +48,7 @@ from .schemas import (
     ImportCommand,
     JobInfo,
     MaskPreview,
+    NoiseEstimateCommand,
     ProcessingCatalog,
     TaskCommand,
     TimecourseCommand,
@@ -190,12 +192,14 @@ def register_routes(app, get_record, check_revision, add_record):
         if kind == "auto" and path.is_dir():
             kind = _detect_import_vendor(path).lower()
         if kind == "bruker":
+            from mrax.io.bruker_frequency import consistent_bruker_frequency
+
+            rows = _detect_bruker_import_summary(path, command.options.get("pdata_index") or "1")
             return json_value(
                 {
                     "kind": kind,
-                    "experiments": _detect_bruker_import_summary(
-                        path, command.options.get("pdata_index") or "1"
-                    ),
+                    "experiments": rows,
+                    "field_strength_mhz": consistent_bruker_frequency(row["field_strength_mhz"] for row in rows if row["importable"]),
                 }
             )
         if kind == "pulseq":
@@ -571,6 +575,33 @@ def register_routes(app, get_record, check_revision, add_record):
         record = get_record(key)
         with record.lock:
             return processing_catalog(record.workspace)
+
+    @app.get("/api/workspaces/{key}/reconstruction")
+    def reconstruction(key: str):
+        from mrax.gui.services.reconstruction import reconstruction_catalog
+
+        record = get_record(key)
+        with record.lock:
+            return reconstruction_catalog(record.workspace)
+
+    @app.get("/api/workspaces/{key}/pipeline-blocks")
+    def pipeline_blocks(key: str):
+        from mrax.gui.services.pipeline_blocks import block_catalog
+
+        record = get_record(key)
+        with record.lock:
+            return block_catalog(record.workspace)
+
+    @app.post("/api/workspaces/{key}/noise-estimate")
+    def noise_estimate(key: str, command: NoiseEstimateCommand):
+        record = get_record(key)
+        with record.lock:
+            check_revision(record, command.revision)
+            snapshot = clone_workspace(record.workspace, readonly_arrays=True)
+        result = preview_noise(snapshot, command.options)
+        with record.lock:
+            check_revision(record, command.revision)
+        return result
 
     @app.get("/api/workspaces/{key}/roi-statistics")
     def roi_statistics(key: str, map_name: str | None = None):

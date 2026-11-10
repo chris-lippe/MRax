@@ -6,6 +6,13 @@ import {
 } from './api';
 import type { Workflow, WorkflowTask } from './WorkflowNav';
 
+export function viewLabel(workspace: Workspace, view: string) {
+  if (view === 'MRax reconstruction') return workspace.reconstruction_label;
+  if (view === 'Vendor vs MRax') return 'Vendor comparison';
+  if (view === 'Vendor MRax Diff') return 'Reconstruction difference';
+  return view;
+}
+
 export type ViewingContext = { section: Workflow; task: WorkflowTask };
 export type SavedView = {
   view: string;

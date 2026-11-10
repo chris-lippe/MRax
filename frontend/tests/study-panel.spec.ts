@@ -32,6 +32,62 @@ async function dragBrowser(page: Page, width: number, release = true) {
   if (release) await page.mouse.up();
 }
 
+test('study expansion is independent of selection and experiments in other studies can be opened', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await loadExample(page);
+  await loadExample(page, 'multimodal');
+  const studies = await showStudies(page);
+  const t2 = studies.getByRole('region', {
+    name: 'Experiments in Synthetic T2 phantom',
+    exact: true,
+  });
+  const multimodal = studies.getByRole('region', {
+    name: 'Experiments in Synthetic multimodal study',
+    exact: true,
+  });
+  await expect(t2).toBeVisible();
+  await expect(multimodal).toBeVisible();
+  await studies
+    .getByRole('button', { name: 'Collapse study: Synthetic T2 phantom', exact: true })
+    .click();
+  await expect(t2).toBeHidden();
+  await expect(
+    page.getByRole('heading', { name: 'Synthetic multimodal study', exact: true }),
+  ).toBeVisible();
+  await studies
+    .getByRole('button', { name: 'Collapse study: Synthetic multimodal study', exact: true })
+    .click();
+  await expect(multimodal).toBeHidden();
+  const t2Title = studies.locator('.study-item').filter({ hasText: 'Synthetic T2 phantom' });
+  await t2Title.click();
+  await expect(
+    page.getByRole('heading', { name: 'Synthetic T2 phantom', exact: true }),
+  ).toBeVisible();
+  await expect(t2).toBeHidden();
+  await t2Title.press('ArrowRight');
+  await expect(t2).toBeVisible();
+  await t2Title.press('ArrowLeft');
+  await expect(t2).toBeHidden();
+  await studies
+    .getByRole('button', { name: 'Expand study: Synthetic multimodal study', exact: true })
+    .click();
+  await expect(multimodal).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Synthetic T2 phantom', exact: true }),
+  ).toBeVisible();
+  await multimodal.getByRole('button', { name: 'Complex coils', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Synthetic multimodal study', exact: true }),
+  ).toBeVisible();
+  await expect(
+    multimodal.getByRole('button', { name: 'Complex coils', exact: true }),
+  ).toHaveAttribute('aria-current', 'true');
+  await expect(t2).toBeHidden();
+  await expect(multimodal).toBeVisible();
+});
+
 test('hover close targets its study and preserves the active view and keyboard focus', async ({
   page,
   request,
@@ -121,9 +177,9 @@ test('open studies fill the panel, long names reflow, and Settings stays fixed w
     expect(response.ok()).toBe(true);
   }
   await page.goto('/');
-  const studies = page.getByRole('complementary', { name: 'Data & studies', exact: true });
+  const studies = page.getByRole('complementary', { name: 'Data & Studies', exact: true });
   await expect(studies.locator('.study-item')).toHaveCount(8);
-  await expect(studies.getByRole('heading', { name: 'Data controls', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Data & Studies', exact: true })).toBeVisible();
   await expect(studies.getByRole('button', { name: 'Import data', exact: true })).toBeVisible();
   const browser = studies.locator('.study-browser-body');
   const files = (await studies
@@ -138,6 +194,7 @@ test('open studies fill the panel, long names reflow, and Settings stays fixed w
   expect(footerTop - (browserBox.y + browserBox.height)).toBeLessThan(20);
   const requests: string[] = [];
   page.on('request', (request) => {
+    if (request.url().endsWith('/navigate') && request.postDataJSON()?.commit === false) return;
     if (request.url().includes('/api/')) requests.push(request.url());
   });
   await dragBrowser(page, 520, false);
@@ -232,6 +289,7 @@ test('New study keeps examples in its form and data actions stay visible under t
   const files = await showDataControls(page);
   const newStudy = files.getByRole('button', { name: 'New study', exact: true });
   await expect(files.getByText('Example studies', { exact: true })).toHaveCount(0);
+  await expect(newStudy).toBeEnabled();
   await newStudy.focus();
   await page.keyboard.press('ArrowDown');
   await expect(files.getByRole('button', { name: 'Open workspace', exact: true })).toBeFocused();
@@ -287,7 +345,7 @@ test('New study keeps examples in its form and data actions stay visible under t
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
 });
 
-test('compact study drawers retain the Settings footer and become a single sidebar on resize', async ({
+test('compact study panels retain the Settings footer and stay open when widened', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 700, height: 600 });
@@ -299,11 +357,11 @@ test('compact study drawers retain the Settings footer and become a single sideb
   await settings.getByRole('button', { name: 'Dark theme', exact: true }).click();
   await settings.getByRole('button', { name: 'Done', exact: true }).click();
   await expect(settingsButton).toBeFocused();
-  await expect(page.getByRole('dialog', { name: 'Data & studies', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Data & Studies', exact: true })).toHaveCount(0);
   await page.setViewportSize({ width: 1280, height: 720 });
-  await expect(page.getByRole('dialog', { name: 'Data & studies', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Data & Studies', exact: true })).toHaveCount(0);
   await expect(
-    page.getByRole('complementary', { name: 'Data & studies', exact: true }),
+    page.getByRole('complementary', { name: 'Data & Studies', exact: true }),
   ).toHaveCount(1);
   await expect(
     page.getByRole('separator', { name: 'Resize study browser', exact: true }),

@@ -39,13 +39,13 @@ For a restricted shared installation, an administrator can use
 Workspace
 ---------
 
-The **Data & studies** panel on the left lists open studies and their experiments.
-The buttons under **Data controls** create, open, import, save, export or close studies.
+The study browser on the left lists open studies and their experiments.
+Its buttons create, open, import, save or export studies.
+**Data & Studies** stays open on the left. Drag its right divider to adjust its width.
 **New study** opens a form for empty or example studies. **View → Metadata**
 provides names, constants and data inspection in the main workspace.
 **Export data**, below **Import data**,
 opens a dialog for array, ROI, package and report exports.
-In compact windows, **Data & studies** opens the same panel as a drawer.
 
 Choose a workflow tab in the header. Tabs with a chevron open a task menu;
 the selected task's controls appear on the right, or in the main workspace for
@@ -53,7 +53,10 @@ the metadata browser. Each tab remembers its
 last task and settings. Use arrow keys to move between tabs, Down to open a
 menu, and Escape to close it.
 Plane selection, intensity controls and frame/slice sliders stay beside the image
-throughout processing. The signal preview shows the selected ROI. Drag its bottom
+throughout processing. Drag the divider below the image viewer down to enlarge the
+image area and move the signal preview lower. The image keeps its aspect ratio
+and grows until it fills the available width.
+The signal preview shows the selected ROI. Drag its bottom
 divider down to enlarge it without shrinking the image; arrow keys resize the
 focused divider, and Home or double-click restores its default height.
 **Settings**, fixed at the bottom of the study panel, controls appearance,
@@ -100,7 +103,7 @@ independently. These controls change the display without altering image data.
 **Image** returns to the current experiment with its saved layers and ROI masks.
 
 **View** adjusts the current working display. **Reconstruct** provides experiment,
-MRax, vendor comparison, difference and k-space views beside the image. **Fit**
+named reconstruction, vendor comparison, difference and k-space views beside the image. **Fit**
 opens available parameter maps with a color scale and units; switch to **Signal**
 to inspect the input. **Segment** opens the editable image and ROI selector.
 Each action remembers its viewing choices while you work.
@@ -125,11 +128,16 @@ signal normalization. **Register** aligns images and corrects drift. **Analyze**
 groups time-series corrections, ROI timecourses, map statistics and derived
 diffusion metrics. **View** changes display settings without processing data.
 
+For BM3D/BM4D, leave **Noise sigma** empty and select **Estimate noise** to preview
+sigma and its range. **Estimate noise from ROIs** uses a uniform region independently
+of the processing mask. A noise-only magnitude background requires its effective
+coil count. Completed steps retain the estimates used; automatic whole-image
+estimation runs per filter block, while a selected ROI supplies a shared estimate.
+
 Processing updates the selected experiment. Its pipeline appears above the
-image. **Source** selects the protected **Vendor image** or an available **MRax
-reconstruction** as input to the processing steps. Confirmed source changes
-reapply later steps and retain existing fits and maps. Reconstruct images first
-to enable that source.
+image. **Source** selects **Image data** or the reconstruction block's output.
+Reconstruction requires valid acquired k-space; load it in Reconstruct first.
+Without a reconstruction block, processing starts from imported image data.
 Expand the pipeline to draft changes. Insert, copy or remove steps; drag them or
 use the arrow buttons to change their order. **Edit** opens inline settings;
 **Use action controls** opens the corresponding parameter form. Both edit the
@@ -139,6 +147,9 @@ Running steps show progress and completion status; **Cancel run** stops a replay
 at a safe boundary. Failed or cancelled runs retain the previous images and chain.
 Reconstruction defines the source and remains first. Workspace bundles and saved
 workflows contain the confirmed pipeline, so apply edits before saving them.
+**Insert step** can also load ``.mrec`` and ``.mfit`` workflows. Fitting blocks
+store named map sets alongside images and use the image state at their position
+in the chain. See :doc:`workflows` for saving and reusing complete pipelines.
 The center workspace scrolls, so expanding settings moves the image down without
 reducing its size.
 Running another denoising or registration from its action tab replaces the

@@ -186,7 +186,7 @@ export function RegistrationControls({
                     >
                       <option value="image">Image</option>
                       <option value="reconstruction" disabled={!experiment?.has_reconstruction}>
-                        MRax reconstruction
+                        {experiment?.reconstruction_label ?? 'Reconstruction'}
                       </option>
                       <option value="map" disabled={!experiment?.maps.length}>
                         Fitted map

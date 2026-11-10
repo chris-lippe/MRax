@@ -518,6 +518,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workspaces/{key}/navigate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Navigate */
+        post: operations["navigate_api_workspaces__key__navigate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workspaces/{key}/noise-estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Noise Estimate */
+        post: operations["noise_estimate_api_workspaces__key__noise_estimate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workspaces/{key}/parameters": {
         parameters: {
             query?: never;
@@ -527,6 +561,23 @@ export interface paths {
         };
         /** Parameters */
         get: operations["parameters_api_workspaces__key__parameters_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workspaces/{key}/pipeline-blocks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pipeline Blocks */
+        get: operations["pipeline_blocks_api_workspaces__key__pipeline_blocks_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -561,6 +612,23 @@ export interface paths {
         };
         /** Processing */
         get: operations["processing_api_workspaces__key__processing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workspaces/{key}/reconstruction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reconstruction */
+        get: operations["reconstruction_api_workspaces__key__reconstruction_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -973,6 +1041,11 @@ export interface components {
             maps: string[];
             /** Name */
             name: string;
+            /**
+             * Reconstruction Label
+             * @default Reconstruction
+             */
+            reconstruction_label: string;
             /** Rois */
             rois: string[];
         };
@@ -1064,6 +1137,39 @@ export interface components {
             slice_dim: string | null;
             /** Slice Index */
             slice_index: number;
+        };
+        /** NavigationCommand */
+        NavigationCommand: {
+            /**
+             * Commit
+             * @default true
+             */
+            commit: boolean;
+            /**
+             * Include Images
+             * @default true
+             */
+            include_images: boolean;
+            /** Indices */
+            indices: {
+                [key: string]: number;
+            };
+            /** Revision */
+            revision: number;
+            /** View Revision */
+            view_revision: number;
+        };
+        /** NoiseEstimateCommand */
+        NoiseEstimateCommand: {
+            /**
+             * Options
+             * @default {}
+             */
+            options: {
+                [key: string]: unknown;
+            };
+            /** Revision */
+            revision: number;
         };
         /** OverlayChoice */
         OverlayChoice: {
@@ -1199,6 +1305,13 @@ export interface components {
              */
             signature: string;
             /**
+             * Sources
+             * @default {}
+             */
+            sources: {
+                [key: string]: components["schemas"]["PipelineSource"];
+            };
+            /**
              * Steps
              * @default []
              */
@@ -1215,6 +1328,20 @@ export interface components {
             status: "running" | "completed" | "failed" | "cancelled" | "stale";
             /** Steps */
             steps: components["schemas"]["PipelineStepProgress"][];
+        };
+        /** PipelineSource */
+        PipelineSource: {
+            /** Format */
+            format: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "image" | "kspace";
+            /** Location */
+            location: string;
+            /** Path */
+            path?: string | null;
         };
         /** PipelineStep */
         PipelineStep: {
@@ -1234,6 +1361,10 @@ export interface components {
             label: string;
             /** Method */
             method: string;
+            /** Noise Estimate */
+            noise_estimate?: {
+                [key: string]: unknown;
+            } | null;
             /** Options */
             options: {
                 [key: string]: unknown;
@@ -1249,6 +1380,11 @@ export interface components {
             plane_dims: string[];
             /** Result Key */
             result_key?: string | null;
+            /**
+             * Result Maps
+             * @default []
+             */
+            result_maps: string[];
             /** Version */
             version: string;
         };
@@ -1691,9 +1827,9 @@ export interface components {
             format: "mrax.workflow";
             /**
              * Format Version
-             * @constant
+             * @enum {integer}
              */
-            format_version: 1;
+            format_version: 1 | 2;
             /**
              * Kind
              * @enum {string}
@@ -1925,6 +2061,15 @@ export interface components {
              * @default magnitude
              */
             reconstruction_component: string;
+            /** Reconstruction Encoding */
+            reconstruction_encoding?: string | null;
+            /**
+             * Reconstruction Label
+             * @default Reconstruction
+             */
+            reconstruction_label: string;
+            /** Reconstruction Unavailable */
+            reconstruction_unavailable?: string | null;
             /**
              * Registrations
              * @default []
@@ -3008,11 +3153,112 @@ export interface operations {
             };
         };
     };
+    navigate_api_workspaces__key__navigate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NavigationCommand"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    noise_estimate_api_workspaces__key__noise_estimate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NoiseEstimateCommand"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     parameters_api_workspaces__key__parameters_get: {
         parameters: {
             query?: {
                 model?: string | null;
             };
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pipeline_blocks_api_workspaces__key__pipeline_blocks_get: {
+        parameters: {
+            query?: never;
             header?: never;
             path: {
                 key: string;
@@ -3094,6 +3340,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProcessingCatalog"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconstruction_api_workspaces__key__reconstruction_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

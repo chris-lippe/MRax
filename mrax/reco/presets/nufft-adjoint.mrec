@@ -1,0 +1,73 @@
+{
+  "format": "mrax.workflow",
+  "format_version": 1,
+  "kind": "reconstruction",
+  "mrax_version": "0.4.0",
+  "name": "NUFFT adjoint",
+  "description": "NUFFT adjoint on the encoding grid, using acquisition density weights when available.",
+  "bindings": [],
+  "steps": [
+    {
+      "id": "reconstruction",
+      "operation": "reconstruct",
+      "version": 1,
+      "enabled": true,
+      "settings": {
+        "component": "magnitude",
+        "pipeline": {
+          "schema_version": 1,
+          "name": "NUFFT adjoint",
+          "encoding": "sampled",
+          "stages": [
+            {
+              "kind": "profile_inversion",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "shift",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "window",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "nufft",
+              "enabled": true,
+              "when": "always",
+              "options": {
+                "eps": 0.000001,
+                "density_compensation": true
+              }
+            },
+            {
+              "kind": "format",
+              "enabled": true,
+              "when": "always",
+              "options": {}
+            },
+            {
+              "kind": "combine",
+              "enabled": true,
+              "when": "always",
+              "options": {}
+            },
+            {
+              "kind": "product",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "extensions": {}
+}

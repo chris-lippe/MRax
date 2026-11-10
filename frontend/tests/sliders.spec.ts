@@ -32,12 +32,9 @@ async function move(page: Page, slider: Locator, fraction: number) {
 test('frame and slice sliders keep one drag across slow image updates', async ({ page }) => {
   const failures: string[] = [];
   page.on('pageerror', (error) => failures.push(error.message));
-  await page.route('**/api/workspaces/*/view', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    await route.continue();
-  });
-  await page.route('**/api/workspaces/*/slice', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 150));
+  await page.route('**/api/workspaces/*/navigate', async (route) => {
+    if (route.request().postDataJSON().commit)
+      await new Promise((resolve) => setTimeout(resolve, 350));
     await route.continue();
   });
   const image = page.getByTestId('roi-surface');
@@ -83,7 +80,11 @@ test('rapid keyboard navigation keeps the latest frame and slice without paralle
   const firstRequest = new Promise<void>((resolve) => {
     started = resolve;
   });
-  await page.route('**/api/workspaces/*/view', async (route) => {
+  await page.route('**/api/workspaces/*/navigate', async (route) => {
+    if (!route.request().postDataJSON().commit) {
+      await route.continue();
+      return;
+    }
     active++;
     updates++;
     maximumActive = Math.max(maximumActive, active);
@@ -150,8 +151,8 @@ test('a failed navigation keeps the displayed image and allows another slider ch
   page,
 }) => {
   let fail = true;
-  await page.route('**/api/workspaces/*/view', async (route) => {
-    if (fail) {
+  await page.route('**/api/workspaces/*/navigate', async (route) => {
+    if (fail && route.request().postDataJSON().commit) {
       fail = false;
       await route.fulfill({
         status: 503,

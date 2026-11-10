@@ -272,7 +272,7 @@ def _plane(workspace, source, navigation):
     )
 
 
-def render_comparison(workspace):
+def render_comparison(workspace, *, catalog=None):
     from .scene import experiment_catalog, require_common_grid, scene_settings
 
     settings = scene_settings(workspace)["comparison"]
@@ -282,7 +282,9 @@ def render_comparison(workspace):
         if source["kind"] == "registration":
             result = workspace.registration_results[source["registration_key"]]
             names.add(result["metadata"]["moving_experiment"])
-    choices = comparison_sources(workspace, experiment_catalog(workspace, names))
+    choices = comparison_sources(
+        workspace, experiment_catalog(workspace, names) if catalog is None else catalog
+    )
     selected = [
         next(item for item in choices if same_source(item, settings[side]))
         for side in ("left", "right")

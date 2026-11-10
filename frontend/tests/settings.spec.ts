@@ -1,6 +1,14 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import type { Workspace } from '../src/api';
-import { imageZoom, loadExample, openRoiCoordinates, openSettings, zoomImage } from './ui';
+import { completeTutorialWorkflow } from './tutorial';
+import {
+  imageZoom,
+  loadExample,
+  openRoiCoordinates,
+  openSettings,
+  selectDataFormat,
+  zoomImage,
+} from './ui';
 
 async function studies(request: APIRequestContext): Promise<Workspace[]> {
   return (await request.get('/api/workspaces')).json();
@@ -158,7 +166,7 @@ test('guided tutorial completes one real synthetic workflow and preserves the pr
   page,
   request,
 }, info) => {
-  test.setTimeout(150000);
+  test.setTimeout(240000);
   await page.setViewportSize({ width: 1280, height: 720 });
   const operations: string[] = [];
   const errors: string[] = [];
@@ -186,61 +194,24 @@ test('guided tutorial completes one real synthetic workflow and preserves the pr
   await page.locator('.study-row[data-study-id="' + before.id + '"] .study-item').click();
   await expect(guide.getByRole('button', { name: 'Next', exact: true })).toBeDisabled();
   await guide.getByRole('button', { name: 'Return to tutorial study', exact: true }).click();
-  const next = guide.getByRole('button', { name: 'Next', exact: true });
-  await next.click();
-  await expect(next).toBeDisabled();
-  await guide.getByRole('button', { name: 'Open image controls', exact: true }).click();
-  await page.getByRole('slider', { name: 'Echo', exact: true }).fill('1');
-  await next.click();
-  await guide.getByRole('button', { name: 'Open Denoising', exact: true }).click();
-  await expect(next).toBeDisabled();
-  await page.getByRole('button', { name: 'Apply denoising', exact: true }).click();
-  await next.click();
-  await guide.getByRole('button', { name: 'Show comparison controls', exact: true }).click();
-  await page.getByRole('button', { name: 'Compare with original', exact: true }).click();
-  await expect(next).toBeDisabled();
-  await page.locator('.comparison-divider').focus();
-  await page.keyboard.press('ArrowRight');
-  await next.click();
-  await guide.getByRole('button', { name: 'Open Segment', exact: true }).click();
-  await expect(next).toBeDisabled();
-  await page.getByRole('button', { name: 'Draw rectangle', exact: true }).click();
-  const surface = page.getByTestId('roi-surface');
-  await surface.scrollIntoViewIfNeeded();
-  const box = (await surface.boundingBox())!;
-  await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.3);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.65, { steps: 8 });
-  await page.mouse.up();
-  await next.click();
-  await guide.getByRole('button', { name: 'Open Fit', exact: true }).click();
-  await expect(next).toBeDisabled();
-  await page.getByLabel('Fit steps', { exact: true }).fill('300');
-  await page.getByRole('button', { name: 'Run full map fit', exact: true }).click();
-  await expect(next).toBeEnabled({ timeout: 60000 });
-  await next.click();
-  await guide.getByRole('button', { name: 'Open map statistics', exact: true }).click();
-  await expect(next).toBeDisabled();
-  await page.getByLabel('Map', { exact: true }).click();
-  await page.getByLabel('Map', { exact: true }).selectOption('t2');
-  await page.getByLabel('Statistics map', { exact: true }).click();
-  await page.getByLabel('Statistics map', { exact: true }).selectOption('t2');
-  await expect(page.getByRole('table', { name: 'ROI map statistics', exact: true })).toBeVisible();
-  await page.screenshot({ path: info.outputPath('tutorial-analysis.png') });
-  await next.click();
-  await expect(guide.getByRole('heading', { name: 'Save or export', exact: true })).toBeVisible();
-  await guide.getByRole('button', { name: 'Finish tutorial', exact: true }).click();
-  await expect(guide).not.toBeVisible();
+  await completeTutorialWorkflow(page, selectDataFormat, async (name) => {
+    await page.screenshot({ path: info.outputPath(name + '.png') });
+  });
   await expect(
     page.locator('.study-row[data-study-id="' + before.id + '"] .study-item'),
   ).toHaveAttribute('aria-current', 'true');
   const result = await studies(request);
   expect(result.find((w) => w.id === before.id)).toEqual(before);
   const retained = result.find((w) => w.id === practice.id)!;
+  expect(retained.pipeline.steps.some((step) => step.kind === 'reconstruct' && step.enabled)).toBe(
+    true,
+  );
   expect(retained.pipeline.steps.some((step) => step.family === 'denoise')).toBe(true);
   expect(retained.rois.some((roi) => roi.pixels > 0)).toBe(true);
+  expect(retained.rois.some((roi) => roi.metadata.consolidated)).toBe(true);
   expect(retained.maps.some((map) => map.name === 't2')).toBe(true);
   expect(operations).toContain('process');
+  expect(operations).toContain('reconstruct');
   expect(operations).toContain('full_fit');
   expect(operations).not.toContain('save');
   expect(operations).not.toContain('export');

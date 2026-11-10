@@ -25,9 +25,9 @@ _RECIPE_KEYS = {
     "product": {"output_product", "echo_spacing_seconds", "product_unwrap", "product_unwrap_method", "product_mask_snr", "product_signal_fraction", "product_corner_fraction"},
     "window": {"kspace_window", "window_parameters", "window_powers"},
 }
-_SOLVERS = {"fft", "variational", "model_based"}
+_SOLVERS = {"fft", "nufft", "variational", "model_based"}
 _ORDER = {"profile_inversion": -3, "shift": -2, "readout_regrid": -1, "epi_phase": 0, "window": 1, "partial_fourier": 2, "gridding": 2, "fft": 3,
-          "variational": 3, "model_based": 3, "format": 4, "combine": 5, "product": 6}
+          "nufft": 3, "variational": 3, "model_based": 3, "format": 4, "combine": 5, "product": 6}
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,8 @@ class ReconstructionStage:
             batch_size = options.get("frame_batch_size")
             if batch_size is not None and index(batch_size) < 0:
                 raise ValueError("frame_batch_size must be nonnegative or None")
+        if self.kind == "nufft" and set(options) - {"eps", "density_compensation", "chunk_size", "batch_size"}:
+            raise ValueError("Unknown NUFFT options")
         object.__setattr__(self, "options", MappingProxyType(options))
 
 
@@ -97,7 +99,7 @@ class ReconstructionPipeline:
                 continue
             if kind == "partial_fourier" and recipe.partial_fourier == "none":
                 continue
-            if kind == "gridding" and acquisition.kind != "sampled":
+            if kind == "gridding" and (acquisition.kind != "sampled" or method == "nufft"):
                 continue
             stages.append(ReconstructionStage(kind, {key: getattr(recipe, key) for key in _RECIPE_KEYS[kind]}))
         stages.append(ReconstructionStage(method, optimizer_options))
@@ -134,8 +136,10 @@ class ReconstructionPipeline:
         from .acquisition import reconstruct_acquisition
 
         names = {stage.kind for stage in self.stages}
-        if acquisition.kind == "sampled" and "gridding" not in names:
+        if acquisition.kind == "sampled" and "gridding" not in names and "nufft" not in names:
             raise ValueError("Sampled acquisitions require an explicit gridding stage")
+        if "nufft" in names and "gridding" in names:
+            raise ValueError("NUFFT uses its own interpolation; remove the gridding stage")
         if acquisition.kind == "cartesian" and "gridding" in names:
             raise ValueError("Cartesian acquisitions cannot use a sampled-data gridding stage")
         recipe = replace(acquisition.recipe, kspace_window=(), window_parameters=(), output_product="image", profile_inversion=False, readout_regrid=False, epi_phase_correction="none", image_shift=(), frame_image_shifts=(), partial_fourier="none")

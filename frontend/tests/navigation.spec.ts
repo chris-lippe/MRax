@@ -211,7 +211,7 @@ test('viewing and scientific actions have distinct menus without starting proces
     'aria-haspopup',
   );
   await expect(
-    page.getByRole('button', { name: 'Reconstruct images', exact: true }),
+    page.getByRole('button', { name: 'Apply reconstruction', exact: true }),
   ).toBeDisabled();
   await selectWorkflow(page, 'Register', 'Image alignment');
   await expect(page.getByRole('button', { name: 'Run registration', exact: true })).toBeVisible();
@@ -221,7 +221,7 @@ test('viewing and scientific actions have distinct menus without starting proces
     page.getByRole('button', { name: 'Run registration', exact: true }),
   ).not.toBeVisible();
   await expect(
-    page.getByRole('button', { name: 'Reconstruct images', exact: true }),
+    page.getByRole('button', { name: 'Apply reconstruction', exact: true }),
   ).not.toBeVisible();
   await page.getByLabel('Plane', { exact: true }).selectOption('coronal');
   await expect(page.getByLabel('Plane', { exact: true })).toHaveValue('coronal');

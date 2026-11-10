@@ -13,6 +13,7 @@ import { MIN_ZOOM, MAX_ZOOM, type ImageDisplay } from './useImageDisplay';
 import { useContextMenu } from './ContextMenu';
 import { roiColor, roiMaskPaths, type ScenePreview } from './scene';
 import { palettes, writeColor } from './imageColors';
+import { viewLabel } from './viewing';
 import { IntensityControls } from './IntensityControls';
 import { imageNavigationHelp, useImageNavigation } from './useImageNavigation';
 
@@ -217,7 +218,7 @@ export function Viewer({
         <div className="image-label">
           <span>{workspace.experiment}</span>
           <span>
-            {workspace.view} · {workspace.plane}
+            {viewLabel(workspace, workspace.view)} · {workspace.plane}
           </span>
         </div>
         {workspace.view === 'Map' && (

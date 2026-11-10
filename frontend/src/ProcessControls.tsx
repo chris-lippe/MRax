@@ -5,6 +5,7 @@ import type { AnalysisProps } from './analysisTypes';
 import { roiColor } from './scene';
 import { InspectorSection } from './InspectorSection';
 import { WorkbenchIcon } from './WorkbenchIcon';
+import { NoiseEstimationControls } from './NoiseEstimationControls';
 import { processingGroups, type ProcessingSection } from './WorkflowNav';
 
 type Catalog = components['schemas']['ProcessingCatalog'];
@@ -19,6 +20,7 @@ type Draft = {
   referenceFrame?: number;
   limited?: boolean;
   rois?: string[];
+  noiseRois?: string[] | null;
 };
 
 const choiceLabels: Record<string, string> = {
@@ -97,6 +99,7 @@ export function ProcessControls({
         referenceFrame: Number(options.reference_frame ?? 0),
         limited: options.roi_names !== null && options.roi_names !== undefined,
         rois: (options.roi_names as string[]) ?? [],
+        noiseRois: (options.noise_roi_names as string[] | null) ?? null,
       },
     }));
   }, [context, editOptions, editKey]);
@@ -147,6 +150,7 @@ export function ProcessControls({
     w?.rois.some((r) => r.name === name && r.enabled && r.pixels > 0),
   );
   const limited = Boolean(draft.limited);
+  const noiseRois = draft.noiseRois ?? null;
   const unavailable =
     method?.unavailable ??
     ((method?.axes === 'series' || method?.reference === 'series') && !seriesAxes.length
@@ -177,7 +181,11 @@ export function ProcessControls({
     !catalog ||
     Boolean(unavailable) ||
     (method.axes === 'filter' && !axes.length) ||
-    (limited && !scopedRois.length);
+    (limited && !scopedRois.length) ||
+    (['bm3d', 'bm4d'].includes(method?.id ?? '') &&
+      parameters.sigma == null &&
+      noiseRois !== null &&
+      !noiseRois.length);
 
   const fieldControls = method?.fields.map((field) => {
     const value = parameters[field.key];
@@ -233,7 +241,19 @@ export function ProcessControls({
       ? ['baseline_frames', 'smooth_sigma'].includes(method.fields[index].key)
       : index < 2;
   const primaryFields = fieldControls?.filter((_field, index) => primary(index));
-  const advancedFields = fieldControls?.filter((_field, index) => !primary(index));
+  const advancedFields = fieldControls?.filter(
+    (_field, index) =>
+      !primary(index) && !['noise_model', 'noise_coils'].includes(method!.fields[index].key),
+  );
+  const noiseOptions = {
+    method: method?.id,
+    input: source,
+    component: draft.component ?? 'auto',
+    axes,
+    parameters,
+    step_id: editing ? editingStep?.id : undefined,
+    noise_roi_names: noiseRois,
+  };
 
   return (
     <div className="processing-controls">
@@ -252,6 +272,8 @@ export function ProcessControls({
             parameters,
             step_id: editing ? editingStep?.id : undefined,
             roi_names: limited ? scopedRois : null,
+            noise_roi_names:
+              ['bm3d', 'bm4d'].includes(method.id) && parameters.sigma == null ? noiseRois : null,
             reference_experiment: method.reference ? reference : undefined,
             reference_frame: method.reference === 'frame' ? (draft.referenceFrame ?? 0) : undefined,
           });
@@ -388,6 +410,21 @@ export function ProcessControls({
                 </p>
               )}
               <div className="field-grid">{primaryFields}</div>
+              {(method?.id === 'bm3d' || method?.id === 'bm4d') && (
+                <p className="control-note">
+                  Leave sigma empty for automatic estimation. A manual value overrides estimation.
+                </p>
+              )}
+              {w && ['bm3d', 'bm4d'].includes(method?.id ?? '') && parameters.sigma == null && (
+                <NoiseEstimationControls
+                  workspace={w}
+                  busy={busy}
+                  options={noiseOptions}
+                  roiNames={noiseRois}
+                  setRois={(noiseRois) => update({ noiseRois })}
+                  parameter={parameter}
+                />
+              )}
               {Boolean(advancedFields?.length) && (
                 <details className="control-advanced">
                   <summary>More settings</summary>

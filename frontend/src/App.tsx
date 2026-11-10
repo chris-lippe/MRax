@@ -10,13 +10,13 @@ import {
 } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { createPortal } from 'react-dom';
-import logoUrl from '../../MRax_logo.svg';
+import { WorkbenchIcon } from './WorkbenchIcon';
 import {
   api,
   image,
+  rememberImages,
   clearImageCache,
   originalComparison,
-  comparisonNavigation,
   type Bounds,
   type Job,
   type Workspace,
@@ -27,8 +27,19 @@ import {
   type PipelineStep,
 } from './api';
 import { Curve } from './Curve';
+import {
+  fetchNavigation,
+  navigationCache,
+  navigationContext,
+  navigationIndices,
+  navigationKey,
+  nearbyIndices,
+  rememberNavigation,
+  type NavigationFrame,
+} from './navigation';
 import { TimecoursePlot } from './TimecoursePlot';
 import { SignalPreview } from './SignalPreview';
+import { ResizablePreview } from './ResizablePreview';
 import { serializeSignalFigure } from './signalExport';
 import { defaultSignalOptions, signalData, signalCsv, type SignalOptions } from './signal';
 import { Viewer } from './Viewer';
@@ -45,6 +56,7 @@ import { AnalysisPanel } from './AnalysisPanel';
 import { FileDialog } from './FileDialog';
 import { useFileSystem } from './FileSystemDialog';
 import { StudyBrowser } from './StudyBrowser';
+import { StudyHeader } from './StudyPanel';
 import { ExportDialog } from './ExportDialog';
 import { MetadataBrowser } from './MetadataBrowser';
 import type { MetadataCategory } from './metadata';
@@ -57,12 +69,13 @@ import { SettingsDialog } from './SettingsDialog';
 import { usePreferences } from './preferences';
 import { useBindings, useShortcuts, type ShortcutAction } from './shortcuts';
 import { Tutorial, type TutorialSession } from './Tutorial';
+import { tutorialSteps } from './tutorialSteps';
 import type { WorkflowKind } from './reusableWorkflows';
 import { NewStudyDialog, type NewStudyKind } from './NewStudyDialog';
 import { useImageDisplay } from './useImageDisplay';
 import type { ScenePreview } from './scene';
 
-type Panel = 'studies' | 'tools' | null;
+type Panel = 'tools' | null;
 const WorkflowDialog = lazy(() =>
   import('./WorkflowDialog').then((module) => ({ default: module.WorkflowDialog })),
 );
@@ -80,7 +93,7 @@ const active = (job: Job | null) =>
 
 function focusDataControl(button: HTMLButtonElement | null) {
   if (button?.getClientRects().length) button.focus();
-  else document.getElementById('browse-studies')?.focus();
+  else document.querySelector<HTMLButtonElement>('#study-controls button')?.focus();
 }
 
 function useMedia(query: string) {
@@ -96,6 +109,23 @@ function useMedia(query: string) {
 }
 
 export function App() {
+  useEffect(() => {
+    const root = document.documentElement;
+    const setMode = (mode: 'pointer' | 'keyboard') => {
+      if (root.dataset.inputModality !== mode) root.dataset.inputModality = mode;
+    };
+    const pointer = () => setMode('pointer');
+    const keyboard = (event: KeyboardEvent) => {
+      if (!['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) setMode('keyboard');
+    };
+    document.addEventListener('pointerdown', pointer, true);
+    document.addEventListener('keydown', keyboard, true);
+    return () => {
+      document.removeEventListener('pointerdown', pointer, true);
+      document.removeEventListener('keydown', keyboard, true);
+      delete root.dataset.inputModality;
+    };
+  }, []);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [values, setValues] = useState<Pixels | null>(null);
@@ -105,8 +135,24 @@ export function App() {
   const [taskBusy, setTaskBusy] = useState(false);
   const [navigating, setNavigating] = useState(false);
   const [pendingIndices, setPendingIndices] = useState<Record<string, number>>({});
-  const queuedIndices = useRef<Record<string, number>>({});
-  const navigationRunning = useRef(false);
+  const navigationVersion = useRef(0);
+  const navigationRun = useRef<{
+    version: number;
+    context: string;
+    id: string;
+    desired: Record<string, number>;
+    queued: boolean;
+    preferred: { key: string; direction: number };
+  } | null>(null);
+  const prefetchTimer = useRef<number | null>(null);
+  const prefetchAbort = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      if (prefetchTimer.current !== null) window.clearTimeout(prefetchTimer.current);
+      prefetchAbort.current?.abort();
+    },
+    [],
+  );
   const busy = taskBusy || navigating;
   const [error, setError] = useState('');
   const [message, setMessage] = useState('No study open');
@@ -126,7 +172,6 @@ export function App() {
   });
   const [job, setJob] = useState<Job | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
-  const lastPanel = useRef<Panel>(null);
   const [workflow, setWorkflow] = useState<Workflow>('image');
   const [workflowTasks, setWorkflowTasks] = useState(initialWorkflowTasks);
   const [signalOpened, setSignalOpened] = useState(false);
@@ -268,6 +313,7 @@ export function App() {
     viewRequest = useRef(0);
   const choose = useFileSystem();
   const closeStudyTrigger = useRef<HTMLButtonElement>(null);
+  const restoreStudyFocus = useRef(false);
   const [closeTarget, setCloseTarget] = useState<Workspace | null>(null);
   const [metadataCategory, setMetadataCategory] = useState<MetadataCategory>('experiment');
   const [exportOpen, setExportOpen] = useState(false);
@@ -282,16 +328,19 @@ export function App() {
     draft?: Options;
   } | null>(null);
   const large = useMedia('(min-width: 1120px)');
-  const medium = useMedia('(min-width: 760px)');
   const { browser, inspector } = useWorkspacePanels(large && workflowTask !== 'metadata');
 
   useEffect(() => {
-    if ((medium && panel === 'studies') || (large && panel === 'tools')) setPanel(null);
-  }, [medium, large, panel]);
+    if (busy || !restoreStudyFocus.current) return;
+    restoreStudyFocus.current = false;
+    const trigger = closeStudyTrigger.current;
+    const next = document.querySelector<HTMLButtonElement>('.study-item[aria-current="true"]');
+    focusDataControl(trigger?.isConnected ? trigger : (next ?? newStudyButton.current));
+  }, [busy, workspaces]);
 
   useEffect(() => {
-    if (panel) lastPanel.current = panel;
-  }, [panel]);
+    if (large && panel === 'tools') setPanel(null);
+  }, [large, panel]);
 
   useShortcuts(bindings, (name: ShortcutAction) => {
     if (name === 'settings') {
@@ -349,13 +398,7 @@ export function App() {
       previousControlsOpen: viewerControlsOpen,
     };
     await task(async () => {
-      const created = await api<Workspace>('/api/workspaces/synthetic', 'POST');
-      const next = await api<Workspace>('/api/workspaces/' + created.id + '/actions', 'POST', {
-        revision: created.revision,
-        view_revision: created.view_revision,
-        action: 'study.rename',
-        options: { name: 'Tutorial — synthetic T2' },
-      });
+      const next = await api<Workspace>('/api/workspaces/synthetic?kind=tutorial', 'POST');
       viewingContext.current = { section: 'image', task: 'display' };
       setWorkflow('image');
       setWorkflowTasks({ ...initialWorkflowTasks });
@@ -372,6 +415,7 @@ export function App() {
         initialFrame: next.frame,
         initialSlice: next.z,
         step: 0,
+        completed: [],
       });
     });
   }
@@ -387,14 +431,14 @@ export function App() {
   function openTutorialTask() {
     if (!tutorial || current.current?.id !== tutorial.studyId) return;
     setViewerControlsOpen(true);
-    if (tutorial.step === 1) selectWorkflow('image', 'display');
-    else if (tutorial.step === 2 || tutorial.step === 3) selectWorkflow('preprocess', 'denoising');
-    else if (tutorial.step === 4) {
+    const step = tutorialSteps[tutorial.step];
+    if (step.context) selectWorkflow(step.context.section, step.context.task);
+    if (step.id === 'roi') {
       setTool('rect');
-      selectWorkflow('rois', 'roi-edit');
-    } else if (tutorial.step === 5) selectWorkflow('fit', 'model-fit');
-    else if (tutorial.step === 6) selectWorkflow('analyze', 'statistics');
-    else if (tutorial.step === 7 && !medium) setPanel('studies');
+      setDrawing(false);
+    }
+    if (step.id === 'pipeline')
+      document.querySelector('.pipeline-panel')?.scrollIntoView({ block: 'start' });
   }
 
   async function endTutorial() {
@@ -423,6 +467,11 @@ export function App() {
     keepRequestedView = false,
     preserveDrawing = false,
   ) {
+    navigationVersion.current += 1;
+    navigationRun.current = null;
+    stopPrefetch();
+    setNavigating(false);
+    setPendingIndices({});
     const request = ++imageRequest.current;
     imageAbort.current?.abort();
     const controller = new AbortController();
@@ -494,10 +543,20 @@ export function App() {
           ? previous.map((item) => (item.id === next.id ? next : item))
           : [...previous, next],
       );
+      if (next.loaded) {
+        if (!next.scene.comparison.enabled)
+          rememberNavigation({
+            workspace: next,
+            values: pixels,
+            layers: Object.fromEntries(layers),
+          });
+        startPrefetch(next);
+      }
     }
   }
 
   async function task(action: () => Promise<void>, propagate = false) {
+    stopPrefetch();
     pending.current += 1;
     setTaskBusy(true);
     setError('');
@@ -665,59 +724,121 @@ export function App() {
     });
   }
 
+  function stopPrefetch() {
+    if (prefetchTimer.current !== null) window.clearTimeout(prefetchTimer.current);
+    prefetchTimer.current = null;
+    prefetchAbort.current?.abort();
+    prefetchAbort.current = null;
+  }
+
+  function startPrefetch(w: Workspace, preferred?: { key: string; direction: number }) {
+    stopPrefetch();
+    const controller = new AbortController();
+    prefetchAbort.current = controller;
+    const version = navigationVersion.current;
+    prefetchTimer.current = window.setTimeout(() => {
+      prefetchTimer.current = null;
+      void (async () => {
+        for (const indices of nearbyIndices(w, preferred)) {
+          if (controller.signal.aborted || version !== navigationVersion.current) return;
+          if (navigationCache.get(navigationKey(w, indices))) continue;
+          try {
+            await fetchNavigation(w, indices, false, controller.signal);
+          } catch {
+            return;
+          } // Background previews must never interrupt interaction.
+        }
+      })();
+    }, 64);
+  }
+
+  function displayNavigation(frame: NavigationFrame, preview = false) {
+    const next = preview
+      ? { ...frame.workspace, view_revision: current.current!.view_revision, dirty: true }
+      : frame.workspace;
+    rememberImages(next, frame.values, frame.layers, frame.comparison);
+    if (!preview) {
+      current.current = next;
+      savedViews.current.set(viewContextKey(next, viewingContext.current), captureView(next));
+      setWorkspaces((previous) => previous.map((item) => (item.id === next.id ? next : item)));
+    }
+    setWorkspace(next);
+    setValues(frame.values);
+    setLayerValues(frame.layers);
+    setScenePreview({ layers: {} });
+  }
+
   async function navigateIndex(key: string, value: number) {
     const target = current.current;
     if (!target) return;
-    queuedIndices.current = { ...queuedIndices.current, [key]: value };
-    setPendingIndices((previous) => ({ ...previous, [key]: value }));
-    if (navigationRunning.current) return;
-    navigationRunning.current = true;
+    stopPrefetch();
+    const context = navigationContext(target);
+    let run = navigationRun.current;
+    const running = run?.context === context && run.version === navigationVersion.current;
+    if (!running) {
+      run = {
+        version: navigationVersion.current,
+        context,
+        id: target.id,
+        desired: {},
+        queued: false,
+        preferred: { key, direction: 1 },
+      };
+      navigationRun.current = run;
+      imageRequest.current += 1;
+      imageAbort.current?.abort();
+    }
+    const active = run!;
+    const previous = active.desired[key] ?? navigationIndices(target)[key] ?? 0;
+    active.preferred = { key, direction: Math.sign(value - previous) || 1 };
+    active.desired = { ...active.desired, [key]: value };
+    active.queued = true;
+    setPendingIndices(active.desired);
+    const cached = navigationCache.get(navigationKey(target, active.desired));
+    if (cached) displayNavigation(cached, true);
+    if (running) return;
     setNavigating(true);
     setError('');
     try {
-      while (Object.keys(queuedIndices.current).length) {
-        const indices = queuedIndices.current;
-        queuedIndices.current = {};
+      while (active.queued) {
+        active.queued = false;
         const latest = current.current;
-        if (!latest || selected.current !== target.id) break;
-        const navigation = latest.scene.comparison.enabled ? comparisonNavigation(latest) : null;
-        const next = await api<Workspace>(`/api/workspaces/${target.id}/view`, 'PATCH', {
-          revision: latest.revision,
-          ...(navigation
-            ? {
-                scene: {
-                  comparison: {
-                    ...latest.scene.comparison,
-                    plane: navigation.plane,
-                    frame: indices.frame ?? navigation.frame,
-                    indices: {
-                      ...navigation.indices,
-                      ...Object.fromEntries(
-                        Object.entries(indices).filter(([dim]) => dim !== 'frame'),
-                      ),
-                    },
-                  },
-                },
-              }
-            : { indices }),
-        });
-        if (selected.current !== target.id) break;
-        await show(next, true);
-        setPendingIndices((previous) => {
-          const remaining = { ...previous };
-          for (const [dimension, index] of Object.entries(indices)) {
-            if (remaining[dimension] === index) delete remaining[dimension];
-          }
-          return remaining;
-        });
+        if (!latest || navigationRun.current !== active || navigationContext(latest) !== context)
+          break;
+        const frame = await fetchNavigation(latest, active.desired, true);
+        if (
+          navigationRun.current !== active ||
+          active.version !== navigationVersion.current ||
+          selected.current !== active.id
+        )
+          break;
+        current.current = frame.workspace;
+        if (navigationKey(frame.workspace) === navigationKey(frame.workspace, active.desired))
+          active.queued = false;
+        if (!active.queued) displayNavigation(frame);
       }
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Could not update the image.');
+      if (navigationRun.current === active) {
+        setError(failure instanceof Error ? failure.message : 'Could not update the image.');
+        try {
+          const restored = await api<Workspace>(`/api/workspaces/${active.id}`);
+          if (navigationRun.current === active && selected.current === active.id)
+            await show(restored, true);
+        } catch {
+          // Keep the last confirmed plane if the connection is unavailable.
+          if (navigationRun.current === active && current.current) {
+            const confirmed = navigationCache.get(navigationKey(current.current));
+            if (confirmed) displayNavigation(confirmed, true);
+          }
+        }
+      }
     } finally {
-      queuedIndices.current = {};
-      navigationRunning.current = false;
-      setPendingIndices({});
-      setNavigating(false);
+      if (navigationRun.current === active) {
+        navigationRun.current = null;
+        setPendingIndices({});
+        setNavigating(false);
+        if (current.current) startPrefetch(current.current, active.preferred);
+      }
     }
   }
 
@@ -862,6 +983,14 @@ export function App() {
       );
       if (tutorial?.studyId === w.id) setTutorial(null);
       clearImageCache(w.id);
+      navigationCache.clear(w.id);
+      if (selected.current === w.id) {
+        stopPrefetch();
+        navigationVersion.current += 1;
+        navigationRun.current = null;
+        setNavigating(false);
+        setPendingIndices({});
+      }
       const remaining = await api<Workspace[]>('/api/workspaces');
       setWorkspaces(remaining);
       if (selected.current === w.id) {
@@ -875,11 +1004,7 @@ export function App() {
         }
       }
       setMessage('Study closed');
-    });
-    requestAnimationFrame(() => {
-      const trigger = closeStudyTrigger.current;
-      const next = document.querySelector<HTMLButtonElement>('.study-item[aria-current="true"]');
-      focusDataControl(trigger?.isConnected ? trigger : (next ?? newStudyButton.current));
+      restoreStudyFocus.current = true;
     });
   }
   async function createStudy(kind: NewStudyKind) {
@@ -982,9 +1107,19 @@ export function App() {
           setPanel(null);
         })
       }
-      onExperiment={(name) => {
+      onExperiment={(id, name) => {
         setPanel(null);
-        void changeView({ experiment: name });
+        if (current.current?.id === id) void changeView({ experiment: name });
+        else
+          void task(async () => {
+            const target = await api<Workspace>(`/api/workspaces/${id}`);
+            await show(
+              await api<Workspace>(`/api/workspaces/${id}/view`, 'PATCH', {
+                revision: target.revision,
+                experiment: name,
+              }),
+            );
+          });
       }}
       onClose={(study, trigger) => {
         closeStudyTrigger.current = trigger;
@@ -1093,26 +1228,29 @@ export function App() {
         {
           '--tools-width': inspector.width + 'px',
           '--browser-width': browser.width + 'px',
+          '--study-column-width': browser.width + 'px',
+          '--study-divider-width': '8px',
         } as CSSProperties
       }
     >
-      <header className="app-header">
-        <span className="brand">
-          <img src={logoUrl} alt="MRax logo" width={775} height={310} />
-        </span>
-        <WorkflowNav value={workflow} tasks={workflowTasks} onChange={selectWorkflow} />
-      </header>
-      {error && (
-        <div className="error-banner" role="alert">
-          <span>{error}</span>
-          <button aria-label="Dismiss error" onClick={() => setError('')}>
-            ×
-          </button>
-        </div>
-      )}
       <div className={`app-layout${workflowTask === 'metadata' ? ' metadata-open' : ''}`}>
-        {medium && studies}
-        {medium && <StudyDivider layout={browser} />}
+        <header className="app-header" aria-label="MRax">
+          <StudyHeader />
+          <div className="header-workflows">
+            <WorkflowNav value={workflow} tasks={workflowTasks} onChange={selectWorkflow} />
+            <span className="header-drag-space" aria-hidden="true" />
+          </div>
+        </header>
+        {error && (
+          <div className="error-banner" role="alert">
+            <span>{error}</span>
+            <button aria-label="Dismiss error" onClick={() => setError('')}>
+              ×
+            </button>
+          </div>
+        )}
+        {studies}
+        <StudyDivider layout={browser} />
         <main
           className={
             workflowTask === 'signal'
@@ -1137,15 +1275,6 @@ export function App() {
               </p>
             </div>
             <div className="compact-actions">
-              {!medium && (
-                <button
-                  id="browse-studies"
-                  className="secondary"
-                  onClick={() => setPanel('studies')}
-                >
-                  Data &amp; studies
-                </button>
-              )}
               {!large && workflowTask !== 'metadata' && (
                 <button className="secondary" onClick={() => setPanel('tools')}>
                   Controls
@@ -1212,108 +1341,118 @@ export function App() {
               />
             </Suspense>
           )}
-          <section
-            className="viewer-panel"
-            aria-label="Image viewer"
-            aria-busy={navigating}
+          <ResizablePreview
+            className="image-preview"
+            label="Resize image viewer"
+            bodyId="image-viewer-body"
+            storageKey="mrax.imageHeight"
+            minimum={360}
+            maximum={2400}
+            growWithContent
             hidden={['metadata', 'signal'].includes(workflowTask)}
           >
-            <div className="viewer-toolbar">
-              <span>
-                {viewingContext.current.section === 'reconstruct'
-                  ? 'Reconstruction'
-                  : viewingContext.current.section === 'fit'
-                    ? 'Fitting'
-                    : viewingContext.current.section === 'rois'
-                      ? 'Segmentation'
-                      : 'Image viewer'}
-              </span>
-              <span className="native-badge">
-                {workspace?.scene.comparison.enabled
-                  ? 'Read-only'
-                  : workspace?.editable
-                    ? 'Native grid'
-                    : 'Display view'}
-              </span>
-            </div>
-            {workspace && (values || workspace.scene.comparison.enabled) ? (
-              <>
-                {workspace.scene.comparison.enabled ? (
-                  <ComparisonView
-                    key={`${workspace.id}-${workspace.experiment}`}
-                    workspace={workspace}
-                    busy={busy}
-                    processing={taskBusy}
-                    pendingIndices={pendingIndices}
-                    navigateIndex={navigateIndex}
-                    display={display}
-                    controls={viewControls}
-                    advancedControls={(children) =>
-                      comparisonControlsHost ? createPortal(children, comparisonControlsHost) : null
-                    }
-                    change={changeView}
-                  />
-                ) : (
-                  <Viewer
-                    workspace={workspace}
-                    controls={viewControls}
-                    values={values!}
-                    layerValues={layerValues}
-                    scenePreview={scenePreview}
-                    display={display}
-                    editingEnabled={['roi-edit', 'label-edit'].includes(workflowTask)}
-                    drawing={drawing}
-                    tool={tool}
-                    brushSize={brushSize}
-                    label={label}
-                    onShape={(options) => void shape(options)}
-                    busy={busy}
-                    onRectangle={(bounds) => void addRectangle(bounds)}
-                  />
-                )}
-                <div className="dimension-controls" hidden={workspace.scene.comparison.enabled}>
-                  {workspace.dimension_controls.map((control) => {
-                    const key = String(control.key),
-                      size = Number(control.size),
-                      value = Number(pendingIndices[key] ?? workspace.indices[key] ?? 0);
-                    const name =
-                      (key === 'frame' || key === 't') && workspace.model === 't2_se'
-                        ? 'Echo'
-                        : key === workspace.slice_dim
-                          ? 'Slice'
-                          : String(control.label ?? key);
-                    return (
-                      <label key={key}>
-                        {name}{' '}
-                        <strong>
-                          {value + 1} / {size}
-                        </strong>
-                        <input
-                          aria-label={name}
-                          type="range"
-                          min={0}
-                          max={Math.max(0, size - 1)}
-                          value={value}
-                          disabled={taskBusy}
-                          onChange={(event) => void navigateIndex(key, Number(event.target.value))}
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
-              </>
-            ) : (
-              <div className="empty-view">
-                <h2>{busy ? 'Loading study…' : 'No image selected'}</h2>
-                <p>Open a workspace or import an acquisition from Data &amp; studies.</p>
-                {!medium && (
-                  <button className="primary" onClick={() => setPanel('studies')}>
-                    Choose a study
-                  </button>
-                )}
+            <section
+              id="image-viewer-body"
+              className="viewer-panel"
+              aria-label="Image viewer"
+              aria-busy={navigating}
+            >
+              <div className="viewer-toolbar">
+                <span>
+                  {viewingContext.current.section === 'reconstruct'
+                    ? 'Reconstruction'
+                    : viewingContext.current.section === 'fit'
+                      ? 'Fitting'
+                      : viewingContext.current.section === 'rois'
+                        ? 'Segmentation'
+                        : 'Image viewer'}
+                </span>
+                <span className="native-badge">
+                  {workspace?.scene.comparison.enabled
+                    ? 'Read-only'
+                    : workspace?.editable
+                      ? 'Native grid'
+                      : 'Display view'}
+                </span>
               </div>
-            )}
-          </section>
+              {workspace && (values || workspace.scene.comparison.enabled) ? (
+                <>
+                  {workspace.scene.comparison.enabled ? (
+                    <ComparisonView
+                      key={`${workspace.id}-${workspace.experiment}`}
+                      workspace={workspace}
+                      busy={busy}
+                      processing={taskBusy}
+                      pendingIndices={pendingIndices}
+                      navigateIndex={navigateIndex}
+                      display={display}
+                      controls={viewControls}
+                      advancedControls={(children) =>
+                        comparisonControlsHost
+                          ? createPortal(children, comparisonControlsHost)
+                          : null
+                      }
+                      change={changeView}
+                    />
+                  ) : (
+                    <Viewer
+                      workspace={workspace}
+                      controls={viewControls}
+                      values={values!}
+                      layerValues={layerValues}
+                      scenePreview={scenePreview}
+                      display={display}
+                      editingEnabled={['roi-edit', 'label-edit'].includes(workflowTask)}
+                      drawing={drawing}
+                      tool={tool}
+                      brushSize={brushSize}
+                      label={label}
+                      onShape={(options) => void shape(options)}
+                      busy={busy}
+                      onRectangle={(bounds) => void addRectangle(bounds)}
+                    />
+                  )}
+                  <div className="dimension-controls" hidden={workspace.scene.comparison.enabled}>
+                    {workspace.dimension_controls.map((control) => {
+                      const key = String(control.key),
+                        size = Number(control.size),
+                        value = Number(pendingIndices[key] ?? workspace.indices[key] ?? 0);
+                      const name =
+                        (key === 'frame' || key === 't') && workspace.model === 't2_se'
+                          ? 'Echo'
+                          : key === workspace.slice_dim
+                            ? 'Slice'
+                            : String(control.label ?? key);
+                      return (
+                        <label key={key}>
+                          {name}{' '}
+                          <strong>
+                            {value + 1} / {size}
+                          </strong>
+                          <input
+                            aria-label={name}
+                            type="range"
+                            min={0}
+                            max={Math.max(0, size - 1)}
+                            value={value}
+                            disabled={taskBusy}
+                            onChange={(event) =>
+                              void navigateIndex(key, Number(event.target.value))
+                            }
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <div className="empty-view">
+                  <h2>{busy ? 'Loading study…' : 'No image selected'}</h2>
+                  <p>Open a workspace or import an acquisition from Data &amp; Studies.</p>
+                </div>
+              )}
+            </section>
+          </ResizablePreview>
           <SignalPreview
             hidden={
               workflowTask !== 'timecourse' &&
@@ -1444,9 +1583,22 @@ export function App() {
           workspace={workspace}
           context={{ section: workflow, task: workflowTask }}
           drawing={drawing}
+          pipelineChanged={Boolean(pipelineDraft && draftChanged(pipelineDraft))}
           blocked={busy || Boolean(active(job))}
           canResume={workspaces.some((w) => w.id === tutorial.studyId)}
-          onStep={(step) => setTutorial({ ...tutorial, step })}
+          onStep={(step, completed = false) =>
+            setTutorial((previous) =>
+              previous
+                ? {
+                    ...previous,
+                    step,
+                    completed: completed
+                      ? [...new Set([...previous.completed, tutorialSteps[previous.step].id])]
+                      : previous.completed,
+                  }
+                : null,
+            )
+          }
           onOpen={openTutorialTask}
           onResume={() => void resumeTutorial()}
           onEnd={() => void endTutorial()}
@@ -1494,34 +1646,22 @@ export function App() {
         </Dialog.Portal>
       </Dialog.Root>
       <Dialog.Root
-        open={panel === 'studies' ? !medium : panel === 'tools' ? !large : false}
+        open={panel === 'tools' && !large}
         onOpenChange={(open) => {
           if (!open) setPanel(null);
         }}
       >
         <Dialog.Portal>
           <Dialog.Overlay className="drawer-overlay" />
-          <Dialog.Content
-            className="drawer"
-            onCloseAutoFocus={(event) => {
-              const trigger =
-                lastPanel.current === 'studies' ? document.getElementById('browse-studies') : null;
-              if (trigger) {
-                event.preventDefault();
-                trigger.focus();
-              }
-            }}
-          >
-            <Dialog.Title className="visually-hidden">
-              {panel === 'studies' ? 'Data & studies' : 'Analysis controls'}
-            </Dialog.Title>
+          <Dialog.Content className="drawer">
+            <Dialog.Title className="visually-hidden">Analysis controls</Dialog.Title>
             <Dialog.Description className="visually-hidden">
-              Study and analysis controls.
+              Controls for the selected action.
             </Dialog.Description>
             <Dialog.Close className="drawer-close" aria-label="Close panel">
-              ×
+              <WorkbenchIcon name="close" />
             </Dialog.Close>
-            {panel === 'studies' ? studies : tools}
+            {tools}
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

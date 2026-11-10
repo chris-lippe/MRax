@@ -66,7 +66,7 @@ export function SettingsDialog({
             event.preventDefault();
             const button = trigger.current;
             if (button?.getClientRects().length) button.focus();
-            else document.getElementById('browse-studies')?.focus();
+            else document.querySelector<HTMLButtonElement>('#study-controls button')?.focus();
           }}
         >
           <div className="settings-heading">
@@ -281,8 +281,9 @@ export function SettingsDialog({
                     <section aria-label="Workflow tutorial preferences">
                       <h3>Guided workflow</h3>
                       <p>
-                        Work through viewing, denoising, comparison, ROI drawing, fitting and
-                        analysis on a synthetic T2 study.
+                        Follow a synthetic T2 study through reconstruction, preprocessing, editable
+                        pipelines, ROI masks, fitting, signal analysis and reusable workflows. Steps
+                        can be skipped or revisited.
                       </p>
                       <p className="hint">
                         The tutorial creates a separate study. Your other studies stay open.

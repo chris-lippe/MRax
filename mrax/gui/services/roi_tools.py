@@ -533,10 +533,14 @@ def roi_command(workspace, action, options, image=None):
 
 def roi_runs(mask):
     """Lossless row runs avoid one DOM node and JSON element per voxel."""
-    output = []
-    for y, row in enumerate(np.asarray(mask)):
-        boundaries = np.r_[0, np.flatnonzero(row[1:] != row[:-1]) + 1, len(row)]
-        for start, end in zip(boundaries[:-1], boundaries[1:]):
-            if row[start]:
-                output.append([int(y), int(start), int(end - start), int(row[start])])
-    return output
+    values = np.asarray(mask)
+    padded = np.pad(values, ((0, 0), (1, 1)))
+    rows, boundaries = np.nonzero(padded[:, 1:] != padded[:, :-1])
+    labels = padded[rows, boundaries + 1]
+    keep = (labels[:-1] != 0) & (rows[:-1] == rows[1:])
+    return [
+        [int(y), int(start), int(end - start), int(label)]
+        for y, start, end, label in zip(
+            rows[:-1][keep], boundaries[:-1][keep], boundaries[1:][keep], labels[:-1][keep]
+        )
+    ]

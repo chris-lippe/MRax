@@ -90,8 +90,6 @@ def profile_selection(experiment, dimension, indices):
 
 def image_profile(data, experiment, dimension, indices, *, roi=None, plane_dims=("x", "y")):
     arr = np.asarray(reshape_frames_to_dims(data, experiment.dims))
-    if roi is not None:
-        mask = broadcast_mask(roi.mask, arr.shape, mask_dims=roi.dims, target_dims=tuple(experiment.dims))
     selection = []
     retained = []
     for name in experiment.dims:
@@ -104,7 +102,32 @@ def image_profile(data, experiment, dimension, indices, *, roi=None, plane_dims=
     sliced = arr[tuple(selection)]
     sliced = np.abs(sliced) if np.iscomplexobj(sliced) else sliced
     if roi is not None:
-        sliced = np.where(np.asarray(mask)[tuple(selection)], sliced, np.nan)
+        # Select the ROI before broadcasting: a plane/curve must not allocate a
+        # mask the size of the entire multi-frame acquisition.
+        source = np.asarray(roi.mask)
+        dimensions = tuple(experiment.dims)
+        mask_dims = (
+            tuple(roi.dims)
+            if roi.dims is not None
+            else dimensions[len(dimensions) - source.ndim :]
+        )
+        if len(mask_dims) != source.ndim or set(mask_dims) - set(dimensions):
+            raise ValueError("ROI dimensions do not match the experiment")
+        mask_selection = [selection[dimensions.index(name)] for name in mask_dims]
+        for axis, index in enumerate(mask_selection):
+            if isinstance(index, int) and source.shape[axis] == 1:
+                mask_selection[axis] = 0
+        selected_dims = tuple(
+            name for name, index in zip(mask_dims, mask_selection) if isinstance(index, slice)
+        )
+        ordered_dims = tuple(name for name in retained if name in selected_dims)
+        selected_mask = source[tuple(mask_selection)].transpose(
+            tuple(selected_dims.index(name) for name in ordered_dims)
+        )
+        mask = broadcast_mask(
+            selected_mask, sliced.shape, mask_dims=ordered_dims, target_dims=tuple(retained)
+        )
+        sliced = np.where(mask, sliced, np.nan)
     reduce_axes = tuple(i for i, name in enumerate(retained) if name != dimension)
     if reduce_axes:
         finite = np.isfinite(sliced)

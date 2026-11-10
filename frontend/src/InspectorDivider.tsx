@@ -115,6 +115,7 @@ function ResizeDivider({
   return (
     <div
       className="inspector-divider"
+      data-dragging={layout.dragging || undefined}
       role="separator"
       aria-label={label}
       aria-orientation="vertical"

@@ -1,0 +1,99 @@
+{
+  "format": "mrax.workflow",
+  "format_version": 1,
+  "kind": "reconstruction",
+  "mrax_version": "0.4.0",
+  "name": "Variational",
+  "description": "Measured-sample reconstruction with total-variation regularization and FISTA.",
+  "bindings": [],
+  "steps": [
+    {
+      "id": "reconstruction",
+      "operation": "reconstruct",
+      "version": 1,
+      "enabled": true,
+      "settings": {
+        "component": "magnitude",
+        "pipeline": {
+          "schema_version": 1,
+          "name": "Variational",
+          "encoding": "any",
+          "stages": [
+            {
+              "kind": "profile_inversion",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "shift",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "readout_regrid",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "epi_phase",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "window",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "partial_fourier",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "gridding",
+              "enabled": true,
+              "when": "sampled",
+              "options": {}
+            },
+            {
+              "kind": "variational",
+              "enabled": true,
+              "when": "always",
+              "options": {
+                "num_steps": 50,
+                "regularizer": "tv",
+                "regularizer_weight": 0.01,
+                "optimizer_name": "fista"
+              }
+            },
+            {
+              "kind": "format",
+              "enabled": true,
+              "when": "always",
+              "options": {}
+            },
+            {
+              "kind": "combine",
+              "enabled": true,
+              "when": "always",
+              "options": {}
+            },
+            {
+              "kind": "product",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "extensions": {}
+}

@@ -266,6 +266,9 @@ def import_bruker_experiment(
             _LOG.debug("Ignored optional operation failure", exc_info=True)
 
     metadata = {
+        "source_format": "Bruker",
+        "image_source": str(exp_dir / "pdata" / resolved_pdata_index / "2dseq"),
+        "raw_source": None if stream is None else str(stream),
         "scan_no": str(exp_dir.name),
         "path": exp_dir,
         "type": exp_type,
@@ -316,13 +319,6 @@ def import_bruker_study(
 ):
     root = Path(study_root)
     study_globals = _normalize_study_globals(study_globals, field_strength_mhz)
-    if "field_strength_mhz" not in study_globals:
-        warnings.warn(
-            "No field_strength_mhz provided for this study. Set field_strength_mhz=... or include it in study_globals; "
-            "models that require it will raise errors when fitted.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
     entries: List[dict] = []
     skipped_entries: List[dict] = []
     scan_dirs = discover_bruker_experiments(root)
@@ -400,6 +396,9 @@ def import_bruker_study(
                     "type": meta["type"],
                     "path": meta["path"],
                     "pdata_index": meta["pdata_index"],
+                    "source_format": meta.get("source_format", "Bruker"),
+                    "image_source": meta.get("image_source"),
+                    "raw_source": meta.get("raw_source"),
                 }
             )
         except Exception as exc:
@@ -431,6 +430,20 @@ def import_bruker_study(
 
     if progress_callback is not None:
         progress_callback(total_steps, total_steps, "Building MRax study")
+    if "field_strength_mhz" not in study_globals:
+        from .bruker_frequency import bruker_imaging_frequency, consistent_bruker_frequency
+
+        frequency = consistent_bruker_frequency(
+            bruker_imaging_frequency(e["method"], e["visu"], e.get("acqp")) for e in entries
+        )
+        if frequency is not None:
+            study_globals["field_strength_mhz"] = Quantity(frequency, "MHz")
+        else:
+            warnings.warn(
+                "No consistent Bruker imaging frequency was detected. Set field_strength_mhz explicitly; "
+                "models that require it will raise errors when fitted.",
+                RuntimeWarning, stacklevel=2,
+            )
     study = Study(
         experiments=[e["experiment"] for e in entries],
         datasets=[e["dataset"] for e in entries],
@@ -447,6 +460,9 @@ def import_bruker_study(
                 "type": e["type"],
                 "path": str(e["path"]),
                 "pdata_index": e["pdata_index"],
+                "source_format": e["source_format"],
+                "image_source": e["image_source"],
+                "raw_source": e["raw_source"],
                 "status": "loaded",
                 "visu": e["visu"],
                 "method": e["method"],

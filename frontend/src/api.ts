@@ -208,13 +208,9 @@ export function clearImageCache(workspaceId: string) {
     if (JSON.parse(key)[0] === workspaceId) comparisonMetadata.delete(key);
 }
 
-export async function image(
-  workspace: Workspace,
-  layer?: string,
-  signal?: AbortSignal,
-): Promise<Pixels> {
+export function imageKey(workspace: Workspace, layer?: string) {
   const selectedLayer = layer ? workspace.scene.layers.find((entry) => entry.id === layer) : null;
-  const key = JSON.stringify([
+  return JSON.stringify([
     workspace.id,
     workspace.revision,
     workspace.experiment,
@@ -245,6 +241,40 @@ export async function image(
         }
       : null,
   ]);
+}
+
+export function rememberImages(
+  workspace: Workspace,
+  values: Pixels | null,
+  layers: Record<string, Pixels>,
+  comparison?: ComparisonImages,
+) {
+  if (values) imageCache.set(imageKey(workspace), values);
+  for (const [id, data] of Object.entries(layers)) imageCache.set(imageKey(workspace, id), data);
+  if (comparison) {
+    const key = comparisonKey(workspace);
+    if (imageCache.get(key) && comparisonMetadata.has(key)) return;
+    const joined = new Float64Array(comparison.values[0].length + comparison.values[1].length);
+    joined.set(comparison.values[0]);
+    joined.set(comparison.values[1], comparison.values[0].length);
+    imageCache.set(key, joined);
+    comparisonMetadata.set(key, {
+      planes: comparison.planes,
+      geometry_compatible: comparison.geometry_compatible,
+      geometry_message: comparison.geometry_message,
+      same_units: comparison.same_units,
+    });
+    while (comparisonMetadata.size > 128)
+      comparisonMetadata.delete(comparisonMetadata.keys().next().value!);
+  }
+}
+
+export async function image(
+  workspace: Workspace,
+  layer?: string,
+  signal?: AbortSignal,
+): Promise<Pixels> {
+  const key = imageKey(workspace, layer);
   const cached = imageCache.get(key);
   if (cached) {
     return cached;

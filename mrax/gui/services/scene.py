@@ -42,6 +42,8 @@ def scene_settings(workspace, experiment=None):
 
 def experiment_catalog(workspace, names=None):
     """Metadata from each experiment's own state; never change the active experiment."""
+    from .reconstruction import reconstruction_label
+
     session = clone_workspace(workspace).session
     result = []
     for name in session.experiment_names:
@@ -57,6 +59,7 @@ def experiment_catalog(workspace, names=None):
                 },
                 "maps": session.map_names,
                 "has_reconstruction": session.has_reconstruction,
+                "reconstruction_label": reconstruction_label(workspace, name),
                 "rois": [r.name for r in session.rois],
             }
         )
@@ -70,7 +73,7 @@ def overlay_sources(workspace, catalog):
         sources.append({**common, "kind": "image", "label": f"{entry['name']} · Image"})
         if entry["has_reconstruction"]:
             sources.append(
-                {**common, "kind": "reconstruction", "label": f"{entry['name']} · Reconstruction"}
+                {**common, "kind": "reconstruction", "label": f"{entry['name']} · {entry.get('reconstruction_label', 'Reconstruction')}"}
             )
         sources.extend(
             {
@@ -141,7 +144,9 @@ def require_common_grid(
 
 def render_overlay(workspace, layer):
     """Return scalar values on the base grid, without modifying measurement arrays."""
-    target = workspace.session
+    from .pipeline import display_session
+
+    target = display_session(workspace)
     if workspace.view_label not in SPATIAL_VIEWS or (
         not target.visual_state.show_original
         and target.selected_experiment not in workspace.pipelines
@@ -232,8 +237,9 @@ def render_overlay(workspace, layer):
             raise ValueError("The registered grid does not match the base image")
         return np.asarray(scalar_component(data, layer["component"]), dtype=np.float64)
 
-    source = clone_workspace(workspace).session
-    source.select_experiment(layer["experiment"])
+    context = clone_workspace(workspace)
+    context.session.select_experiment(layer["experiment"])
+    source = display_session(context, fitted=True, map_name=layer.get("map_name")) if layer["kind"] == "map" else context.session
 
     frame = target.active_frame if layer.get("frame") is None else layer["frame"]
     if layer["kind"] != "map" and not 0 <= frame < source.frame_count:

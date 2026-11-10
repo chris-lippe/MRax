@@ -104,7 +104,7 @@ def _export_object_records_for_session(session: GuiSession) -> list[dict[str, An
             channel_label = "combined" if coil_index is None else f"coil {coil_index + 1}"
             record = _export_record(
                 "reconstruction",
-                f"{exp_name} / MRax reconstruction / {channel_label} / {component}",
+                f"{exp_name} / {(exp_data.get('kspace_metadata') or {}).get('reconstruction_name', 'Reconstruction')} / {channel_label} / {component}",
                 array,
                 group=group,
                 experiment=exp_name,

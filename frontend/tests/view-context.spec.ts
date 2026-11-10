@@ -137,7 +137,7 @@ test('Fit opens maps and View edits the current map without disrupting the proce
   expect(after.scene.fit_rois).toEqual(before.scene.fit_rois);
 });
 
-test('Reconstruct compares protected vendor images with MRax and switches to raw views without processing', async ({
+test('Reconstruct compares protected vendor images with named reconstructions and switches to raw views without processing', async ({
   page,
   request,
 }, info) => {
@@ -168,7 +168,7 @@ test('Reconstruct compares protected vendor images with MRax and switches to raw
   await page.keyboard.press('End');
   await expect(page.getByRole('img', { name: /^Image A:.*frame 3$/ })).toBeVisible();
   const modes = page.getByRole('group', { name: 'Reconstruction display', exact: true });
-  await modes.getByRole('button', { name: 'MRax', exact: true }).click();
+  await modes.getByRole('button', { name: workspace.reconstruction_label, exact: true }).click();
   await expect(page.getByLabel('Reconstruction component', { exact: true })).toBeVisible();
   expect((await current(request)).frame).toBe(2);
   await page.getByLabel('Reconstruction component', { exact: true }).selectOption('phase');
@@ -184,7 +184,7 @@ test('Reconstruct compares protected vendor images with MRax and switches to raw
   await page.getByLabel('K-space component', { exact: true }).selectOption('phase');
   await modes.getByRole('button', { name: 'Difference', exact: true }).click();
   await expect.poll(async () => (await current(request)).view).toBe('Vendor MRax Diff');
-  await modes.getByRole('button', { name: 'Vendor vs MRax', exact: true }).click();
+  await modes.getByRole('button', { name: 'Vendor comparison', exact: true }).click();
   await expect(page.getByRole('img', { name: /^Image B:/ })).toBeVisible();
   await page.screenshot({ path: info.outputPath('reconstruct-compare.png') });
   workspace = await current(request);

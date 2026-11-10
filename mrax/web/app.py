@@ -29,7 +29,11 @@ from mrax.gui.services.comparison import render_comparison
 from mrax.gui.services.persistence import load_workspace_bundle, save_workspace_bundle
 from mrax.gui.services.roi_tools import roi_command
 from mrax.gui.services.scene import add_registration_layer, update_scene
-from mrax.gui.services.synthetic import synthetic_multimodal_session, synthetic_t2_session
+from mrax.gui.services.synthetic import (
+    synthetic_multimodal_session,
+    synthetic_t2_session,
+    synthetic_tutorial_session,
+)
 from mrax.gui.services.view_data import VIEWS, display_options, render_image
 from mrax.gui.services.workspace import StudyWorkspace
 from mrax.gui.session import GuiSession
@@ -40,6 +44,7 @@ from .job_runtime import Jobs
 from .schemas import (
     CloseCommand,
     JobInfo,
+    NavigationCommand,
     PreviewCommand,
     RectangleCommand,
     ViewCommand,
@@ -484,9 +489,14 @@ def create_app(
 
     @app.post("/api/workspaces/synthetic", response_model=WorkspaceInfo)
     def synthetic(kind: str = "t2"):
-        if kind not in {"t2", "multimodal"}:
+        factories = {
+            "t2": synthetic_t2_session,
+            "multimodal": synthetic_multimodal_session,
+            "tutorial": synthetic_tutorial_session,
+        }
+        if kind not in factories:
             raise ValueError("Unknown synthetic fixture")
-        session = synthetic_t2_session() if kind == "t2" else synthetic_multimodal_session()
+        session = factories[kind]()
         workspace = StudyWorkspace(key=uuid4().hex, label=session.study_name, session=session)
         return add_record(workspace)
 
@@ -589,6 +599,15 @@ def create_app(
             if not navigation:
                 app.state.checkpoint(record)
             return payload
+
+    @app.post("/api/workspaces/{key}/navigate")
+    def navigate(key: str, command: NavigationCommand):
+        from .navigation import navigation_response
+
+        record = get_record(key)
+        with record.lock:
+            check_revision(record, command.revision, command.view_revision)
+            return navigation_response(record, command)
 
     @app.get("/api/workspaces/{key}/slice")
     def image(key: str, layer: str | None = None):

@@ -1,4 +1,4 @@
-import type { Ref } from 'react';
+import { useState, type Ref } from 'react';
 import type { Workspace } from './api';
 import { WorkbenchIcon } from './WorkbenchIcon';
 
@@ -38,13 +38,15 @@ export function StudyBrowser({
   onExport: () => void;
   onSave: () => void;
   onStudy: (id: string) => void;
-  onExperiment: (name: string) => void;
+  onExperiment: (studyId: string, name: string) => void;
   onClose: (study: Workspace, trigger: HTMLButtonElement) => void;
 }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggle = (id: string) =>
+    setExpanded((previous) => ({ ...previous, [id]: !(previous[id] ?? true) }));
   return (
-    <aside id="study-controls" className="study-panel" aria-label="Data & studies">
-      <section className="data-controls" aria-labelledby="data-controls-heading">
-        <h2 id="data-controls-heading">Data controls</h2>
+    <aside id="study-controls" className="study-panel" aria-label="Data & Studies">
+      <section className="data-controls" aria-label="Data controls">
         <div
           className="study-files"
           role="toolbar"
@@ -120,14 +122,35 @@ export function StudyBrowser({
           {!workspaces.length && <p className="muted">No studies open.</p>}
           {workspaces.map((item) => {
             const selected = workspace?.id === item.id;
+            const open = expanded[item.id] ?? true;
             return (
               <div className="study-group" key={item.id}>
                 <div className="study-row" data-study-id={item.id}>
+                  <button
+                    type="button"
+                    className="study-toggle"
+                    disabled={busy || !item.loaded}
+                    aria-label={(open ? 'Collapse study: ' : 'Expand study: ') + item.label}
+                    aria-expanded={item.loaded && open}
+                    aria-controls={item.loaded ? 'study-experiments-' + item.id : undefined}
+                    onClick={() => toggle(item.id)}
+                  >
+                    <WorkbenchIcon name="chevron" />
+                  </button>
                   <button
                     className={`study-item ${selected ? 'selected' : ''}`}
                     aria-current={selected ? 'true' : undefined}
                     disabled={busy}
                     onClick={() => onStudy(item.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                        event.preventDefault();
+                        setExpanded((previous) => ({
+                          ...previous,
+                          [item.id]: event.key === 'ArrowRight',
+                        }));
+                      }
+                    }}
                   >
                     <svg className="study-symbol" viewBox="0 0 20 20" aria-hidden="true">
                       <path d="M2.5 5.5h5l2-2h8v13h-15z" />
@@ -163,17 +186,24 @@ export function StudyBrowser({
                     <WorkbenchIcon name="close" />
                   </button>
                 </div>
-                {selected && workspace.loaded && (
-                  <section className="experiment-list" aria-label="Experiments">
+                {item.loaded && (
+                  <section
+                    id={'study-experiments-' + item.id}
+                    className="experiment-list"
+                    aria-label={'Experiments in ' + item.label}
+                    hidden={!open}
+                  >
                     <h3 className="visually-hidden">Experiments</h3>
-                    {workspace.experiments.map((name) => (
+                    {item.experiments.map((name) => (
                       <button
                         key={name}
                         type="button"
-                        className={workspace.experiment === name ? 'selected' : ''}
-                        aria-current={workspace.experiment === name ? 'true' : undefined}
+                        className={selected && workspace?.experiment === name ? 'selected' : ''}
+                        aria-current={
+                          selected && workspace?.experiment === name ? 'true' : undefined
+                        }
                         disabled={busy}
-                        onClick={() => onExperiment(name)}
+                        onClick={() => onExperiment(item.id, name)}
                       >
                         <svg className="study-symbol" viewBox="0 0 20 20" aria-hidden="true">
                           <path d="M4 3.5h12v13H4zM7 7h6M7 10h6M7 13h4" />

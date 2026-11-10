@@ -197,8 +197,19 @@ def reconstruct_acquisition(
     """
     acquisition.require_prepared()
     name = method.lower().replace("-", "_")
-    if name not in {"fft", "variational", "model_based"}:
-        raise ValueError("method must be fft, variational, or model_based")
+    if name not in {"fft", "nufft", "variational", "model_based"}:
+        raise ValueError("method must be fft, nufft, variational, or model_based")
+    nufft_options = {}
+    density_compensation = True
+    if name == "nufft":
+        if acquisition.kind != "sampled":
+            raise ValueError("NUFFT reconstruction requires sampled data with a trajectory")
+        if set(options) - {"eps", "density_compensation", "chunk_size", "batch_size"}:
+            raise ValueError("Unknown NUFFT reconstruction option")
+        nufft_options = dict(options)
+        density_compensation = nufft_options.pop("density_compensation", True)
+        if not isinstance(density_compensation, bool):
+            raise ValueError("Density compensation must be true or false")
     if frame_batch_size is not None:
         from operator import index
 
@@ -292,10 +303,26 @@ def reconstruct_acquisition(
                 density = radial_profile_density(trajectory,
                     points_per_readout=acquisition.readout_model.target_points, center_out=False)
                 diagnostics.append(report)
-            gridded = grid_kaiser_bessel(gridding_samples, trajectory,
-                recipe.gridding_shape or acquisition.encoding_shape, density=density,
-                kernel_width=recipe.gridding_kernel_width, shape_parameter=recipe.gridding_shape_parameter)
-            coils = ifftnc(gridded, axes=axes)
+            if name == "nufft":
+                from .nufft import prepare_nufft
+
+                values = gridding_samples
+                if density_compensation and density is not None:
+                    values = values * jnp.asarray(density)
+                coils = prepare_nufft(acquisition.encoding_shape, trajectory, **nufft_options).adjoint(values)
+                # The NUFFT already removes its interpolation kernel response.
+                recipe = replace(recipe, deapodize=False, crop_offset=())
+                diagnostics.append({"stage": "nufft", "density_compensation": density_compensation})
+            else:
+                gridded = grid_kaiser_bessel(gridding_samples, trajectory,
+                    recipe.gridding_shape or acquisition.encoding_shape, density=density,
+                    kernel_width=recipe.gridding_kernel_width, shape_parameter=recipe.gridding_shape_parameter)
+                if name == "fft" and recipe.kspace_window:
+                    from .windows import spectral_window
+
+                    gridded = gridded * spectral_window(gridded.shape[-ndim:], recipe.kspace_window,
+                        recipe.window_parameters, recipe.window_powers)
+                coils = ifftnc(gridded, axes=axes)
     if name == "model_based":
         del preview, preview_mask, unshifted_samples
     history = ()

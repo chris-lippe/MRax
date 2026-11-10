@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
+import { WorkbenchIcon } from './WorkbenchIcon';
 import type { AnalysisProps } from './analysisTypes';
 import type { Job, TimecourseResult } from './api';
 import { ExportControls } from './ExportControls';
@@ -50,7 +51,7 @@ export function ExportDialog({
             {props.workspace?.experiment ? ` / ${props.workspace.experiment}` : ''}
           </Dialog.Description>
           <Dialog.Close className="drawer-close" aria-label="Close export dialog">
-            ×
+            <WorkbenchIcon name="close" />
           </Dialog.Close>
           <section aria-label="Export controls">
             <ExportControls

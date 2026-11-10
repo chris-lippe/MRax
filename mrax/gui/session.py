@@ -1008,17 +1008,18 @@ class GuiSession:
             or processed.get("raw_reconstruction_coils") is not None
         )
 
-    def can_lazy_load_raw_data(self, name: str | None = None) -> bool:
+    def can_lazy_load_raw_data(self, name: str | None = None, *, require_acquisition: bool = False) -> bool:
         if self.source_kind != "bruker" or not self.data:
             return False
         exp_name = name or self.selected_experiment
         if not exp_name:
             return False
         exp_data = self.data.get("experiments", {}).get(exp_name) or {}
-        if self.raw_data_loaded(exp_name):
+        available = self.can_reconstruct_raw_data(exp_name) if require_acquisition else self.raw_data_loaded(exp_name)
+        if available:
             return False
         meta = dict(exp_data.get("kspace_metadata") or {})
-        if meta.get("status") in {"loaded", "unavailable", "error"}:
+        if meta.get("status") in ({"unavailable", "error"} if require_acquisition else {"loaded", "unavailable", "error"}):
             return False
         extra = dict(exp_data.get("extra_metadata") or {})
         path = extra.get("path")
@@ -1029,13 +1030,15 @@ class GuiSession:
         name: str | None = None,
         *,
         progress_callback: Callable[[int, int, str], None] | None = None,
+        require_acquisition: bool = False,
     ) -> bool:
         if not self.data:
             raise RuntimeError("No study is loaded")
         exp_name = name or self.selected_experiment
         if not exp_name:
             raise RuntimeError("No experiment is selected")
-        if self.raw_data_loaded(exp_name):
+        available = self.can_reconstruct_raw_data(exp_name) if require_acquisition else self.raw_data_loaded(exp_name)
+        if available:
             return True
         exp_data = self.data["experiments"].get(exp_name) or {}
         extra = dict(exp_data.get("extra_metadata") or {})
@@ -1117,7 +1120,8 @@ class GuiSession:
         return acquisition is not None and acquisition.domain == "kspace"
 
     def reconstruct_raw_data_for_experiment(self, name: str | None = None, *, method="fft",
-                                           device: DeviceLike = "cpu", **options):
+                                           device: DeviceLike = "cpu", pipeline=None,
+                                           reconstruction_name=None, plan_settings=None, **options):
         """Run the generic reconstruction stage after raw data have been imported."""
         from mrax.reco import reconstruct_acquisition
         from mrax.reco.components import RAW_RECONSTRUCTION_FREQUENCY_KEY
@@ -1127,17 +1131,28 @@ class GuiSession:
             raise RuntimeError("This experiment has no prepared MRI acquisition")
         entry = self.data["experiments"][exp_name]
         acquisition = entry["acquisition"]
-        result = reconstruct_acquisition(acquisition, method=method, device=device, **options)
+        result = (
+            pipeline.run(acquisition, device=device, **options)
+            if pipeline is not None else reconstruct_acquisition(acquisition, method=method, device=device, **options)
+        )
         processed = dict(entry.get("processed") or {})
         processed["raw_reconstruction"] = np.asarray(result.image)
         processed["raw_reconstruction_coils"] = np.asarray(result.coil_images)
-        if acquisition.recipe.output_product == "frequency_hz":
+        product = "frequency_hz" if any(d.get("stage") == "frequency_product" for d in result.diagnostics) else "image"
+        if product == "frequency_hz":
             processed[RAW_RECONSTRUCTION_FREQUENCY_KEY] = np.asarray(result.image)
         else:
             processed.pop(RAW_RECONSTRUCTION_FREQUENCY_KEY, None)
         entry["processed"] = processed
         entry["kspace_metadata"] = {**dict(entry.get("kspace_metadata") or {}),
-            "reconstruction_status": "completed", "output_product": acquisition.recipe.output_product}
+            "reconstruction_status": "completed", "output_product": product,
+            "reconstruction_method": result.method}
+        if reconstruction_name is not None:
+            entry["kspace_metadata"]["reconstruction_name"] = reconstruction_name
+        if plan_settings is not None:
+            from copy import deepcopy
+
+            entry["kspace_metadata"]["reconstruction_pipeline"] = deepcopy(plan_settings)
         if self.study is not None and exp_name in self.study.names:
             target = self.study.datasets[list(self.study.names).index(exp_name)]
             target.processed = processed
@@ -1147,7 +1162,9 @@ class GuiSession:
 
     def prepare_raw_view(self, view: str, *, progress_callback=None, device: DeviceLike = "cpu") -> bool:
         """Import missing samples, then reconstruct only when the chosen view needs it."""
-        if not self.raw_data_loaded():
+        if view == "k_space" and self.current_experiment.get("raw_kspace") is None:
+            self.load_raw_data_for_experiment(progress_callback=progress_callback, require_acquisition=True)
+        elif not self.raw_data_loaded():
             self.load_raw_data_for_experiment(progress_callback=progress_callback)
         if view in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"} and self.reconstruction_array is None:
             if progress_callback is not None:

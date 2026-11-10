@@ -33,18 +33,18 @@ def _set_dims(session, dims):
     session.data["manifest"] = manifest
 
 
-def display_steps(workspace, *, fitted=False):
+def display_steps(workspace, *, fitted=False, map_name=None):
     if fitted or workspace.view_label == "Map":
-        result = (
-            workspace.fit_results_by_experiment.get(workspace.session.selected_experiment) or {}
-        )
+        from .pipeline_blocks import fit_result_for_map
+
+        result = fit_result_for_map(workspace, map_name)
         if "pipeline_steps" in result:
             return result["pipeline_steps"]
     pipeline = current_pipeline(workspace)
     return pipeline["steps"] if pipeline and pipeline["enabled"] else []
 
 
-def display_session(workspace, *, fitted=False):
+def display_session(workspace, *, fitted=False, map_name=None):
     """A metadata-only map view on the grid recorded when those maps were fitted."""
     session = workspace.session
     pipeline = current_pipeline(workspace)
@@ -61,11 +61,15 @@ def display_session(workspace, *, fitted=False):
     )
     if not fitted and workspace.view_label != "Map" and not raw_view:
         return session
-    result = workspace.fit_results_by_experiment.get(session.selected_experiment) or {}
+    from .pipeline_blocks import fit_result_for_map
+
+    result = fit_result_for_map(workspace, map_name)
     grid = pipeline["source"] if raw_view else result.get("pipeline_grid")
     if not grid:
         return session
     context = copy.copy(session)
+    if map_name is not None:
+        context.active_map = map_name
     context.data = {**session.data, "experiments": dict(session.data["experiments"])}
     entry = dict(session.current_experiment)
     entry["spatial_geometry"] = grid["geometry"]
@@ -82,7 +86,7 @@ def display_session(workspace, *, fitted=False):
     }
     context._slice_cache = {}
     context.study = None
-    steps = [] if raw_view else display_steps(workspace, fitted=True)
+    steps = [] if raw_view else display_steps(workspace, fitted=True, map_name=map_name)
     if fitted:
         context.rois = [project_roi(workspace, r, steps=steps) for r in session.rois]
         context.shared_rois = [project_roi(workspace, r, steps=steps) for r in session.shared_rois]
@@ -91,9 +95,10 @@ def display_session(workspace, *, fitted=False):
 
 def signature(workspace):
     pipeline = current_pipeline(workspace)
-    if not pipeline or not pipeline["enabled"] or not any(s["enabled"] for s in pipeline["steps"]):
+    steps = [] if not pipeline else [s for s in pipeline["steps"] if s["kind"] != "fit"]
+    if not pipeline or not pipeline["enabled"] or not any(s["enabled"] for s in steps):
         return "original"
-    values = [(s["id"], s["version"], s["enabled"]) for s in pipeline["steps"]]
+    values = [(s["id"], s["version"], s["enabled"]) for s in steps]
     return hashlib.sha256(json.dumps(values).encode()).hexdigest()
 
 
@@ -182,6 +187,8 @@ def ensure_pipeline(workspace):
         raise ValueError("Load an experiment before processing")
     name = session.selected_experiment
     if name not in workspace.pipelines:
+        from .provenance import pipeline_sources
+
         source = snapshot(session, original=True)
         workspace.pipelines[name] = {
             "source": source,
@@ -189,6 +196,7 @@ def ensure_pipeline(workspace):
             "steps": [],
             "enabled": True,
             "generation": 0,
+            "sources": pipeline_sources(workspace),
         }
     session.current_experiment["pipeline_source_grid"] = _grid(workspace.pipelines[name]["source"])
     return workspace.pipelines[name]
@@ -242,25 +250,31 @@ def _public_step(step):
             "input_grid",
             "output_grid",
             "plane_dims",
+            "noise_estimate",
+            "result_maps",
         )
         if key in step
     }
 
 
 def pipeline_info(workspace):
+    from .provenance import pipeline_sources
+
     pipeline = current_pipeline(workspace)
     fit = workspace.fit_results_by_experiment.get(workspace.session.selected_experiment) or {}
     preview = (
         workspace.preview_results_by_experiment.get(workspace.session.selected_experiment) or {}
     )
+    stored = [] if pipeline is None else [row["result"] for row in pipeline.get("fits", {}).values()]
     return {
         "enabled": True if pipeline is None else pipeline["enabled"],
         "generation": 0 if pipeline is None else pipeline["generation"],
         "signature": signature(workspace),
+        "sources": pipeline_sources(workspace),
         "steps": [] if pipeline is None else [_public_step(s) for s in pipeline["steps"]],
         "fits_stale": any(
             result and result.get("pipeline_signature", "original") != signature(workspace)
-            for result in (fit, preview)
+            for result in (fit, preview, *stored)
         ),
     }
 
@@ -326,8 +340,32 @@ def _evaluate_steps(workspace, progress, report, *, start_at=0):
             work.session.rois = [mask]
             options["roi_names"] = [mask.name]
             options["roi_name"] = mask.name
+        if step["kind"] == "fit":
+            from .pipeline_blocks import run_fitting_block
+
+            # A fit sees exactly its image-producing prefix, never later operations.
+            work.pipelines[name]["steps"] = copy.deepcopy(enabled[:index])
+            record = run_fitting_block(work, step, step_progress)
+            session.replace_fitted_maps(work.session.fitted_maps)
+            session.active_map = work.session.active_map
+            pipeline.setdefault("fits", {}).update(work.pipelines[name].get("fits", {}))
+            pipeline.setdefault("fits", {})[step["id"]] = record
+            workspace.fit_results_by_experiment[name] = record["result"]
+            step["result_maps"] = record["maps"]
+            step["output_grid"] = step["input_grid"]
+            report.complete()
+            continue
         if step["kind"] == "process":
-            apply_processing(work, options, step_progress)
+            if step.get("noise_mask") is not None:
+                frozen = step["noise_mask"]
+                work._processing_noise_roi = project_roi(
+                    workspace, ROI("_pipeline_noise", frozen["mask"], dims=frozen["dims"]),
+                    steps=step.get("input_steps", enabled[:index]),
+                )
+            summary = apply_processing(work, options, step_progress)
+            step.pop("noise_estimate", None)
+            if summary.get("noise_estimate") is not None:
+                step["noise_estimate"] = summary["noise_estimate"]
         else:
             _apply_alignment(work, step, options, step_progress)
         install(workspace, snapshot(work.session))
@@ -383,6 +421,7 @@ def _commit(workspace, candidate):
 
 def _make_step(candidate, options, *, kind="process", previous=None, enabled=True):
     from .processing import processing_methods
+    from .scene import fitting_roi
 
     method = options.get("method") if kind == "process" else kind
     family = "register" if kind == "stored_registration" else _family(method)
@@ -393,7 +432,16 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
     clean = {
         k: v for k, v in options.items() if k not in {"step_id", "name"} and not k.startswith("_")
     }
-    clean.setdefault("input", "image")
+    if kind not in {"reconstruct", "fit"}:
+        clean.setdefault("input", "image")
+    if kind == "reconstruct" and "workflow" not in clean and clean.get("pipeline") is None:
+        saved = (candidate.session.current_experiment.get("kspace_metadata") or {}).get("reconstruction_pipeline")
+        if saved:
+            clean["pipeline"] = copy.deepcopy(saved)
+    if kind in {"reconstruct", "fit"}:
+        from .pipeline_blocks import block_options
+
+        clean = block_options(candidate, kind, clean)
     if kind == "stored_registration":
         clean["reference_experiment"] = row["metadata"][
             "moving_experiment"
@@ -412,6 +460,8 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
         if row is None:
             raise ValueError("Choose a processing method")
         label = row["label"]
+    elif kind in {"reconstruct", "fit"}:
+        label = clean["workflow"]["name"]
     step = {
         "id": previous["id"] if previous else uuid4().hex,
         "version": uuid4().hex,
@@ -424,6 +474,18 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
         "references": references,
         "mask": mask,
     }
+    if kind == "fit":
+        used = {row.get("map_prefix") for row in current_pipeline(candidate)["steps"] if previous is None or row["id"] != previous["id"]}
+        prefix, number = label, 2
+        while prefix in used:
+            prefix, number = f"{label} ({number})", number + 1
+        step["map_prefix"] = (
+            previous.get("map_prefix", prefix)
+            if previous and previous["label"] == label else prefix
+        )
+    if kind == "process" and clean.get("noise_roi_names") is not None:
+        roi = fitting_roi(candidate, clean["noise_roi_names"])
+        step["noise_mask"] = {"mask": np.asarray(roi.mask).copy(), "dims": tuple(roi.dims)}
     source = clean.get("input", "image")
     if kind == "process" and source not in {"image", "view"}:
         from .processing import _source
@@ -439,7 +501,7 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
             "exp_type": candidate.session.current_experiment.get("exp_type"),
         }
         step["input_steps"] = (
-            display_steps(candidate, fitted=True) if source.startswith("map:") else []
+            display_steps(candidate, fitted=True, map_name=source[4:]) if source.startswith("map:") else []
         )
     return step
 
@@ -470,6 +532,8 @@ def apply_step(workspace, options, progress, *, kind="process", append=False, en
     if kind == "register" and options.get("moving_experiment"):
         candidate.session.select_experiment(options["moving_experiment"])
     pipeline = ensure_pipeline(candidate)
+    if kind == "reconstruct" and not candidate.session.can_reconstruct_raw_data() and candidate.session.can_lazy_load_raw_data(require_acquisition=True):
+        candidate.session.load_raw_data_for_experiment(progress_callback=progress, require_acquisition=True)
     method = options.get("method") if kind == "process" else kind
     family = "register" if kind == "stored_registration" else _family(method)
     requested = options.get("step_id")
@@ -496,6 +560,9 @@ def apply_step(workspace, options, progress, *, kind="process", append=False, en
             pipeline["steps"].append(step)
     else:
         pipeline["steps"][pipeline["steps"].index(previous)] = step
+    from .pipeline_blocks import validate_chain
+
+    validate_chain(candidate, pipeline["steps"])
     _evaluate(candidate, progress, start_at=start_at)
     candidate.view_label = "Image"
     summary = {
@@ -643,15 +710,26 @@ def _apply_alignment(workspace, step, options, progress):
 
     session = workspace.session
     if step["kind"] == "reconstruct":
-        if not session.has_reconstruction:
-            run_operation(workspace, "_reconstruct_step", options, progress)
+        from .pipeline_blocks import resolved_block
+
+        _document, options = resolved_block(workspace, "reconstruct", options)
+        options["device"] = step["options"].get("device", "cpu")
+        saved_plan = (session.current_experiment.get("kspace_metadata") or {}).get("reconstruction_pipeline")
+        if not session.has_reconstruction or (options.get("pipeline") is not None and options["pipeline"] != saved_plan):
+            result = run_operation(workspace, "_reconstruct_step", options, progress)[1]
+            step["label"] = _document.name
         component = options.get("component", "magnitude")
         if component not in {"magnitude", "phase"}:
             raise ValueError("Choose magnitude or phase for reconstruction")
         session.set_reconstruction_component(component)
-        data = session.reconstruction_display_array(component=component)
+        data = session.reconstruction_display_array(
+            component=component, combined=True, unwrap_phase=False
+        )
         state = snapshot(session)
-        state["data"] = data
+        try:
+            state["data"] = reshape_frames_to_dims(data, state["dims"])
+        except ValueError as error:
+            raise ValueError("Reconstruction output must match the experiment grid; keep its native output geometry") from error
         if component == "phase":
             state.update(unit="rad", model="identity")
         install(workspace, state)

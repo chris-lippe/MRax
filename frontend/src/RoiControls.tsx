@@ -310,6 +310,7 @@ export function RoiControls({
                   className="secondary"
                   disabled={busy || !w.editable || !roi.enabled}
                   title="Keep the current labelled voxels and edit them with a brush. Undo restores the shape."
+                  data-tutorial="roi-pixel-mask"
                   onClick={() => void editMask()}
                 >
                   {roi.metadata.consolidated || roi.metadata.kind === 'mask'

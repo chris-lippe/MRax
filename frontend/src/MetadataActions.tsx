@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
+import { WorkbenchIcon } from './WorkbenchIcon';
 import { api } from './api';
 import { useFileSystem } from './FileSystemDialog';
 import { Report } from './Controls';
@@ -119,7 +120,7 @@ export function MetadataActions({
               Apply.
             </Dialog.Description>
             <Dialog.Close className="drawer-close" aria-label="Close metadata form">
-              ×
+              <WorkbenchIcon name="close" />
             </Dialog.Close>
             {dialog === 'add' ? (
               <form

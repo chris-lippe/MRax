@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
+import { WorkbenchIcon } from './WorkbenchIcon';
 import { api, type Workspace } from './api';
 import type { components } from './api.generated';
 import { roiColor, roiMaskPaths } from './scene';
@@ -79,7 +80,7 @@ export function MaskPreviewDialog({
             settings; 0 is background.
           </Dialog.Description>
           <Dialog.Close className="drawer-close" aria-label="Close mask preview">
-            ×
+            <WorkbenchIcon name="close" />
           </Dialog.Close>
           {error && <p role="alert">{error}</p>}
           {data && !error && (
