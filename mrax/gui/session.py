@@ -1055,6 +1055,7 @@ class GuiSession:
             study_globals=dict((self.data or {}).get("study_globals") or {}),
             pdata_index=str(extra.get("pdata_index") or "1"),
             load_raw_kspace=True,
+            slice_package=extra.get("slice_package"),
         )
         if progress_callback is not None:
             progress_callback(1, 2, f"Attaching raw data for scan {exp_name}")
@@ -1320,9 +1321,24 @@ class GuiSession:
         plane = _normalize_image_plane(self.active_image_plane)
         return self._image_plane_dims_for_experiment()[plane]
 
+    @property
+    def image_plane_axis_labels(self) -> tuple[str, str]:
+        """Anatomical display axes, distinct from the native storage dimensions."""
+        dims = self.image_plane_dims
+        if not self.is_loaded:
+            return dims
+        geometry = _spatial_geometry_from_experiment_data(
+            self.current_experiment, dims=self.experiment_dims,
+        )
+        labels = geometry.axis_anatomical_labels
+        spatial_dims = tuple(spatial_names(self.experiment_dims))
+        if labels is None or len(labels) != len(spatial_dims):
+            return dims
+        anatomical = dict(zip(spatial_dims, labels))
+        return tuple(anatomical.get(dim, dim) for dim in dims)
+
     def _image_plane_dims_for_experiment(
-        self,
-        name: str | None = None,
+        self, name: str | None = None,
     ) -> dict[str, tuple[str, str]]:
         if not self.data:
             return dict(IMAGE_PLANE_DIMS)
@@ -1331,42 +1347,44 @@ class GuiSession:
         if not isinstance(exp_data, Mapping):
             return dict(IMAGE_PLANE_DIMS)
         summary = self.summary_by_name.get(exp_name or "", {})
-        dims = {
-            str(key): int(value)
-            for key, value in dict(summary.get("dims") or {}).items()
-        }
+        dims = {str(key): int(value) for key, value in dict(summary.get("dims") or {}).items()}
         spatial_dims = tuple(spatial_names(dims))
-        if spatial_dims != ("x", "y", "z"):
+        if spatial_dims not in {("x", "y"), ("x", "y", "z")}:
             return dict(IMAGE_PLANE_DIMS)
         geometry = _spatial_geometry_from_experiment_data(exp_data, dims=dims)
         labels = geometry.axis_anatomical_labels
+        extra = exp_data.get("extra_metadata")
         if labels is None:
-            extra = exp_data.get("extra_metadata")
-            metadata_labels = (
-                extra.get("image_axis_anatomical_labels")
-                if isinstance(extra, Mapping)
-                else None
-            )
+            raw_labels = extra.get("image_axis_anatomical_labels") if isinstance(extra, Mapping) else None
             try:
-                labels = tuple(str(value).lower() for value in metadata_labels)  # type: ignore[arg-type]
+                labels = tuple(str(value).lower() for value in raw_labels)[:len(spatial_dims)]
             except TypeError:
                 labels = None
-        if labels is None or len(labels) != 3 or set(labels) != {"x", "y", "z"}:
-            return dict(IMAGE_PLANE_DIMS)
+        if labels is None or len(labels) != len(spatial_dims) or len(set(labels)) != len(labels):
+            native = extra.get("native_image_plane") if isinstance(extra, Mapping) else None
+            return {**IMAGE_PLANE_DIMS, native: ("x", "y")} if native in IMAGE_PLANE_DIMS else dict(IMAGE_PLANE_DIMS)
         dimension_for_axis = dict(zip(labels, spatial_dims))
-        return {
-            plane: (
-                dimension_for_axis[anatomical_axes[0]],
-                dimension_for_axis[anatomical_axes[1]],
-            )
-            for plane, anatomical_axes in IMAGE_PLANE_DIMS.items()
-        }
+        # A displayed array is [row, column]. Anatomical X belongs on the
+        # horizontal axis; superior/inferior is vertical in coronal/sagittal.
+        planes = {"axial": ("y", "x"), "coronal": ("z", "x"), "sagittal": ("z", "y")}
+        result = dict(IMAGE_PLANE_DIMS)
+        for plane, axes in planes.items():
+            if all(axis in dimension_for_axis for axis in axes):
+                result[plane] = (dimension_for_axis[axes[0]], dimension_for_axis[axes[1]])
+        return result
 
     @property
     def native_image_plane(self) -> str:
         return self.native_image_plane_for_experiment()
 
     def native_image_plane_for_experiment(self, name: str | None = None) -> str:
+        exp_name = name or self.selected_experiment
+        if self.data and "z" not in dict(self.summary_by_name.get(exp_name or "", {}).get("dims") or {}):
+            entry = self.data.get("experiments", {}).get(exp_name or "", {})
+            extra = entry.get("extra_metadata")
+            native = extra.get("native_image_plane") if isinstance(extra, Mapping) else None
+            if native in IMAGE_PLANE_DIMS:
+                return native
         plane_dims = self._image_plane_dims_for_experiment(name)
         for plane, dims in plane_dims.items():
             if set(dims) == {"x", "y"}:

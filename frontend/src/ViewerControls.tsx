@@ -146,7 +146,10 @@ export function ViewerControls({
             {['axial', 'coronal', 'sagittal'].map((plane) => (
               <option
                 key={plane}
-                disabled={plane !== 'axial' && !(navigation?.volume ?? 'z' in workspace.dimensions)}
+                disabled={
+                  plane !== (navigation?.plane ?? workspace.plane) &&
+                  !(navigation?.volume ?? 'z' in workspace.dimensions)
+                }
               >
                 {plane}
               </option>

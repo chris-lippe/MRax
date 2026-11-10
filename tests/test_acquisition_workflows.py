@@ -364,7 +364,12 @@ def test_joint_receiver_block_padding_and_echo_slice_layout(tmp_path, byte_order
     np.testing.assert_array_equal(acq.samples, truth)
     assert report["padding_bytes_per_record"] == 1024 - receivers * read * 8
     image = reconstruct_acquisition(acq).image
-    assert image.shape == (echoes, phase, read, slices)
+    assert image.shape == (echoes, read, phase, slices)
+    coils = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(truth, axes=(-2, -1)),
+                                      axes=(-2, -1), norm="ortho"), axes=(-2, -1))
+    reference = np.sqrt(np.sum(np.abs(coils) ** 2, axis=1)) / np.sqrt(read * phase)
+    reference = reference.reshape((slices, echoes, phase, read)).transpose(1, 3, 2, 0)
+    np.testing.assert_allclose(image, reference, rtol=2e-5, atol=1e-3)
     with (tmp_path / "fid").open("ab") as handle:
         handle.write(b"x")
     with pytest.raises(ValueError, match="scalar words"):
@@ -488,7 +493,7 @@ def test_import_only_facade_preserves_image_import_without_reconstructing(tmp_pa
     monkeypatch.setattr(reconstruction, "reconstruct_acquisition", unexpected)
     exp, dataset, model, metadata = import_bruker_experiment(folder)
     exp.validate(dataset)
-    np.testing.assert_array_equal(dataset.data, np.asarray([[[10, 12], [14, 16]]]))
+    np.testing.assert_array_equal(dataset.data, np.asarray([[[10, 14], [12, 16]]]))
     assert dataset.acquisition.samples.shape == (1, 1, 2, 2)
     assert metadata["raw_import"]["status"] == "loaded"
     assert metadata["raw_import"]["reconstruction_status"] == "not_run"

@@ -418,12 +418,12 @@ def test_gui_session_switches_3d_image_planes_and_spatial_slider():
         (
             ["z", "x", "y"],
             "coronal",
-            {"axial": ("y", "z"), "coronal": ("y", "x"), "sagittal": ("z", "x")},
+            {"axial": ("z", "y"), "coronal": ("x", "y"), "sagittal": ("x", "z")},
         ),
         (
             ["y", "z", "x"],
             "sagittal",
-            {"axial": ("z", "x"), "coronal": ("z", "y"), "sagittal": ("x", "y")},
+            {"axial": ("x", "z"), "coronal": ("y", "z"), "sagittal": ("y", "x")},
         ),
     ],
 )
@@ -479,14 +479,14 @@ def test_gui_session_uses_geometry_spacing_for_ordered_anatomical_planes():
     )
 
     assert session.active_image_plane == "coronal"
-    assert session.image_plane_dims == ("y", "x")
-    assert session.image_plane_voxel_sizes == pytest.approx((0.3, 0.2))
+    assert session.image_plane_dims == ("x", "y")
+    assert session.image_plane_voxel_sizes == pytest.approx((0.2, 0.3))
     session.set_image_plane("axial")
-    assert session.image_plane_dims == ("y", "z")
-    assert session.image_plane_voxel_sizes == pytest.approx((0.3, 1.1))
+    assert session.image_plane_dims == ("z", "y")
+    assert session.image_plane_voxel_sizes == pytest.approx((1.1, 0.3))
     session.set_image_plane("sagittal")
-    assert session.image_plane_dims == ("z", "x")
-    assert session.image_plane_voxel_sizes == pytest.approx((1.1, 0.2))
+    assert session.image_plane_dims == ("x", "z")
+    assert session.image_plane_voxel_sizes == pytest.approx((0.2, 1.1))
 
 
 def test_gui_state_saves_mrax_version_and_spatial_geometry():

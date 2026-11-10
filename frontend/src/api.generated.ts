@@ -2046,6 +2046,11 @@ export interface components {
              */
             plane: string;
             /**
+             * Plane Axis Labels
+             * @default []
+             */
+            plane_axis_labels: string[];
+            /**
              * Plane Dims
              * @default [
              *       "x",

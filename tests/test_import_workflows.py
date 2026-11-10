@@ -343,7 +343,7 @@ def test_synthetic_bruker_study_import_workflow(tmp_path):
     assert study.names == ["1"]
     assert study.experiments[0].exp_type == "mse"
     assert study.datasets[0].shape == (1, 2, 2)
-    np.testing.assert_allclose(np.asarray(study.datasets[0].data[0]), [[10.0, 12.0], [14.0, 16.0]])
+    np.testing.assert_allclose(np.asarray(study.datasets[0].data[0]), [[10.0, 14.0], [12.0, 16.0]])
 
     exp_meta = metadata["experiments"]["1"]
     assert exp_meta["method"]["Method"] == "MSME"
@@ -579,8 +579,11 @@ def test_bruker_geometry_uses_slice_positions_and_anatomical_axis_order():
 
     geometry = bruker_spatial_geometry(visu, spatial_shape=(256, 256, 3))
 
-    assert geometry.voxel_sizes == (0.125, 0.15625, 0.75)
-    assert geometry.axis_anatomical_labels == ("z", "x", "y")
+    assert geometry.voxel_sizes == (0.15625, 0.125, 0.75)
+    assert geometry.axis_anatomical_labels == ("x", "z", "y")
+    assert geometry.affine is not None
+    assert not geometry.frame_affines
+    np.testing.assert_allclose(np.asarray(geometry.affine)[:3, 0], [0, -0.75, 0])
 
 
 def test_enhanced_bruker_dicom_uses_separate_adapter(tmp_path):

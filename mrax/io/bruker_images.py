@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import warnings
+from itertools import permutations
 from pathlib import Path
 from typing import Sequence, Tuple
 
@@ -8,10 +8,13 @@ import numpy as np
 
 from mrax.data_struct import SpatialGeometry
 
+from .bruker_frames import (
+    frame_group_entries,
+    frame_parameter,
+    output_frame_grid,
+)
 from .bruker_parameters import (
-    _as_positive_int,
     _as_string_list,
-    _contains_token,
     _flatten_numeric,
     _normalize_size,
     bruker_word_dtype,
@@ -24,6 +27,8 @@ def _bruker_orientation(visu: dict) -> list[np.ndarray]:
     vals = _flatten_numeric(visu.get("VisuCoreOrientation"))
     if not vals:
         return []
+    if len(vals) % 9:
+        raise ValueError("VisuCoreOrientation must contain complete 3 by 3 matrices")
     count = len(vals) // 9
     if count <= 0:
         return []
@@ -40,22 +45,21 @@ def _bruker_image_orientation_metadata(visu: dict) -> dict[str, object]:
     orientations = _bruker_orientation(visu)
     if not orientations:
         return {}
-    orientation = np.asarray(orientations[0], dtype=float)
+    grid = visu.get("_mrax_output_frame_indices")
+    index = int(grid[0][0]) if grid else 0
+    expanded = frame_parameter(visu, "VisuCoreOrientation", 9)
+    orientation = expanded[index].reshape(3, 3).T
     if orientation.shape != (3, 3) or not np.isfinite(orientation).all():
         return {}
     norms = np.linalg.norm(orientation, axis=0)
     if np.any(norms <= 1e-8):
         return {}
-    dominant = np.argmax(np.abs(orientation / norms[None, :]), axis=0)
+    unit = np.abs(orientation / norms[None, :])
+    dominant = max(permutations(range(3)), key=lambda axes: sum(unit[axis, i] for i, axis in enumerate(axes)))
     vendor_labels = tuple("xyz"[int(index)] for index in dominant)
     if len(set(vendor_labels)) != 3:
         return {}
-    first_axis, second_axis = _bruker_decoded_in_plane_axis_order(visu)
-    labels = (
-        vendor_labels[first_axis],
-        vendor_labels[second_axis],
-        vendor_labels[2],
-    )
+    labels = vendor_labels
     native_plane = {"x": "sagittal", "y": "coronal", "z": "axial"}[labels[2]]
     return {
         "image_axis_anatomical_labels": list(labels),
@@ -63,39 +67,12 @@ def _bruker_image_orientation_metadata(visu: dict) -> dict[str, object]:
     }
 
 
-def _bruker_decoded_in_plane_axis_order(visu: dict) -> tuple[int, int]:
-    """Return Bruker orientation columns matching decoded NumPy axes 0 and 1."""
-
-    dim_val = visu.get("VisuCoreDim")
-    dim = int(dim_val) if isinstance(dim_val, (int, float, np.generic)) else 0
-    size_vals = _normalize_size(visu.get("VisuCoreSize"), dim=dim if dim > 0 else None)
-    if dim >= 3 or len(size_vals) >= 3:
-        return (0, 1)
-    frame_count = _as_positive_int(visu.get("VisuCoreFrameCount"), 1) or 1
-    frames_are_slices = (
-        len(size_vals) == 2
-        and frame_count > 1
-        and _contains_token(visu.get("VisuFGOrderDesc"), "FG_SLICE")
-        and not bool(visu.get("_mrax_mixed_slice_geometry", False))
-    )
-    reshape_order = "F" if _contains_token(visu.get("VisuFGOrderDesc"), "FG_DIFFUSION") else "C"
-    if frames_are_slices and size_vals[0] != size_vals[1]:
-        reshape_order = "F"
-    swapped = reshape_order == "C"
-
-    transpositions = _bruker_frame_transpositions(
-        visu.get("_mrax_frame_transposition", visu.get("VisuCoreTransposition")),
-        frame_count,
-    )
-    if transpositions.size and int(transpositions[0]) > 0:
-        swapped = not swapped
-    return (1, 0) if swapped else (0, 1)
-
-
 def _bruker_position(visu: dict) -> list[np.ndarray]:
     vals = _flatten_numeric(visu.get("VisuCorePosition"))
     if not vals:
         return []
+    if len(vals) % 3:
+        raise ValueError("VisuCorePosition must contain complete patient-coordinate vectors")
     count = len(vals) // 3
     if count <= 0:
         return []
@@ -106,116 +83,6 @@ def _bruker_position(visu: dict) -> list[np.ndarray]:
     return vectors
 
 
-def _bruker_frame_transpositions(value: object, frame_count: int) -> np.ndarray:
-    """Broadcast Bruker frame transposition metadata to one value per frame."""
-
-    count = max(int(frame_count), 0)
-    if count == 0:
-        return np.zeros((0,), dtype=int)
-
-    vals = _flatten_numeric(value)
-    if not vals:
-        return np.zeros((count,), dtype=int)
-
-    arr = np.asarray(vals, dtype=int).ravel()
-    if arr.size == 1:
-        return np.full((count,), int(arr[0]), dtype=int)
-    if arr.size >= count:
-        return arr[:count]
-    if count % int(arr.size) == 0:
-        return np.tile(arr, count // int(arr.size))
-    pad_val = int(arr[-1]) if arr.size > 0 else 0
-    return np.pad(arr, (0, count - arr.size), constant_values=pad_val)
-
-
-def _visu_fg_order_entries(visu: dict) -> list[list[object]]:
-    """Return parsed ``VisuFGOrderDesc`` entries as ``[count, kind, ...]`` lists."""
-
-    value = visu.get("VisuFGOrderDesc")
-    if value is None:
-        return []
-    if isinstance(value, list) and value and all(isinstance(item, list) for item in value):
-        return [list(item) for item in value if item]
-    if isinstance(value, list) and len(value) >= 2:
-        if len(value) <= 5 and isinstance(value[0], (int, float)) and isinstance(value[1], str):
-            return [list(value)]
-        entries: list[list[object]] = []
-        idx = 0
-        while idx + 1 < len(value):
-            if isinstance(value[idx], (int, float)) and isinstance(value[idx + 1], str):
-                entries.append(list(value[idx : idx + 5]))
-                idx += 5
-            else:
-                idx += 1
-        return entries
-    return []
-
-
-def _visu_fg_count(visu: dict, token: str) -> int | None:
-    needle = token.upper()
-    for entry in _visu_fg_order_entries(visu):
-        if len(entry) >= 2 and needle in str(entry[1]).upper():
-            try:
-                count = int(round(float(entry[0])))
-            except (TypeError, ValueError):
-                return None
-            return count if count > 0 else None
-    return None
-
-
-def _bruker_has_mixed_slice_geometry(visu: dict, frame_count: int) -> bool:
-    """Detect 2D frame groups with mixed slice-stack geometry."""
-
-    if int(frame_count) <= 1 or not _contains_token(visu.get("VisuFGOrderDesc"), "FG_SLICE"):
-        return False
-
-    orientations = _bruker_orientation(visu)
-    if orientations:
-        if len(orientations) == 1:
-            orientations = orientations * int(frame_count)
-        if len(orientations) >= int(frame_count):
-            unique_orientations = {
-                tuple(np.round(np.asarray(mat, dtype=float), 6).ravel().tolist())
-                for mat in orientations[: int(frame_count)]
-            }
-            if len(unique_orientations) > 1:
-                return True
-
-    transpositions = _bruker_frame_transpositions(visu.get("VisuCoreTransposition"), int(frame_count))
-    return bool(np.unique(transpositions).size > 1)
-
-
-def _apply_framewise_transposition(data: np.ndarray | None, transpositions: Sequence[int] | None) -> np.ndarray | None:
-    """Apply Bruker frame-wise image transposition metadata to a frame stack."""
-
-    if data is None or transpositions is None:
-        return data
-
-    arr = np.asarray(data)
-    if arr.ndim < 3:
-        return arr
-
-    trans = np.asarray(transpositions, dtype=int).ravel()
-    if trans.size != int(arr.shape[0]) or not np.any(trans > 0):
-        return arr
-
-    unique = np.unique(trans)
-    if unique.size == 1 and int(unique[0]) > 0:
-        return np.swapaxes(arr, -2, -1)
-    if arr.shape[-2] != arr.shape[-1]:
-        warnings.warn(
-            "Skipping mixed frame-wise transposition for non-square Bruker frames; "
-            "a single array shape cannot represent both transposed and non-transposed frames.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return arr
-
-    out = np.array(arr, copy=True)
-    for frame_idx, trans_val in enumerate(trans.tolist()):
-        if int(trans_val) > 0:
-            out[frame_idx] = np.swapaxes(out[frame_idx], -2, -1)
-    return out
 
 
 def _bruker_voxel_sizes(visu: dict) -> tuple[float, float, float]:
@@ -293,31 +160,46 @@ def _bruker_slice_spacing_from_positions(visu: dict) -> float | None:
 
 
 def bruker_affine_from_visu(visu: dict, *, frame_index: int | None = None) -> np.ndarray | list[np.ndarray]:
-    orientations = _bruker_orientation(visu)
-    positions = _bruker_position(visu)
+    """Map decoded pixel centres to RAS, once per output volume rather than slice."""
+    cached_grid = visu.get("_mrax_output_frame_indices")
+    grid = np.asarray(cached_grid, dtype=int) if cached_grid is not None else output_frame_grid(
+        visu, visu.get("_mrax_selected_package"))[0]
+    orientations = frame_parameter(visu, "VisuCoreOrientation", 9, default=np.eye(3).ravel())
+    positions = frame_parameter(visu, "VisuCorePosition", 3, default=np.zeros(3))
     voxel_sizes = _bruker_voxel_sizes(visu)
-
-    if not orientations:
-        orientations = [np.eye(3)]
-    if not positions:
-        positions = [np.zeros(3)]
-
-    frame_count = max(len(orientations), len(positions))
-    if len(orientations) == 1:
-        orientations = orientations * frame_count
-    if len(positions) == 1:
-        positions = positions * frame_count
-
-    def _build_affine(orientation: np.ndarray, position: np.ndarray) -> np.ndarray:
-        affine = np.eye(4, dtype=float)
-        affine[:3, :3] = (_LPS_TO_RAS @ orientation) @ np.diag(voxel_sizes)
-        affine[:3, 3] = _LPS_TO_RAS @ position
-        return affine
-
-    affines = [_build_affine(orientations[i], positions[i]) for i in range(frame_count)]
+    affines = []
+    for row in grid:
+        first = int(row[0])
+        direction = orientations[first].reshape(3, 3).T
+        if not np.isfinite(direction).all() or not np.allclose(direction.T @ direction, np.eye(3), atol=1e-3):
+            raise ValueError("Bruker image orientation must describe orthonormal physical axes")
+        affine = np.eye(4)
+        affine[:3, :3] = _LPS_TO_RAS @ direction @ np.diag(voxel_sizes)
+        affine[:3, 3] = _LPS_TO_RAS @ positions[first]
+        if int(visu.get("VisuCoreDim", 2)) == 2:
+            package = int(visu.get("_mrax_selected_package") or 0)
+            distances = _flatten_numeric(visu.get("VisuCoreSlicePacksSliceDist"))
+            thicknesses = _flatten_numeric(visu.get("VisuCoreFrameThickness"))
+            step_size = distances[min(package, len(distances) - 1)] if distances else 0
+            if step_size <= 0:
+                step_size = thicknesses[0] if thicknesses else 1.
+            affine[:3, 2] = _LPS_TO_RAS @ direction[:, 2] * step_size
+        if len(row) > 1 and _bruker_position(visu):
+            centres = positions[row]
+            step = centres[1] - centres[0]
+            if np.linalg.norm(step) <= 1e-8 or not np.allclose(
+                centres, centres[0] + np.arange(len(row))[:, None] * step, atol=1e-4,
+            ):
+                raise ValueError("Slice centres do not form a regular spatial stack")
+            if abs(float(step @ direction[:, 2])) <= 1e-8:
+                raise ValueError("Slice centres do not advance along their orientation normal")
+            if not np.allclose(orientations[row], orientations[first], atol=1e-5):
+                raise ValueError("A spatial slice stack must share one orientation")
+            affine[:3, 2] = _LPS_TO_RAS @ step
+        affines.append(affine)
     if frame_index is not None:
         if frame_index < 0 or frame_index >= len(affines):
-            raise IndexError("frame_index out of range for VisuCorePosition/Orientation")
+            raise IndexError("frame_index out of range for the decoded Bruker volumes")
         return affines[frame_index]
     return affines[0] if len(affines) == 1 else affines
 
@@ -327,39 +209,32 @@ def bruker_spatial_geometry(
     *,
     spatial_shape: Sequence[int] | None = None,
 ) -> SpatialGeometry:
-    """Return Bruker geometry expressed alongside native image and k-space axes."""
-
-    vendor_voxel_sizes = _bruker_voxel_sizes(visu)
-    first_axis, second_axis = _bruker_decoded_in_plane_axis_order(visu)
-    voxel_sizes = (
-        vendor_voxel_sizes[first_axis],
-        vendor_voxel_sizes[second_axis],
-        vendor_voxel_sizes[2],
-    )
-    orientations = _bruker_orientation(visu)
+    """Native labels/spacing with the matching NIfTI-boundary RAS affine."""
     spatial_ndim = len(tuple(spatial_shape or ())) or 3
-    orientation_metadata = _bruker_image_orientation_metadata(visu)
-    raw_labels = orientation_metadata.get("image_axis_anatomical_labels")
-    axis_labels = (
-        tuple(str(value) for value in raw_labels[:spatial_ndim])
-        if isinstance(raw_labels, list) and len(raw_labels) >= spatial_ndim
-        else None
-    )
-    if not orientations:
+    metadata = _bruker_image_orientation_metadata(visu)
+    labels = metadata.get("image_axis_anatomical_labels")
+    axis_labels = tuple(labels[:spatial_ndim]) if isinstance(labels, list) else None
+    if not _bruker_orientation(visu):
         return SpatialGeometry(
-            spatial_shape=spatial_shape,
-            voxel_sizes=voxel_sizes[:spatial_ndim],
-            axis_anatomical_labels=axis_labels,
-            source="bruker",
-            status="unknown",
+            spatial_shape=spatial_shape, voxel_sizes=_bruker_voxel_sizes(visu)[:spatial_ndim],
+            axis_anatomical_labels=axis_labels, source="bruker", status="unknown",
         )
     affines = bruker_affine_from_visu(visu)
+    first = np.asarray(affines[0] if isinstance(affines, list) else affines)
+    spacing = tuple(np.linalg.norm(first[:3, :3], axis=0)[:spatial_ndim])
+    # SpatialGeometry maps the array at MRax's NIfTI boundary, which reverses
+    # native spatial axes. Keep native pixel order and describe that boundary
+    # explicitly rather than attaching an XYZ affine to a ZYX export.
+    def nifti_affine(matrix):
+        matrix = np.asarray(matrix).copy()
+        order = tuple(reversed(range(spatial_ndim))) + tuple(range(spatial_ndim, 3))
+        matrix[:3, :3] = matrix[:3, :3][:, order]
+        return matrix
+
+    affines = [nifti_affine(matrix) for matrix in affines] if isinstance(affines, list) else nifti_affine(affines)
     return SpatialGeometry.from_affines(
-        affines,
-        spatial_shape=spatial_shape,
-        voxel_sizes=voxel_sizes[:spatial_ndim],
-        axis_anatomical_labels=axis_labels,
-        source="bruker",
+        affines, spatial_shape=spatial_shape, voxel_sizes=spacing,
+        axis_anatomical_labels=axis_labels, source="bruker",
         status="known" if _bruker_position(visu) else "partial",
     )
 
@@ -379,173 +254,93 @@ def _bruker_visu_frame_scaling_values(value: object, *, frame_count: int, defaul
     return [float(v) for v in values]
 
 
-def load_2dseq(pdata_dir: Path, *, image_type: str = "auto") -> Tuple[np.ndarray, dict, tuple[int, ...]]:
+def load_2dseq(
+    pdata_dir: Path, *, image_type: str = "auto", slice_package: int | None = None,
+) -> Tuple[np.ndarray, dict, tuple[int, ...]]:
+    """Decode X-fastest pixels and explicit frame groups into native image axes."""
+    pdata_dir = Path(pdata_dir)
     visu = parse_jcamp(pdata_dir / "visu_pars")
-    word = visu["VisuCoreWordType"]
-    dtype = np.dtype(_dtype_from_word(word))
-    if visu.get("VisuCoreByteOrder", "").lower() == "bigendian":
-        dtype = dtype.newbyteorder(">")
-    size = visu["VisuCoreSize"]
-    visu_dim = _as_positive_int(visu.get("VisuCoreDim"), None)
-    if isinstance(size, (int, float)):
-        size = [int(size)]
-    if isinstance(size, list):
-        if len(size) == 1 and visu_dim != 1:
-            size = [size[0], size[0]]
-        spatial = [int(s) for s in size[-3:] if int(s) > 0]
-    else:
-        spatial = []
-    if not spatial and isinstance(size, list):
-        spatial = [int(s) for s in size[:3] if int(s) > 0]
-    if len(spatial) == 1 and visu_dim != 1:
-        spatial = [spatial[0], spatial[0]]
-    spatial_shape = tuple(spatial[-3:]) if len(spatial) >= 2 else tuple(spatial)
-    raw_spatial_shape = spatial_shape
-    frame_count = int(visu["VisuCoreFrameCount"])
-    slopes = _bruker_visu_frame_scaling_values(
-        visu.get("VisuCoreDataSlope", [1.0]),
-        frame_count=frame_count,
-        default=1.0,
-    )
-    offsets = _bruker_visu_frame_scaling_values(
-        visu.get("VisuCoreDataOffs", [0.0]),
-        frame_count=frame_count,
-        default=0.0,
-    )
-
-    def _fg_order_contains(token: str) -> bool:
-        return _contains_token(visu.get("VisuFGOrderDesc"), token)
-
-    mixed_slice_geometry = _bruker_has_mixed_slice_geometry(visu, frame_count)
-    frames_are_slices = (
-        len(raw_spatial_shape) == 2
-        and frame_count > 1
-        and _fg_order_contains("FG_SLICE")
-        and not mixed_slice_geometry
-    )
-
+    dim = int(visu.get("VisuCoreDim", 2))
+    spatial_shape = tuple(int(size) for size in _flatten_numeric(visu["VisuCoreSize"]))
+    if len(spatial_shape) != dim or min(spatial_shape) < 1:
+        raise ValueError("VisuCoreSize must identify each positive frame dimension")
+    count = int(visu.get("VisuCoreFrameCount", 1))
+    dtype = np.dtype(_dtype_from_word(visu["VisuCoreWordType"]))
+    dtype = dtype.newbyteorder(">" if str(visu.get("VisuCoreByteOrder", "")).lower() == "bigendian" else "<")
     raw = np.fromfile(pdata_dir / "2dseq", dtype=dtype)
-    prod = int(np.prod(spatial_shape))
-    expected = frame_count * prod
+    expected = count * int(np.prod(spatial_shape))
     if raw.size != expected:
-        raise ValueError(
-            f"2dseq size mismatch: found {raw.size} values, expected {expected} "
-            f"from VisuCoreFrameCount={frame_count} and VisuCoreSize={raw_spatial_shape}."
-        )
-    raw = raw.reshape((frame_count, prod))
-    scaled = np.empty_like(raw, dtype=np.float32)
-    for i in range(frame_count):
-        scaled[i] = raw[i] * float(slopes[i]) + float(offsets[i])
+        raise ValueError(f"2dseq size mismatch: found {raw.size} values, expected {expected}")
+    raw = raw.reshape((count, -1))
+    slopes = frame_parameter(visu, "VisuCoreDataSlope", default=1)
+    offsets = frame_parameter(visu, "VisuCoreDataOffs", default=0)
+    scaled = raw.astype(np.float32) * slopes.astype(np.float32) + offsets.astype(np.float32)
+    transpositions = frame_parameter(visu, "VisuCoreTransposition", default=0)[:, 0]
+    if np.any(transpositions != transpositions.astype(int)) or np.any((transpositions < 0) | (transpositions > dim)):
+        raise ValueError("VisuCoreTransposition exceeds the frame dimensions")
+    frames = scaled.reshape((count,) + spatial_shape, order="F")
+    for code in np.unique(transpositions.astype(int)):
+        if not code:
+            continue
+        first, second = (0, dim - 1) if code == dim else (code - 1, code)
+        if spatial_shape[first] == spatial_shape[second]:
+            # Equal-sized frames already use the image coordinates of
+            # VisuCoreOrientation. Transposition is a storage-shape declaration,
+            # not an extra anatomical rotation.
+            continue
+        stored_shape = list(spatial_shape)
+        stored_shape[first], stored_shape[second] = stored_shape[second], stored_shape[first]
+        selected = np.flatnonzero(transpositions == code)
+        decoded = scaled[selected].reshape((len(selected),) + tuple(stored_shape), order="F")
+        frames[selected] = np.swapaxes(decoded, first + 1, second + 1)
 
-    frame_types = [entry.upper() for entry in _as_string_list(visu.get("VisuCoreFrameType"))]
-    requested_type = str(image_type or "auto").lower()
-    if requested_type not in ("auto", "complex", "real", "reel", "magnitude", "phase", "imaginary"):
+    requested = str(image_type or "auto").lower()
+    if requested not in {"auto", "complex", "real", "reel", "magnitude", "phase", "imaginary"}:
         raise ValueError("image_type must be one of: auto, complex, real, magnitude, phase, imaginary")
-
-    if requested_type == "imaginary":
-        scaled = (1j * scaled).astype(np.complex64)
-    elif requested_type == "complex" or (
-        requested_type == "auto"
-        and frame_count % 2 == 0
-        and (
-            "COMPLEX_IMAGE" in frame_types
-            or _fg_order_contains("FG_COMPLEX")
-            or ("REAL_IMAGE" in frame_types and "IMAGINARY_IMAGE" in frame_types)
-        )
-    ):
-        if _fg_order_contains("FG_COMPLEX") and frame_count % 2 == 0:
-            real_first = not (frame_types[:2] == ["IMAGINARY_IMAGE", "REAL_IMAGE"])
-            real = scaled[0::2] if real_first else scaled[1::2]
-            imag = scaled[1::2] if real_first else scaled[0::2]
+    types = [item.upper() for item in _as_string_list(visu.get("VisuCoreFrameType"))]
+    groups = frame_group_entries(visu)
+    complex_group = next((i for i, row in enumerate(groups) if "FG_COMPLEX" in str(row[1]).upper()), None)
+    combine = requested == "complex" or (requested == "auto" and
+        ("COMPLEX_IMAGE" in types or complex_group is not None or
+         ("REAL_IMAGE" in types and "IMAGINARY_IMAGE" in types)))
+    real_indices = np.arange(count)
+    if requested == "imaginary":
+        frames = (1j * frames).astype(np.complex64)
+    elif combine:
+        if count % 2:
+            raise ValueError("Complex images require matching real and imaginary frames")
+        if complex_group is not None:
+            counts = [int(row[0]) for row in groups]
+            if counts[complex_group] != 2 or int(np.prod(counts)) != count:
+                raise ValueError("The complex frame group must identify real and imaginary components")
+            grid = np.arange(count).reshape(tuple(reversed(counts)))
+            axis = len(counts) - 1 - complex_group
+            real_first = types[:2] != ["IMAGINARY_IMAGE", "REAL_IMAGE"]
+            real_indices = np.take(grid, 0 if real_first else 1, axis=axis).ravel()
+            imag_indices = np.take(grid, 1 if real_first else 0, axis=axis).ravel()
         else:
-            half = frame_count // 2
-            real = scaled[:half]
-            imag = scaled[half : 2 * half]
-        scaled = (real + 1j * imag).astype(np.complex64)
-        frame_count = int(scaled.shape[0])
+            real_indices, imag_indices = np.arange(count // 2), np.arange(count // 2, count)
+        frames = (frames[real_indices] + 1j * frames[imag_indices]).astype(np.complex64)
 
-    reshape_order = "F" if _fg_order_contains("FG_DIFFUSION") else "C"
-    transpositions = _bruker_frame_transpositions(visu.get("VisuCoreTransposition"), frame_count)
-    if len(raw_spatial_shape) == 1:
-        data = scaled.reshape((frame_count, int(raw_spatial_shape[0])), order=reshape_order)
-        spatial_shape = (int(raw_spatial_shape[0]),)
-    elif len(raw_spatial_shape) == 2:
-        frame_spatial_shape = raw_spatial_shape if frames_are_slices else (raw_spatial_shape[1], raw_spatial_shape[0])
-        x, y = frame_spatial_shape
-        if frames_are_slices and len(frame_spatial_shape) >= 2 and int(frame_spatial_shape[0]) != int(frame_spatial_shape[1]):
-            # Bruker 2D slice stacks, like 3D 2dseq volumes, store the read
-            # dimension fastest. C-order corrupts non-square slices by
-            # interleaving read/phase samples into the displayed image plane;
-            # keep square stacks on the historical path because C/F ordering is
-            # otherwise ambiguous and existing datasets depend on that layout.
-            reshape_order = "F"
-        frames = scaled.reshape((frame_count, x, y), order=reshape_order)
-        frames = _apply_framewise_transposition(frames, transpositions)
-        if frames_are_slices:
-            # Treat frames as z only when all frames share one geometry. If Bruker
-            # records another FG dimension, keep that dimension as the MRax frame axis.
-            slice_count = _visu_fg_count(visu, "FG_SLICE")
-            if (
-                slice_count is not None
-                and 0 < int(slice_count) < int(frame_count)
-                and int(frame_count) % int(slice_count) == 0
-            ):
-                grouped_frame_count = int(frame_count) // int(slice_count)
-                entries = _visu_fg_order_entries(visu)
-                counts = [int(round(float(entry[0]))) for entry in entries if entry]
-                slice_entry = next(
-                    (
-                        idx
-                        for idx, entry in enumerate(entries)
-                        if len(entry) >= 2 and "FG_SLICE" in str(entry[1]).upper()
-                    ),
-                    None,
-                )
-                if (
-                    slice_entry is not None
-                    and counts
-                    and int(np.prod(counts)) == int(frame_count)
-                ):
-                    group_shape = tuple(reversed(counts))
-                    grouped = frames.reshape(group_shape + tuple(frames.shape[1:]))
-                    slice_axis = len(counts) - 1 - int(slice_entry)
-                    grouped = np.moveaxis(grouped, slice_axis, len(counts) - 1)
-                    grouped = grouped.reshape(
-                        (grouped_frame_count, int(slice_count)) + tuple(frames.shape[1:])
-                    )
-                else:
-                    # Bruker frame-group descriptors list the fastest-varying
-                    # group first, so FG_SLICE occupies the inner axis.
-                    grouped = frames.reshape(
-                        (grouped_frame_count, int(slice_count)) + tuple(frames.shape[1:])
-                    )
-                data = np.moveaxis(grouped, 1, -1)
-                spatial_shape = tuple(int(v) for v in frames.shape[1:]) + (int(slice_count),)
-                frame_count = grouped_frame_count
-            else:
-                data = np.moveaxis(frames, 0, -1)[None, ...]
-                spatial_shape = tuple(int(v) for v in frames.shape[1:]) + (int(frame_count),)
-            if str(visu.get("VisuCoreDiskSliceOrder", "")).lower() == "disk_reverse_slice_order":
-                data = np.flip(data, axis=-1)
-        else:
-            data = frames
-            spatial_shape = tuple(int(v) for v in frames.shape[1:])
-    elif len(spatial_shape) == 3:
-        x, y, z = spatial_shape
-        # 3D Bruker 2dseq volumes are stored with the read dimension varying
-        # fastest. NumPy's C-order reshape would make z vary fastest and
-        # interleave partitions into a grid-like slice artifact.
-        data = scaled.reshape((frame_count, x, y, z), order="F")
-        if str(visu.get("VisuCoreDiskSliceOrder", "")).lower() == "disk_reverse_slice_order":
-            data = np.flip(data, axis=-1)
+    grid, has_slices = output_frame_grid(visu, slice_package)
+    inverse = np.full(count, -1, dtype=int)
+    inverse[real_indices] = np.arange(len(real_indices))
+    grid = grid[inverse[grid[:, 0]] >= 0]
+    if np.any(inverse[grid] < 0):
+        raise ValueError("Complex components do not share the same spatial slice layout")
+    data = frames[inverse[grid]]
+    if dim == 2 and has_slices and grid.shape[1] > 1:
+        data = np.moveaxis(data, 1, -1)
+        spatial_shape = spatial_shape + (grid.shape[1],)
     else:
-        x, y = spatial_shape
-        data = scaled.reshape((frame_count, x, y), order=reshape_order)
-
-    visu["_mrax_mixed_slice_geometry"] = bool(mixed_slice_geometry)
-    visu["_mrax_frame_transposition"] = transpositions.tolist()
-    visu["_mrax_fg_order_entries"] = _visu_fg_order_entries(visu)
-
+        data = data[:, 0]
+        if dim == 3 and str(visu.get("VisuCoreDiskSliceOrder", "")).lower() == "disk_reverse_slice_order":
+            data = np.flip(data, axis=-1)
+    visu["_mrax_output_frame_indices"] = grid.tolist()
+    visu["_mrax_selected_package"] = slice_package
+    visu["_mrax_mixed_slice_geometry"] = False
+    visu["_mrax_frame_transposition"] = transpositions.astype(int).tolist()
+    visu["_mrax_fg_order_entries"] = groups
     return data, visu, spatial_shape
 
 def _bruker_visu_scaling_metadata(visu: dict, *, frame_count: int) -> dict:

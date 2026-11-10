@@ -483,8 +483,12 @@ export function Viewer({
                   />
                 ))}
             </svg>
-            <span className="orientation top">{workspace.plane_dims[1]}</span>
-            <span className="orientation left">{workspace.plane_dims[0]}</span>
+            <span className="orientation top">
+              {workspace.plane_axis_labels?.[1] ?? workspace.plane_dims[1]}
+            </span>
+            <span className="orientation left">
+              {workspace.plane_axis_labels?.[0] ?? workspace.plane_dims[0]}
+            </span>
           </div>
         </div>
         <div className="image-readout">

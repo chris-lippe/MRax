@@ -76,8 +76,8 @@ def update_view(workspace, command, *, navigation=False):
         workspace.view_label = display_options(workspace).get("base_view", "Image")
         workspace.plot_x_axis_key = display_options(workspace).get("plot_axis", "auto")
     if command.plane is not None:
-        if command.plane != "axial" and not session.supports_image_planes():
-            raise ValueError("This experiment has no volume grid")
+        if command.plane != session.native_image_plane and not session.supports_image_planes():
+            raise ValueError("This experiment contains only its native image plane")
         session.set_image_plane(command.plane)
     if command.view is not None:
         if command.view not in VIEWS:

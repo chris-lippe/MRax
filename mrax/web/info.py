@@ -222,6 +222,9 @@ def workspace_info(record):
             else "px",
             "plane": session.active_image_plane,
             "plane_dims": list(session.image_plane_dims) if loaded else ["x", "y"],
+            "plane_axis_labels": list(
+                session.image_plane_dims if mode == "K-space" else session.image_plane_axis_labels
+            ) if loaded else ["x", "y"],
             "indices": dict(session.active_indices),
             "dimension_controls": controls,
             "dimensions": session.experiment_dims if loaded else {},

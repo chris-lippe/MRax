@@ -335,6 +335,7 @@ class WorkspaceInfo(BaseModel):
     spacing_unit: str = "mm"
     plane: str = "axial"
     plane_dims: list[str] = ["x", "y"]
+    plane_axis_labels: list[str] = []
     indices: dict[str, int] = {}
     dimension_controls: list[dict[str, Any]] = []
     dimensions: dict[str, int] = {}

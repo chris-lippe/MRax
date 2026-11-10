@@ -108,7 +108,7 @@ def save_nifti(
         arr = arr.astype(dtype)
     img = nib.Nifti1Image(arr, affine, dtype=dtype)
     img.set_qform(affine, code=1)
-    img.set_sform(None)
+    img.set_sform(affine, code=1)
     try:
         img.header.set_xyzt_units(xyz="mm")
     except Exception:
@@ -235,7 +235,7 @@ def export_nifti_series(
         else:
             img = nib.Nifti1Image(volume, affine_local)
         img.set_qform(affine_local, code=1)
-        img.set_sform(None)
+        img.set_sform(affine_local, code=1)
         try:
             img.header.set_xyzt_units(xyz="mm")
         except Exception:
@@ -336,7 +336,7 @@ def export_nifti_4d(
         img = nib.Nifti1Image(nifti_stack, affine_local)
 
     img.set_qform(affine_local, code=1)
-    img.set_sform(None)
+    img.set_sform(affine_local, code=1)
     try:
         img.header.set_xyzt_units(xyz="mm")
     except Exception:

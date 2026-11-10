@@ -128,6 +128,7 @@ test('file controls and the discard confirmation stay English', async ({ page })
   await expect(
     page.getByRole('heading', { name: 'Synthetic T2 phantom', exact: true }),
   ).toBeVisible();
+  await page.locator('.study-item[aria-current="true"]').hover();
   await close.click();
   await confirmation.getByRole('button', { name: 'Discard and close', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'No study open', exact: true })).toBeVisible();

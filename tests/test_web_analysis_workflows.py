@@ -757,15 +757,15 @@ def test_vendor_discovery_and_imports_use_existing_scientific_readers(browser, k
     if kind == "bruker":
         assert w["shape"] == [2, 2]
     elif kind == "pulseq":
-        # The initial display follows the importer's native anatomical plane.
-        assert w["frame_count"] == 3 and w["spacing"] == [3, 4] and w["shape"] == [3, 2]
+        # Rows run superior/inferior and columns anterior/posterior in this native sagittal grid.
+        assert w["frame_count"] == 3 and w["spacing"] == [4, 3] and w["shape"] == [2, 3]
     elif kind == "dicom":
-        assert w["frame_count"] == 2 and w["spacing"] == [3, 2] and w["plane_dims"] == ["y", "x"]
+        assert w["frame_count"] == 2 and w["spacing"] == [2, 3] and w["plane_dims"] == ["x", "y"]
     elif kind == "nifti":
         w = view(client, w, plane="axial")
-        assert w["spacing"] == [2, 3]
+        assert w["spacing"] == [3, 2]
         np.testing.assert_array_equal(
-            pixels(client, w), np.arange(24, dtype=np.float32).reshape(2, 3, 4)[:, :, 0]
+            pixels(client, w), np.arange(24, dtype=np.float32).reshape(2, 3, 4)[:, :, 0].T
         )
     else:
         np.testing.assert_array_equal(pixels(client, w), np.zeros((4, 6)))

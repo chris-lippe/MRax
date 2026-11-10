@@ -3227,6 +3227,14 @@
             "title": "Plane",
             "type": "string"
           },
+          "plane_axis_labels": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Plane Axis Labels",
+            "type": "array"
+          },
           "plane_dims": {
             "default": [
               "x",
