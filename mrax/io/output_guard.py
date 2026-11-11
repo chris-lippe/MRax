@@ -13,7 +13,7 @@ def require_empty_directory(path):
     path = Path(path)
     if path.exists() and (not path.is_dir() or any(path.iterdir())):
         raise ValueError(
-            "Choose a new or empty folder; MRax does not merge files into an existing folder"
+            "Choose a new or empty folder. MRax does not merge files into an existing folder"
         )
     return path
 
@@ -23,7 +23,7 @@ def require_new_file(path, *, overwrite=False, warn=False):
     if path.exists() or path.is_symlink():
         if not overwrite or not path.is_file():
             raise ValueError(
-                "This file already exists; choose a new name or explicitly confirm replacement"
+                "This file already exists. Choose a new name or explicitly confirm replacement"
             )
         if warn:
             warnings.warn(
@@ -40,7 +40,7 @@ def publish_new_file(staged, destination):
     try:
         os.link(staged, destination)
     except FileExistsError as exc:
-        raise ValueError("This file now exists; choose a new name or confirm replacement") from exc
+        raise ValueError("This file now exists. Choose a new name or confirm replacement") from exc
     except OSError:
         try:
             with staged.open("rb") as source, destination.open("xb") as output:
@@ -51,7 +51,7 @@ def publish_new_file(staged, destination):
                     raise
         except FileExistsError as exc:
             raise ValueError(
-                "This file now exists; choose a new name or confirm replacement"
+                "This file now exists. Choose a new name or confirm replacement"
             ) from exc
 
 
@@ -84,6 +84,6 @@ class SourceProtection:
             return
         if self.is_source(destination, tree=directory) and (directory or not image_export):
             raise ValueError(
-                "Imported sources are read-only. Choose a new output location; "
-                "only an explicitly confirmed image export may replace a source image file."
+                "Imported sources are read-only. Choose a new output location. "
+                "Only an explicitly confirmed image export may replace a source image file."
             )

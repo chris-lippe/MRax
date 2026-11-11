@@ -71,7 +71,7 @@ def register_file_operations(app, get_record, check_revision, add_record):
             guard_output(app, destination)
             if destination.exists():
                 raise ValueError(
-                    "Choose a new file name; existing metadata and text files are not replaced"
+                    "Choose a new file name. Existing metadata and text files are not replaced"
                 )
             write_file_atomic(
                 destination,

@@ -61,7 +61,7 @@ def apply_channel_scale_phase(
     Notes
     -----
     Use this for receiver normalization from any vendor. Bruker maps
-    ``RecoScaleChan`` and ``RecoPhaseChan`` to these arguments; other importers can map
+    ``RecoScaleChan`` and ``RecoPhaseChan`` to these arguments. Other importers can map
     equivalent receiver gains and phase references the same way.
     """
 

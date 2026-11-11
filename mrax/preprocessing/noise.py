@@ -1,7 +1,6 @@
 """Local MRI noise estimates in the original image intensity units.
 
-Signal estimates use robust scales of locally detrended patches, rather than
-adjacent differences pooled over the field of view. Noise-only magnitude ROIs
+Signal estimates use robust scales of locally detrended patches. Noise-only magnitude ROIs
 use the central chi second moment (2 * effective coils * sigma**2). Neither
 method removes magnitude bias or makes BM3D/BM4D spatially adaptive.
 """
@@ -63,9 +62,9 @@ def estimate_noise(data, *, mask=None, model="auto", coils=1):
     ``auto`` favours signal-bearing patches in nonnegative MRI images, avoiding
     low-noise background dominating a spatially variable estimate. ``gaussian``
     uses all selected patches, suitable for signed data or a uniform signal ROI.
-    ``background`` requires a noise-only magnitude ROI; ``coils`` is its effective
+    ``background`` requires a noise-only magnitude ROI. ``coils`` is its effective
     number of independent complex channels (one for a Rician distribution).
-    A selected ROI estimates noise only; it does not limit denoising.
+    A selected ROI estimates noise only. It does not limit denoising.
     """
     array = np.asarray(data)
     if array.ndim not in (2, 3):
@@ -130,7 +129,7 @@ def estimate_noise(data, *, mask=None, model="auto", coils=1):
             "patches": 1,
             "method": "magnitude_background",
             "warnings": [
-                "Assumes a signal-free ROI and independent effective coils; receiver count may differ."
+                "Assumes a signal-free ROI and independent effective coils. Receiver count may differ."
             ],
         }
     if np.ptp(array[selected]) == 0:
@@ -194,15 +193,15 @@ def estimate_noise(data, *, mask=None, model="auto", coils=1):
     limits = [float(value) for value in np.quantile(sigmas, [0.1, 0.9])]
     if limits[1] > 2 * max(limits[0], np.finfo(float).tiny):
         warnings.append(
-            "Noise estimates vary across patches; one sigma cannot represent spatially varying noise."
+            "Noise estimates vary across patches. One sigma cannot represent spatially varying noise."
         )
     if np.median(estimates[:, 2]) > 0.2:
         warnings.append(
-            "Correlated noise or image structure may bias this estimate; consider a uniform ROI."
+            "Correlated noise or image structure may bias this estimate. Consider a uniform ROI."
         )
     if len(estimates) < 4:
         warnings.append(
-            "Few local patches are available; check the estimate against a larger uniform ROI."
+            "Few local patches are available. Check the estimate against a larger uniform ROI."
         )
     return {
         "sigma": sigma,
@@ -215,5 +214,5 @@ def estimate_noise(data, *, mask=None, model="auto", coils=1):
 
 
 def estimate_noise_sigma(data, **kwargs):
-    """Return only the standard deviation; see :func:`estimate_noise` for diagnostics."""
+    """Return only the standard deviation. See :func:`estimate_noise` for diagnostics."""
     return estimate_noise(data, **kwargs)["sigma"]

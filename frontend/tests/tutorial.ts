@@ -12,7 +12,7 @@ export async function startWorkflowTutorial(page: Page, openSettings: typeof UI.
   return guide;
 }
 
-/** Exercise the real controls; no file save/export or measurement data. */
+/** Exercise the tutorial through the application controls. */
 export async function completeTutorialWorkflow(
   page: Page,
   selectDataFormat: typeof UI.selectDataFormat,

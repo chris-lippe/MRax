@@ -73,7 +73,7 @@ test.afterEach(async ({ request }) => {
     await request.delete('/api/workflows/' + entry.id + '?revision=' + entry.revision, { headers });
 });
 
-test('stages insert, edit, remove and discard; named reconstructions save and reopen as mrec without running', async ({
+test('stages insert, edit, remove and discard. Named reconstructions save and reopen as mrec without running', async ({
   page,
   request,
 }, info) => {
@@ -96,7 +96,7 @@ test('stages insert, edit, remove and discard; named reconstructions save and re
   );
   await window.getByRole('button', { name: 'Move K-space window down', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText(
-    'K-space corrections precede the solver; geometry and coil combination follow it.',
+    'K-space corrections precede the solver. Geometry and coil combination follow it.',
   );
   await expect(
     page.getByRole('button', { name: 'Apply reconstruction', exact: true }),

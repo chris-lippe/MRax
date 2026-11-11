@@ -1,4 +1,4 @@
-"""Independently generated quantitative fixture; never reads measurement data."""
+"""Synthetic quantitative phantom sessions."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def synthetic_tutorial_session() -> GuiSession:
     from mrax.reco import fftnc
 
     session = synthetic_t2_session()
-    session.rename_study("Tutorial — synthetic T2")
+    session.rename_study("Tutorial: synthetic T2")
     image = np.asarray(session.image_array, dtype=np.complex64)
     samples = np.asarray(fftnc(image[:, None], axes=(-3, -2, -1)))
     acquisition = AcquisitionData(samples, tuple(image.shape[1:]), ("x", "y", "z"))

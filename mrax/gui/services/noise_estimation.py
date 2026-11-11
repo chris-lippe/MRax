@@ -72,7 +72,7 @@ def summarize(reports, *, blocks, sampled=None, scope="block"):
             for key in ("real", "imaginary")
         }
     if result["range"][1] > 2 * max(result["range"][0], np.finfo(float).tiny):
-        warning = "Noise varies across regions or blocks; review the range before using one sigma."
+        warning = "Noise varies across regions or blocks. Review the range before using one sigma."
         if warning not in result["warnings"]:
             result["warnings"].append(warning)
     return result
@@ -121,8 +121,8 @@ def preview_noise(workspace, options):
         scope_dims = current_pipeline(work)["source"]["dims"]
     options = freeze_scope(work.session, copy.deepcopy(options), scope_dims)
     pipeline = current_pipeline(work)
-    # Match the input to the replacement step, rather than estimating from an
-    # already denoised output. Preceding steps run only on an explicit preview.
+    # Estimate from the replacement step's input.
+    # Preceding steps run only on an explicit preview.
     if pipeline and options.get("input", "image") == "image":
         requested = options.get("step_id")
         previous = next(

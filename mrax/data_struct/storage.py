@@ -645,7 +645,7 @@ def _reshape_kspace_for_slicing(
     kspace: np.ndarray,
     experiment: Experiment,
 ) -> tuple[np.ndarray, bool]:
-    """Align k-space array to experiment dims for slicing; return (array, has_coils)."""
+    """Align k-space array to experiment dims for slicing. Return (array, has_coils)."""
     non_spatial = experiment.non_spatial_dim_names
     spatial = experiment.spatial_dim_names
     spatial_shape = experiment.spatial_shape
@@ -721,7 +721,7 @@ def save_study_results(
     overwrite: bool = False,
     progress_callback=None,
 ):
-    """Save a portable .mrax bundle; use bundle=False for a manifest folder."""
+    """Save a portable .mrax bundle. Use bundle=False for a manifest folder."""
     if bundle:
         from mrax.io.bundle import write_bundle
 

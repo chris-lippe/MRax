@@ -209,7 +209,6 @@ __marimo__/
 /frontend/playwright-report/
 /mrax/web/static/
 /data/
-/.data/
 tmp/
 *.png
 *.mp4
@@ -222,8 +221,6 @@ tmp/
 *.nii.gz
 *.csv
 *.mrax
-
-# Measurement arrays and vendor exports belong in data/ or tmp/.
 *.npy
 *.npz
 *.hdf5

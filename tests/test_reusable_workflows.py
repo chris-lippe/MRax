@@ -160,7 +160,7 @@ def test_processing_replay_is_numerically_correct_repeatable_and_preserves_maps(
 def test_missing_bindings_and_late_failure_or_cancel_leave_every_target_untouched():
     workspace, image = phantom(second=True)
     document = processing_document({"method": "median", "input": "image", "axes": ["x", "y"]})
-    # A passes and is evaluated; a second target fails during filtering, after preflight.
+    # A passes and is evaluated. A second target fails during filtering, after preflight.
     broken = np.full_like(image, np.nan)
     workspace.session.add_experiment("Invalid", broken, dims={"frame": 4, "x": 9, "y": 11})
     workspace.session.select_experiment("A")

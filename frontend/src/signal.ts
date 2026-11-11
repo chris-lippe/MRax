@@ -106,7 +106,7 @@ export function signalData(
   const name =
     options.source === 'fit'
       ? (w.preview?.roi_name ?? w.selected_roi ?? 'ROI')
-      : (w.selected_roi ?? 'ROI');
+      : (curve.roi_name ?? w.selected_roi ?? 'Whole image');
   const result: SignalData = {
     x: curve.x,
     xLabel: signalAxisLabel(curve.x_name, curve.x_unit),
@@ -116,7 +116,9 @@ export function signalData(
     description:
       options.source === 'fit'
         ? `Saved fit input · ${name} · ${w.preview!.model}`
-        : `Current slice profile · ${name} · ${w.plane} · slice ${w.z + 1}`,
+        : w.non_imaging
+          ? `${name} · ${w.data_role ?? 'Signal'} · ${curve.dimension}`
+          : `Current slice profile · ${name} · ${w.plane} · slice ${w.z + 1}`,
   };
   if (options.source === 'fit' && w.preview) {
     result.fit = { observed: w.preview.observed, predicted: w.preview.predicted };
@@ -296,7 +298,7 @@ export function signalFitSummary(data: SignalData, domain: SignalDomain) {
   };
 }
 
-// Keep extrema and every gap; rendering dense curves must not invent continuity.
+// Keep extrema and every gap. Rendering dense curves must not invent continuity.
 export function signalPath(
   x: (number | null)[],
   y: (number | null)[],

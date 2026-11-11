@@ -8,7 +8,7 @@ from mrax.workflows import WorkflowDocument
 
 
 def block_document(workspace, kind, options):
-    """Snapshot a leaf workflow; no live library or external file reference is kept."""
+    """Snapshot a leaf workflow. No live library or external file reference is kept."""
     from .reusable_workflows import capture_workflow
 
     expected = "reconstruction" if kind == "reconstruct" else "fitting"

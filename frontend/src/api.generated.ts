@@ -1016,6 +1016,8 @@ export interface components {
             included?: boolean[] | null;
             /** Observed */
             observed: (number | null)[];
+            /** Roi Name */
+            roi_name?: string | null;
             /** X */
             x: (number | null)[];
             /** X Name */
@@ -1931,6 +1933,8 @@ export interface components {
              * @default 0
              */
             coil_count: number;
+            /** Data Role */
+            data_role?: string | null;
             /**
              * Diagnostics Count
              * @default 0
@@ -2064,6 +2068,11 @@ export interface components {
             models: {
                 [key: string]: string;
             }[];
+            /**
+             * Non Imaging
+             * @default false
+             */
+            non_imaging: boolean;
             pipeline: components["schemas"]["PipelineInfo"];
             /**
              * Plane

@@ -31,9 +31,9 @@ are collected in :doc:`references`.
 
 Downloads
 ---------
-- :download:`getting_started.ipynb <notebooks/getting_started.ipynb>` — synthetic pipeline
-- :download:`pulseq_import_demo.ipynb <notebooks/pulseq_import_demo.ipynb>` — Pulseq Cartesian import and fitting walkthrough
-- :download:`reconstruction_pipeline.ipynb <notebooks/reconstruction_pipeline.ipynb>` — raw k-space and reconstruction blocks
-- :download:`variational_reconstruction.ipynb <notebooks/variational_reconstruction.ipynb>` — variational MRI reconstruction (TV + NUFFT)
-- :download:`analysis_toolbox.ipynb <notebooks/analysis_toolbox.ipynb>` — post-fit analysis demo
-- :download:`preprocessing_denoiser_benchmarks.ipynb <notebooks/preprocessing_denoiser_benchmarks.ipynb>` — denoiser benchmarks (metrics + images)
+- :download:`getting_started.ipynb <notebooks/getting_started.ipynb>`: synthetic pipeline
+- :download:`pulseq_import_demo.ipynb <notebooks/pulseq_import_demo.ipynb>`: Pulseq Cartesian import and fitting walkthrough
+- :download:`reconstruction_pipeline.ipynb <notebooks/reconstruction_pipeline.ipynb>`: raw k-space and reconstruction blocks
+- :download:`variational_reconstruction.ipynb <notebooks/variational_reconstruction.ipynb>`: variational MRI reconstruction (TV + NUFFT)
+- :download:`analysis_toolbox.ipynb <notebooks/analysis_toolbox.ipynb>`: post-fit analysis demo
+- :download:`preprocessing_denoiser_benchmarks.ipynb <notebooks/preprocessing_denoiser_benchmarks.ipynb>`: denoiser benchmarks (metrics + images)

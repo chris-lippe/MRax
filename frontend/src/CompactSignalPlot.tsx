@@ -77,7 +77,7 @@ export function CompactSignalPlot({
       aria-label={label}
     >
       <desc>
-        {x.length} samples. {axisLabel}. {traces.map((t) => t.name).join('; ')}. Hollow points are
+        {x.length} samples. {axisLabel}. {traces.map((t) => t.name).join(', ')}. Hollow points are
         excluded from fitting. Use Data table for exact values or open Signal curves for detailed
         inspection.
       </desc>
@@ -148,8 +148,8 @@ export function CompactSignalPlot({
                     }}
                   >
                     <title>
-                      Sample {i + 1}: {axisLabel} {signalNumber(value)}; {trace.name}{' '}
-                      {signalNumber(trace.values[i])};{' '}
+                      Sample {i + 1}: {axisLabel} {signalNumber(value)}, {trace.name}{' '}
+                      {signalNumber(trace.values[i])}.{' '}
                       {included?.[i] === false ? 'Excluded frame' : 'Included frame'}
                     </title>
                   </circle>

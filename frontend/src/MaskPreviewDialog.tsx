@@ -77,7 +77,7 @@ export function MaskPreviewDialog({
           <Dialog.Title>Export mask preview</Dialog.Title>
           <Dialog.Description>
             {name} · Native voxels used for mask exports, including NIfTI. Colors are display
-            settings; 0 is background.
+            settings. Label 0 is background.
           </Dialog.Description>
           <Dialog.Close className="drawer-close" aria-label="Close mask preview">
             <WorkbenchIcon name="close" />

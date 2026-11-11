@@ -514,7 +514,7 @@ export function ProcessControls({
                       ? `${method.label.split(' ')[0]} denoises one ${axisCount === 2 ? '2D plane' : '3D block'} at a time. `
                       : 'Choose one to three data dimensions to filter jointly. '}
                     {scope === 'image'
-                      ? 'Only this image is changed; other frames and slices are retained.'
+                      ? 'Applies to the current image. Other frames and slices are retained.'
                       : independentAxes.length
                         ? `Processed sequentially: ${independentAxes.map((name) => `${axisInfo[name]?.label ?? name} (${axisInfo[name]?.size ?? w?.dimensions[name] ?? 1})`).join(', ')}.`
                         : 'The selected dimensions cover the entire input.'}

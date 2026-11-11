@@ -13,6 +13,6 @@ path = Path(__file__).resolve().parents[1] / "openapi.json"
 schema = json.dumps(create_app().openapi(), sort_keys=True, indent=2) + "\n"
 if args.check:
     if not path.is_file() or path.read_text() != schema:
-        parser.exit(1, "API schema changed; run npm run schema\n")
+        parser.exit(1, "API schema changed. Run npm run schema\n")
 else:
     path.write_text(schema)

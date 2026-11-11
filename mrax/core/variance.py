@@ -115,7 +115,7 @@ def _high_frequency_coefficients(
         & moved_valid[..., 1::2, 0::2]
         & moved_valid[..., 1::2, 1::2]
     )
-    # The diagonal Haar coefficient cancels constant and linear image structure;
+    # The diagonal Haar coefficient cancels constant and linear image structure.
     # division by two preserves the variance of independent pixel noise.
     coefficients = (top_left - top_right - bottom_left + bottom_right) / 2.0
     locally_constant = (
@@ -206,17 +206,15 @@ def estimate_data_variance(
     """Estimate robust per-frame observation variances before model fitting.
 
     ``method="auto"`` first looks for a low-signal background region. Nonnegative
-    magnitude data uses the Rayleigh-background median-square estimator; signed
+    magnitude data uses the Rayleigh-background median-square estimator. Signed
     real or complex data uses a median-absolute-deviation estimate. Ambiguous
     background support selects ``"wavelet_mad"``, which
     applies a normalized diagonal Haar high-pass transform over the two largest
-    spatial axes. Supplying ``mask`` explicitly defines the noise-sampling region
-    rather than a fitting or tissue mask.
+    spatial axes. ``mask`` defines the noise-sampling region.
 
     Estimates with limited support are shrunk toward the median frame variance.
-    Magnitude MRI is treated with the usual high-SNR Gaussian approximation;
-    low-SNR Rician or noncentral-chi data require an acquisition-specific noise
-    model instead of automatic Gaussian variance weighting.
+    Magnitude MRI is treated with the usual high-SNR Gaussian approximation.
+    Low-SNR Rician or noncentral-chi data require an acquisition-specific noise model.
     """
     method_name = method.lower()
     if method_name not in {"auto", "background", "wavelet_mad"}:
@@ -269,18 +267,18 @@ def estimate_data_variance(
                         raw_variance[frame_index] = estimate
         elif method_name == "background":
             raise ValueError(
-                "background variance estimation could not identify sufficient low-signal support; "
-                "provide an explicit noise mask or use method='auto'"
+                "background variance estimation could not identify sufficient low-signal support. "
+                "Provide an explicit noise mask or use method='auto'"
             )
 
     if not np.any(np.isfinite(raw_variance) & (raw_variance > 0)):
         if method_name == "background":
             raise ValueError(
-                "background variance estimation found no finite positive frame estimates; "
-                "check the noise mask or use method='auto'"
+                "background variance estimation found no finite positive frame estimates. "
+                "Check the noise mask or use method='auto'"
             )
         if method_name == "auto":
-            estimator_warnings.append("no clear background found; wavelet MAD fallback used")
+            estimator_warnings.append("no clear background found. Wavelet MAD fallback used")
         method_used = "wavelet_mad"
         raw_variance.fill(np.nan)
         sample_count.fill(0)
@@ -303,7 +301,7 @@ def estimate_data_variance(
     estimate_warnings = estimator_warnings
     if not np.all(usable):
         raw_variance[~usable] = pooled
-        estimate_warnings.append("insufficient frame support; pooled variance substituted")
+        estimate_warnings.append("insufficient frame support. Pooled variance substituted")
 
     strength = float(shrinkage)
     if strength > 0:

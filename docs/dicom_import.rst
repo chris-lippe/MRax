@@ -33,15 +33,15 @@ The importer applies DICOM rescale slope/intercept and sorts spatial slices from
 orientation and position metadata. Standard or enhanced functional groups provide echo,
 repetition and inversion times, flip angles, diffusion b-values and directions when
 present. The shared import-definition layer uses varying observables and frame labels to
-infer quantitative experiment types and non-spatial dimensions; otherwise it preserves
+infer quantitative experiment types and non-spatial dimensions. Otherwise it preserves
 a generic ``frame`` axis.
 
 MRax arrays keep fixed ``x/y/z`` spatial semantics. DICOM patient orientation, origin,
 and voxel spacing are stored separately as :class:`mrax.data_struct.SpatialGeometry`.
 This geometry controls anatomical plane labels, display aspect ratio and NIfTI affine
 conversion. Reconstruction and quantitative fitting retain native array order.
-When valid orientation metadata is unavailable, MRax retains the native array order and
-uses explicit fallback geometry rather than guessing anatomy from image dimensions.
+When orientation metadata is unavailable, MRax retains native array order and
+uses explicit fallback geometry.
 
 Missing acquisition metadata
 ----------------------------
@@ -50,7 +50,7 @@ The Bruker adapter is selected automatically when the DICOM manufacturer identif
 Bruker export. It supplements standards-based fields with sequence/frame hints used for
 CEST, WASABI, FAIR, and related experiment inference. Only information actually present
 in the DICOM objects can be imported. Acquisition fields that remain solely in the
-vendor source format are reported as unavailable rather than synthesized.
+vendor source format are reported as unavailable.
 
 For custom metadata adapters, see the contributor section
 :doc:`importer_development` and the :ref:`api-importers`.

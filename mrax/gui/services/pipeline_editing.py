@@ -13,7 +13,7 @@ def apply_pipeline_draft(workspace, options, progress):
     pipeline = ensure_pipeline(candidate)
     generation = options.get("base_generation")
     if type(generation) is not int or generation != pipeline["generation"]:
-        raise ValueError("The pipeline changed while this draft was being edited; reload its steps")
+        raise ValueError("The pipeline changed while this draft was being edited. Reload its steps")
     rows = options.get("steps")
     if not isinstance(rows, list) or len(rows) > 64:
         raise ValueError("A pipeline supports up to 64 processing steps")

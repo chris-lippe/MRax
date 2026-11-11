@@ -72,8 +72,8 @@ class SpatialGeometry:
     """Physical geometry kept separate from an image's native array ordering.
 
     MRax image and k-space arrays remain in their acquisition/import order. ``affine``
-    maps the XYZ array produced by the NIfTI I/O boundary into RAS world coordinates;
-    raw k-space axes use their encoding geometry. ``status='unknown'`` records
+    maps the XYZ array produced by the NIfTI I/O boundary into RAS world coordinates.
+    Raw k-space axes use their encoding geometry. ``status='unknown'`` records
     unresolved orientation separately from an identity affine.
     """
 

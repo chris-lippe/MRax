@@ -1,4 +1,4 @@
-"""Independent synthetic MRI noise fields; no imported measurement fixtures."""
+"""Independent synthetic MRI noise fields."""
 
 import numpy as np
 import pytest

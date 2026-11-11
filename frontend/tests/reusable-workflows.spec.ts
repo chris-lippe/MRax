@@ -25,7 +25,7 @@ async function saveWorkflow(page: Page, info: TestInfo, filename: string) {
 }
 
 async function drawRoi(page: Page) {
-  await selectWorkflow(page, 'Segment', 'Create and edit ROIs');
+  await selectWorkflow(page, 'Segment');
   await page.getByRole('button', { name: 'Draw rectangle', exact: true }).click();
   const surface = page.getByTestId('roi-surface');
   await surface.scrollIntoViewIfNeeded();

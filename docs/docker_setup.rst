@@ -72,8 +72,8 @@ VS Code Dev Container
 
 Choose a dev container configuration, both using ``docker/Dockerfile.dev``:
 
-- **CPU (default):** ``.devcontainer/devcontainer.json``; standard CPU JAX.
-- **NVIDIA GPU:** ``.devcontainer/gpu/devcontainer.json``; GPU passthrough and
+- **CPU (default):** ``.devcontainer/devcontainer.json``. Standard CPU JAX.
+- **NVIDIA GPU:** ``.devcontainer/gpu/devcontainer.json``. GPU passthrough and
   CUDA 12-enabled JAX.
 
 With Docker running, use ``Dev Containers: Reopen in Container`` and select a
@@ -103,7 +103,7 @@ The host needs an NVIDIA GPU and compatible driver. Configure the
 <https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html>`_
 on Linux or `Docker Desktop WSL 2 GPU support
 <https://docs.docker.com/desktop/features/gpu/>`_ on Windows. JAX's pip extra
-supplies CUDA libraries; see `JAX requirements
+supplies CUDA libraries. See `JAX requirements
 <https://docs.jax.dev/en/latest/installation.html#nvidia-gpu>`_.
 
 After switching configurations, run ``Dev Containers: Rebuild Container``. Verify

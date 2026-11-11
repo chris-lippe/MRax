@@ -499,8 +499,8 @@ def import_bruker_study(
             study_globals["field_strength_mhz"] = Quantity(frequency, "MHz")
         else:
             warnings.warn(
-                "No consistent Bruker imaging frequency was detected. Set field_strength_mhz explicitly; "
-                "models that require it will raise errors when fitted.",
+                "No consistent Bruker imaging frequency was detected. Set field_strength_mhz explicitly. "
+                "Models that require it will raise errors when fitted.",
                 RuntimeWarning, stacklevel=2,
             )
     study = Study(

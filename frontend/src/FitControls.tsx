@@ -263,7 +263,7 @@ export function FitControls({
         title="Map fitting region"
         icon="rois"
         className="fit-region-section"
-        help="Fits use the current experiment state. Selected ROIs are combined; display visibility does not affect fitting."
+        help="Fitting uses the current experiment state and combines the selected ROIs. ROI visibility is a separate display setting."
       >
         <fieldset className="fit-region" disabled={!w?.loaded || busy}>
           <legend>Map fitting region</legend>

@@ -78,7 +78,7 @@ settings, you can combine them into a single frame-major experiment for a joint 
    joint_exp, joint_ds = joint.experiment, joint.dataset
    fields, losses = run_fit(joint_exp, model, joint_ds, auto_mask_nan_observables=True)
 
-Missing observables are filled with ``NaN`` by default; ``auto_mask_nan_observables=True``
+Missing observables are filled with ``NaN`` by default. ``auto_mask_nan_observables=True``
 restricts the loss to frames with valid observables.
 By default the join helper adds a ``joint_source`` observable (integer index per frame) so
 side models can condition on scan/timepoint membership.
@@ -157,7 +157,7 @@ default and returns a result entry marked ``skipped``. Insert the missing observ
 and re-run to fit the skipped experiments.
 
 Shared ``run_fit`` options belong in ``run_fit_kwargs``. Use ``run_fit_overrides`` for
-per-experiment settings; dict-valued ``run_fit`` options such as
+per-experiment settings. Dict-valued ``run_fit`` options such as
 ``regularizer_weights`` are passed through unchanged.
 
 To re-fit only the skipped experiments, collect them from the plan/results:

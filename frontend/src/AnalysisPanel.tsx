@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AnalysisProps, DrawingProps } from './analysisTypes';
 import { RoiControls } from './RoiControls';
 import { FitControls } from './FitControls';
@@ -12,6 +12,7 @@ import { TimecourseControls } from './TimecourseControls';
 import type { TimecourseResult } from './api';
 import { workflows, type Workflow, type WorkflowTask } from './WorkflowNav';
 import { WorkbenchIcon } from './WorkbenchIcon';
+import { InspectorGroup } from './InspectorSection';
 
 export function AnalysisPanel(
   props: AnalysisProps &
@@ -22,11 +23,13 @@ export function AnalysisPanel(
       signalSourceControls: ReactNode;
       signalDisplayControls: ReactNode;
       signalComparison: boolean;
+      signalPrimary: boolean;
       jobStudyLabel?: string;
       onTimecourseResult: (result: TimecourseResult | null) => void;
     },
 ) {
   const body = useRef<HTMLDivElement>(null);
+  const [analysisProcessingOpen, setAnalysisProcessingOpen] = useState(false);
   useEffect(() => {
     body.current?.scrollTo({ top: 0 });
   }, [props.section, props.task]);
@@ -34,14 +37,16 @@ export function AnalysisPanel(
   const blocked = { ...props, busy: props.busy || Boolean(running) };
   const section = props.section;
   const task = props.task;
+  const signalTools =
+    task === 'signal' || (section === 'image' && task === 'display' && props.signalPrimary);
   const processingSection =
     task === 'denoising'
       ? 'denoise'
-      : task === 'series-processing'
+      : task === 'timecourse'
         ? 'series'
         : task === 'normalization'
           ? 'normalize'
-          : task === 'derived-maps'
+          : task === 'statistics'
             ? 'analyze'
             : null;
   const workflow = workflows.find((item) => item.id === section)!;
@@ -54,8 +59,12 @@ export function AnalysisPanel(
     >
       <header className="inspector-heading">
         <h2 id="workflow-task-heading">
-          <WorkbenchIcon name={workflow.tasks.find((item) => item.id === task)!.icon} />
-          {workflow.tasks.find((item) => item.id === task)!.label}
+          <WorkbenchIcon
+            name={
+              signalTools ? 'timecourse' : workflow.tasks.find((item) => item.id === task)!.icon
+            }
+          />
+          {signalTools ? 'Signal display' : workflow.tasks.find((item) => item.id === task)!.label}
         </h2>
         {props.workspace?.loaded && (
           <span className="inspector-context">{props.workspace.experiment}</span>
@@ -80,35 +89,52 @@ export function AnalysisPanel(
         aria-labelledby={`workflow-${section} workflow-task-heading`}
         tabIndex={0}
       >
-        <div hidden={section !== 'image' || task === 'signal'}>{props.displayControls}</div>
-        <div hidden={task !== 'signal'}>{props.signalSourceControls}</div>
+        <div hidden={section !== 'image' || signalTools}>{props.displayControls}</div>
+        <div hidden={!signalTools}>{props.signalSourceControls}</div>
         <div hidden={task !== 'timecourse' && !props.signalComparison}>
           <TimecourseControls
             workspace={props.workspace}
             busy={props.busy}
             onResult={props.onTimecourseResult}
-            viewer={task === 'signal'}
+            viewer={signalTools}
           />
         </div>
-        <div hidden={task !== 'signal'}>{props.signalDisplayControls}</div>
+        <div hidden={!signalTools}>{props.signalDisplayControls}</div>
         <div hidden={task !== 'statistics'}>
           <RoiStatistics workspace={props.workspace} active={task === 'statistics'} />
         </div>
         <div hidden={!processingSection}>
-          <ProcessControls
-            {...blocked}
-            section={processingSection ?? 'denoise'}
-            active={Boolean(processingSection)}
-          />
+          {section === 'analyze' ? (
+            <InspectorGroup
+              title={task === 'timecourse' ? 'Time-series corrections' : 'Derived maps'}
+              icon={task === 'timecourse' ? 'series' : 'maps'}
+              revealKey={props.editingStep?.id}
+              onOpenChange={setAnalysisProcessingOpen}
+            >
+              <ProcessControls
+                {...blocked}
+                section={processingSection ?? 'series'}
+                active={analysisProcessingOpen && Boolean(processingSection)}
+              />
+            </InspectorGroup>
+          ) : (
+            <ProcessControls
+              {...blocked}
+              section={processingSection ?? 'denoise'}
+              active={Boolean(processingSection)}
+            />
+          )}
         </div>
-        <div hidden={!['roi-edit', 'label-edit', 'roi-volume', 'roi-combine'].includes(task)}>
-          <RoiControls {...blocked} task={task} />
+        <div className="control-layout" hidden={section !== 'rois'}>
+          <div className="control-wide">
+            <RoiControls {...blocked} />
+          </div>
+          <InspectorGroup title="Import masks and ROI sets" icon="import">
+            <MaskImportControls {...blocked} />
+          </InspectorGroup>
         </div>
         <div hidden={task !== 'reconstruction'}>
           <ReconstructionControls {...blocked} active={task === 'reconstruction'} />
-        </div>
-        <div hidden={task !== 'mask-import'}>
-          <MaskImportControls {...blocked} />
         </div>
         <div hidden={section !== 'fit'}>
           <FitControls {...blocked} />

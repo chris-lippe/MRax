@@ -41,7 +41,7 @@ def scene_settings(workspace, experiment=None):
 
 
 def experiment_catalog(workspace, names=None):
-    """Metadata from each experiment's own state; never change the active experiment."""
+    """Metadata from each experiment's own state. Never change the active experiment."""
     from .reconstruction import reconstruction_label
 
     session = clone_workspace(workspace).session
@@ -127,20 +127,20 @@ def require_common_grid(
 ):
     """Require matching native coordinates and any available physical geometry."""
     if tuple(source_dims) != tuple(target_dims) or tuple(source_shape) != tuple(target_shape):
-        raise ValueError("Native grids differ; register the experiments before combining them")
+        raise ValueError("Native grids differ. Register the experiments before combining them")
     a, b = source_geometry, target_geometry
     sa = a.voxel_sizes if a is not None else None
     sb = b.voxel_sizes if b is not None else None
     if sa and sb:
         shared = min(len(sa), len(sb), len(source_dims))
         if not np.allclose(sa[:shared], sb[:shared], atol=1e-6, rtol=1e-6):
-            raise ValueError("Image grids differ in voxel spacing; register the experiments first")
+            raise ValueError("Image grids differ in voxel spacing. Register the experiments first")
     aa = a.affine_for_frame(source_frame) if a is not None else None
     bb = b.affine_for_frame(target_frame) if b is not None else None
     if (aa is None) != (bb is None) or (
         aa is not None and not np.allclose(aa, bb, atol=1e-6, rtol=1e-6)
     ):
-        raise ValueError("Image grids differ in physical geometry; register the experiments first")
+        raise ValueError("Image grids differ in physical geometry. Register the experiments first")
 
 
 def render_overlay(workspace, layer):
@@ -205,14 +205,14 @@ def render_overlay(workspace, layer):
             corrected = np.asarray(result["corrected"])
         elif result.get("pipeline_owned"):
             raise ValueError(
-                "This earlier registration is available at its recorded frame; rerun it for the current sequence"
+                "This earlier registration is available at its recorded frame. Rerun it for the current sequence"
             )
         else:
             source = clone_workspace(workspace).session
             source.select_experiment(meta["moving_experiment"])
             if not 0 <= frame < source.frame_count:
                 raise ValueError(
-                    "The registered sequence has no matching frame; select an overlay frame"
+                    "The registered sequence has no matching frame. Select an overlay frame"
                 )
             source.set_image_plane(meta.get("plane", "axial"))
             for dim, value in meta.get("indices", {}).items():
@@ -244,7 +244,7 @@ def render_overlay(workspace, layer):
 
     frame = target.active_frame if layer.get("frame") is None else layer["frame"]
     if layer["kind"] != "map" and not 0 <= frame < source.frame_count:
-        raise ValueError("The overlay has no matching frame; select an explicit overlay frame")
+        raise ValueError("The overlay has no matching frame. Select an explicit overlay frame")
     require_common_grid(
         source.spatial_dim_names,
         source.spatial_shape,

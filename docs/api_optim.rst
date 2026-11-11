@@ -13,7 +13,7 @@ Proximal solvers
 
 FISTA follows the accelerated proximal-gradient recurrence
 [BeckTeboulle2009]_. Full backtracking updates the trial step, momentum and
-extrapolated gradient point together [Scheinberg2014]_; ``"classic"`` selects
+extrapolated gradient point together [Scheinberg2014]_. ``"classic"`` selects
 the original nonincreasing-step rule. The optional gradient restart follows
 [ODonoghue2015]_. A restart retains the last certified step scale.
 
@@ -24,13 +24,13 @@ boxes, while extrapolation follows the FISTA recurrence.
 
 Split Bregman follows the augmented-primal, split-shrinkage and multiplier
 recurrence [Goldstein2009]_. It initializes splits from the current field
-differences and multipliers at zero. TV weights enter shrinkage;
+differences and multipliers at zero. TV weights enter shrinkage.
 ``bregman_penalty`` fixes the augmented constraint penalty.
 
 The primal solve uses projected Armijo steps: matrix-free Newton/CG for at most
 32 real unknowns and an eight-pair L-BFGS inverse for larger systems.
 Positive-curvature secants use gradients with matching splits and multipliers.
-A two-level local/coarse preconditioner conditions CG; curvature shifts damp
+A two-level local/coarse preconditioner conditions CG. Curvature shifts damp
 Newton directions, with acceptance evaluated on the augmented objective.
 One bounded inverse/line-search restart handles a failed large-system primal
 step. Shrinkage and multiplier updates follow a certified primal step.
@@ -48,7 +48,7 @@ Controls
 
 Both solvers default to ``proximal_tolerance=1e-8`` and
 ``proximal_max_steps=2048``. Named, injected and factory-based fits share these
-defaults; injected transformations retain their explicit constructor settings.
+defaults. Injected transformations retain their explicit constructor settings.
 
 .. list-table::
    :header-rows: 1
@@ -61,12 +61,12 @@ defaults; injected transformations retain their explicit constructor settings.
    * - ``fista_restart``
      - ``"gradient"`` or ``"none"`` momentum restart.
    * - ``proximal_tolerance`` / ``proximal_max_steps``
-     - Native-TV gap target and inner work limit; Newton/CG residual target
+     - Native-TV gap target and inner work limit. Newton/CG residual target
        and total CG work limit, respectively.
    * - ``bregman_penalty``
      - Fixed augmented penalty, separate from TV strength.
    * - ``bregman_inner_steps``
-     - Primal iterations before shrinkage and multiplier updates; default one.
+     - Primal iterations before shrinkage and multiplier updates. Default one.
    * - ``proximal_max_step_size``
      - Upper limit for the trial step.
    * - ``grad_clip_norm``
@@ -76,11 +76,11 @@ Newton/CG uses a relative residual target based on
 ``sqrt(proximal_tolerance)`` and floating-point resolution. Larger subproblems
 use inexact forcing that tightens toward stationarity. The residual uses the
 positive-preconditioner energy norm. L-BFGS work follows
-``bregman_inner_steps``; its split shrinkage is analytic.
+``bregman_inner_steps``. Its split shrinkage is analytic.
 
 Native field TV uses affine physical coordinates. Fixed block scales transform
 coordinates, bounds and TV operators together. Use ``parameter_space="auto"``
-or ``"physical"`` for this fitting path; smooth FISTA and explicit
+or ``"physical"`` for this fitting path. Smooth FISTA and explicit
 raw-coordinate proximal penalties also support raw coordinates.
 
 Optimizer-level ``regularizer_weight`` supplies gradient decay for ordinary
@@ -102,20 +102,20 @@ injected and factory-provided transformations::
             **options)
 
 For a direct Optax loop, supply the smooth ``value_fn`` to ``update`` and use
-``optax.apply_updates``. FISTA reevaluates gradients at extrapolated points;
-split Bregman solves its augmented primal objective. Configure gradient clipping,
+``optax.apply_updates``. FISTA reevaluates gradients at extrapolated points.
+Split Bregman solves its augmented primal objective. Configure gradient clipping,
 bounds and proximal terms on the solver transformation.
 
 Fixed-step classic FISTA also supports caller-supplied extrapolated gradients:
 set ``gradient_at_extrapolated=True`` and evaluate at
 :func:`mrax.opt.optimizers.fista_extrapolated_params`. Generic ``optax.chain``
-composition belongs to direct loops with explicit objective and proximal terms;
-model-fitting field-TV binding uses the transformation directly.
+composition belongs to direct loops with explicit objective and proximal terms.
+Model-fitting field-TV binding uses the transformation directly.
 
 State and termination
 ~~~~~~~~~~~~~~~~~~~~~
 
-Zero schedule entries pause optimizer, split and multiplier updates; positive
+Zero schedule entries pause optimizer, split and multiplier updates. Positive
 entries resume them. Convergence uses the configured stationarity checks.
 Split-Bregman state also records primal/dual residuals, inner work,
 preconditioner rebuilds and quasi-Newton history diagnostics.

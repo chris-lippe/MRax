@@ -69,8 +69,8 @@ or import ParaVision scans with :func:`mrax.io.bruker_import.import_bruker_study
 Importers map metadata into a shared schema (see :mod:`mrax.io.import_definitions`).
 
 Dimension names follow a consistent convention: ``x/y/z`` are spatial axes and ``t``
-is temporal. Anatomical orientation and voxel spacing are separate geometry metadata;
-reconstruction and fitting retain native array order. Other non-spatial axes are
+is temporal. Anatomical orientation and voxel spacing are separate geometry metadata.
+Reconstruction and fitting retain native array order. Other non-spatial axes are
 inferred from observables when the metadata is unambiguous. Otherwise, MRax keeps a
 single ``frame`` axis.
 

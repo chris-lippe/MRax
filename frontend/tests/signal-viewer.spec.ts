@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 
 import { readFile, mkdir } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 
 import type { Workspace } from '../src/api';
 
@@ -9,6 +10,7 @@ import {
   loadExample,
   openExport,
   openRoiCoordinates,
+  openWorkspace,
   selectTheme,
   selectWorkflow,
 } from './ui';
@@ -29,7 +31,10 @@ test.afterEach(async ({ request }) => {
 async function study(page: Page) {
   await page.goto('/');
   await loadExample(page);
-  await selectWorkflow(page, 'Segment', 'Create and edit ROIs');
+  await expect(
+    page.getByRole('img', { name: 'Whole image mean signal', exact: true }),
+  ).toBeVisible();
+  await selectWorkflow(page, 'Segment');
   await openRoiCoordinates(page);
   for (const [name, col] of [
     ['Anterior', '5'],
@@ -148,7 +153,7 @@ test('scientific viewer inspects samples, customizes axes, summarizes ranges and
   expect(rendered.height).toBeGreaterThanOrEqual(420);
   expect(rendered.ink).toBeGreaterThan(1000);
   await page.getByRole('button', { name: 'Close export', exact: true }).click();
-  await selectWorkflow(page, 'Segment', 'Create and edit ROIs');
+  await selectWorkflow(page, 'Segment');
   await selectWorkflow(page, 'View', 'Signal curves');
   await expect(page.getByLabel('Signal figure title', { exact: true })).toHaveValue(
     'Independent T2 signal',
@@ -157,5 +162,57 @@ test('scientific viewer inspects samples, customizes axes, summarizes ranges and
   await selectTheme(page, 'dark');
   await page.getByLabel('Signal figure theme', { exact: true }).selectOption('auto');
   await page.screenshot({ path: info.outputPath('scientific-signal-dark.png') });
+  const spectrumFile = info.outputPath('spectrum.mrax');
+  execFileSync(
+    'python',
+    [
+      '-c',
+      `
+import sys
+import numpy as np
+from mrax.gui import GuiSession
+from mrax.data_struct import Quantity
+session = GuiSession()
+session.create_empty_study('Synthetic spectroscopy', field_strength_mhz=100)
+frequency = np.linspace(-200, 200, 65)
+values = 2 + 10 * np.exp(-((frequency - 35) / 25) ** 2)
+session.add_experiment('Spectrum', np.stack([values, 2 * values])[..., None],
+    dims={'frame': 2, 'x': 65, 'y': 1}, exp_type='spectroscopy', non_imaging=True,
+    data_role='spectrum', observables={'frequency': Quantity(frequency, 'Hz')})
+session.save_imported_study(sys.argv[1])
+`,
+      spectrumFile,
+    ],
+    { cwd: '..' },
+  );
+  await selectWorkflow(page, 'View', 'Image display');
+  await openWorkspace(page, spectrumFile);
+  await expect(page.getByRole('region', { name: 'Image viewer', exact: true })).not.toBeVisible();
+  await expect(plot).toBeVisible();
+  await expect(plot).toContainText('frequency (Hz)');
+  await expect(page.getByRole('heading', { name: 'Signal display', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Signal profile axis', { exact: true })).toBeVisible();
+  const spectrum = (await (await request.get('/api/workspaces')).json()).find(
+    (w: Workspace) => w.experiment === 'Spectrum',
+  ) as Workspace;
+  expect(spectrum.non_imaging).toBe(true);
+  expect(spectrum.timecourse?.x).toHaveLength(65);
+  const first = spectrum.timecourse!.observed.map((v) => 2 * v!);
+  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await expect(plot).toBeVisible();
+  const frame = page.locator('.signal-navigation input[type="range"]');
+  await expect(frame).toHaveCount(1);
+  await frame.fill('1');
+  await expect
+    .poll(async () => (await (await request.get('/api/workspaces/' + spectrum.id)).json()).frame)
+    .toBe(1);
+  const updated = (await (await request.get('/api/workspaces/' + spectrum.id)).json()) as Workspace;
+  updated.timecourse!.observed.forEach((value, i) => expect(value).toBeCloseTo(first[i], 5));
+  await plot.focus();
+  await plot.press('End');
+  await expect(
+    page.getByRole('status', { name: 'Signal sample values', exact: true }),
+  ).toContainText('Sample 65 / 65');
+  await page.screenshot({ path: info.outputPath('spectroscopy-signal.png') });
   expect(errors).toEqual([]);
 });

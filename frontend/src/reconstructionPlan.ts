@@ -57,9 +57,9 @@ export function recoProblem(
     (stage) => definitions.find((item) => item.kind === stage.kind)?.order ?? 0,
   );
   if (order.some((value, index) => index > 0 && value < order[index - 1]))
-    return 'K-space corrections precede the solver; geometry and coil combination follow it.';
+    return 'K-space corrections precede the solver. Geometry and coil combination follow it.';
   if (kinds.includes('nufft') && kinds.includes('gridding'))
-    return 'NUFFT has its own interpolation; remove the gridding stage.';
+    return 'NUFFT has its own interpolation. Remove the gridding stage.';
   if (encoding === 'sampled' && !kinds.includes('nufft') && !kinds.includes('gridding'))
     return 'Add Kaiser–Bessel gridding before Fourier or variational reconstruction of sampled data.';
   return '';

@@ -18,7 +18,7 @@ npm --prefix frontend test
 ```
 
 Python tests use CPU cases by default. Browser tests use Chromium. To check one
-area, pass its test file; `npm --prefix frontend run test:smoke` runs one complete
+area, pass its test file. `npm --prefix frontend run test:smoke` runs one complete
 GUI workflow. Use `--durations=10` with pytest to review runtime when extending the
 suite. Timing comparisons should use the same environment.
 

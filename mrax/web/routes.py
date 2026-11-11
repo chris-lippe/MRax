@@ -62,7 +62,7 @@ def register_routes(app, get_record, check_revision, add_record):
         if options.get("upload"):
             path = app.state.uploads.get(options["upload"])
             if path is None:
-                raise ValueError("Upload expired; choose the file again")
+                raise ValueError("Upload expired. Choose the file again")
         else:
             path = app.state.folders.checked_tree(options.get("root"), options.get("path", ""))
         app.state.folders.sources.protect(path)
@@ -110,7 +110,7 @@ def register_routes(app, get_record, check_revision, add_record):
                     size += len(block)
                     if size > MAX_UPLOAD_BYTES:
                         raise HTTPException(
-                            413, "Upload exceeds 2 GiB; connect a local folder instead"
+                            413, "Upload exceeds 2 GiB. Connect a local folder instead"
                         )
                     output.write(block)
             if unpack:
@@ -494,7 +494,7 @@ def register_routes(app, get_record, check_revision, add_record):
                         options.get("_prepared_export_dir")
                         and str(destination) != options["destination"]
                     ):
-                        raise ValueError("The export destination changed; select the folder again")
+                        raise ValueError("The export destination changed. Select the folder again")
                     options["destination"] = str(destination)
                     guard = source_guard(app)
                     if not directory:

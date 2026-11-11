@@ -159,7 +159,7 @@ def export_nifti_series(
     non_spatial_axes = [i for i, name in enumerate(dim_names) if name not in SPATIAL_DIMS]
 
     if not spatial_axes:
-        raise ValueError("Experiment does not declare spatial dimensions; cannot export NIfTI.")
+        raise ValueError("Experiment does not declare spatial dimensions. Cannot export NIfTI.")
 
     outputs: list[Path] = []
     spatial_shape = tuple(int(data.shape[axis]) for axis in spatial_axes)
@@ -203,7 +203,7 @@ def export_nifti_series(
             affine_local = resolved.affine
             if resolved.identity_fallback:
                 _LOG.warning(
-                    "NIfTI export for %s has no orientation metadata; using identity affine",
+                    "NIfTI export for %s has no orientation metadata. Using identity affine",
                     dataset.name,
                 )
 
@@ -278,7 +278,7 @@ def export_nifti_4d(
     dim_names = list(experiment.dims.keys())
     spatial_axes = [i for i, name in enumerate(dim_names) if name in SPATIAL_DIMS]
     if not spatial_axes:
-        raise ValueError("Experiment does not declare spatial dimensions; cannot export NIfTI.")
+        raise ValueError("Experiment does not declare spatial dimensions. Cannot export NIfTI.")
 
     spatial_shape = tuple(int(data.shape[ax]) for ax in spatial_axes)
     frame_count = int(np.prod([experiment.dims[name] for name in dim_names if name not in SPATIAL_DIMS])) or 1
@@ -316,7 +316,7 @@ def export_nifti_4d(
         affine_local = resolved.affine
         if resolved.identity_fallback:
             _LOG.warning(
-                "NIfTI export for %s has no orientation metadata; using identity affine",
+                "NIfTI export for %s has no orientation metadata. Using identity affine",
                 dataset.name,
             )
     nib = _import_nibabel()

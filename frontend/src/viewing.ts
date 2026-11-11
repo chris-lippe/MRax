@@ -103,8 +103,7 @@ export function contextView(
   if (context.section === 'reconstruct' && workspace.has_reconstruction)
     return { ...image, scene: { comparison: reconstructionComparison(workspace) } };
   const maps =
-    context.section === 'fit' ||
-    (context.section === 'analyze' && ['statistics', 'derived-maps'].includes(context.task));
+    context.section === 'fit' || (context.section === 'analyze' && context.task === 'statistics');
   if (maps && workspace.maps.length)
     return {
       ...image,

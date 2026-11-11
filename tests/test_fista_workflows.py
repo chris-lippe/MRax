@@ -102,7 +102,7 @@ def test_full_backtracking_matches_independent_published_recurrence():
         actual = np.asarray(jax.jit(run)())
         # Near the solution, roundoff-aware line-search decisions can differ
         # between independent reduction implementations. The resolvable trace
-        # must agree tightly; the complete trace agrees to numerical accuracy.
+        # must agree tightly. The complete trace agrees to numerical accuracy.
         resolved = np.linalg.norm(np.asarray(expected) - expected[-1], axis=1) > 1e-5
         assert np.count_nonzero(resolved) >= 10
         np.testing.assert_allclose(

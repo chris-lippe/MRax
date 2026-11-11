@@ -98,7 +98,7 @@ export function ResizablePreview({
         aria-valuenow={currentHeight}
         aria-valuetext={currentHeight + ' pixels'}
         tabIndex={0}
-        title="Drag down to enlarge. Arrow keys resize; Home or double-click resets."
+        title="Drag down to enlarge. Arrow keys resize. Home or double-click resets."
         onDoubleClick={() => commit(defaultHeight?.())}
         onPointerDown={(event) => {
           if (event.button !== 0) return;

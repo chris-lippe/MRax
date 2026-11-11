@@ -31,7 +31,7 @@ def main(argv=None) -> int:
         type=Path,
         action="append",
         default=[],
-        help="Add a file-browser location (read-only in shared mode; repeatable)",
+        help="Add a file-browser location (read-only in shared mode. Repeatable)",
     )
     parser.add_argument(
         "--write-root",
@@ -78,7 +78,7 @@ def main(argv=None) -> int:
     stopped = threading.Event()
     opener = None
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        # Reserve the port before launching a browser; never navigate to another
+        # Reserve the port before launching a browser. Never navigate to another
         # application's occupied port. Windows has different reuse semantics.
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)

@@ -15,7 +15,7 @@ def write_file_atomic(destination, writer, *, overwrite=False):
     if not destination.parent.is_dir():
         raise ValueError("Choose an existing destination folder")
     if destination.exists() and (not overwrite or not destination.is_file()):
-        raise ValueError("This file already exists; confirm replacement or choose another name")
+        raise ValueError("This file already exists. Confirm replacement or choose another name")
     with tempfile.TemporaryDirectory(prefix=".mrax-saving-", dir=destination.parent) as temporary:
         staged = Path(temporary) / destination.name
         writer(staged)
@@ -34,7 +34,7 @@ def file_identity(path):
 
 
 def export_file_plan(prepared, destination, *, policy):
-    """Inspect only generated filenames; never treat a directory as replaceable."""
+    """Inspect only generated filenames. Never treat a directory as replaceable."""
     prepared, destination = Path(prepared), Path(destination)
     if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
         raise ValueError("Choose a destination folder")
@@ -98,7 +98,7 @@ def publish_export_files(
             # Preserve replaced files before the first destination write.
             for relative in replacements:
                 if file_identity(destination / relative) != expected[relative]:
-                    raise ValueError("An output file changed; review its replacement again")
+                    raise ValueError("An output file changed. Review its replacement again")
                 backup = backups / relative
                 backup.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(destination / relative, backup)
@@ -107,7 +107,7 @@ def publish_export_files(
                     progress(index, len(files), "Writing export files")
                 target = destination / relative
                 if relative in replacements and file_identity(target) != expected[relative]:
-                    raise ValueError("An output file changed; review its replacement again")
+                    raise ValueError("An output file changed. Review its replacement again")
                 if validate:
                     validate(relative, target)
                 missing = []

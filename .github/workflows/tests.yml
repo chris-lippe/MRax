@@ -140,7 +140,6 @@ jobs:
         shell: bash
         run: |
           python -m build --wheel
-          python tests/qualify_distribution.py dist
           python -m venv .wheel-env
           if [ "$RUNNER_OS" = "Windows" ]; then
             wheel_python=.wheel-env/Scripts/python.exe

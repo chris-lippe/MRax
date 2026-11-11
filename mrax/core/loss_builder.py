@@ -681,7 +681,7 @@ def build_loss(
     per-frame array, spatial array, or array broadcastable to the data. Pass
     ``"auto"`` to robustly estimate per-frame variances before constructing the
     loss. The data misfit is an inverse-variance-weighted mean of RMS-scaled
-    squared residuals. The loss is invariant to a common variance multiplier;
+    squared residuals. The loss is invariant to a common variance multiplier.
     ``None`` selects uniform variance.
 
     ``reference_image`` multiplies relative model predictions by a fixed spatial
@@ -689,12 +689,12 @@ def build_loss(
 
     ``data_normalization="roi"`` computes RMS over observations retained by
     finite-data, observable, ROI and frame masks. ``"full"`` retains the previous
-    finite-image normalization. Fractional masks weight residuals; their positive
+    finite-image normalization. Fractional masks weight residuals. Their positive
     support determines the RMS sample set.
 
     ``data_loss`` optionally maps RMS-scaled residuals and their nonnegative
     weights to a scalar differentiable data misfit. It is independent of the
-    optimizer; model regularizers are still added by this function.
+    optimizer. Model regularizers are still added by this function.
     """
     if data_normalization not in ("roi", "full"):
         raise ValueError("data_normalization must be 'roi' or 'full'")
@@ -723,7 +723,7 @@ def build_loss(
         raise ValueError("parameter_constant_dims contains unknown parameter fields")
     params = _collapse_params_for_constant_dims(params, constant_dims)
     if "slice_package" in field_dim_names:
-        # Slice packages are separate physical grids, not neighbouring voxels.
+        # Each slice package has its own physical grid.
         axes = tuple(axis for axis, name in enumerate(field_dim_names) if name != "slice_package")
         configs = (
             regularizer_configs if regularizer_configs is not None else model.regularizer_configs
@@ -1031,7 +1031,7 @@ def run_fit(
     missing per-frame observables (e.g., incomplete sat_time/b1 grids).
     ``data_variance`` applies inverse-variance weighting while retaining RMS loss
     scaling. Pass ``"auto"`` to estimate robust per-frame variances before
-    optimization; ``None`` (the default) gives every included sample uniform
+    optimization. ``None`` (the default) gives every included sample uniform
     variance.
     ``reference_image`` fits measured signal intensities by multiplying relative
     model predictions by a fixed spatial reference. Observations retain their
@@ -1047,23 +1047,23 @@ def run_fit(
     Convergence is opt-in: ``convergence_tolerance`` and ``parameter_tolerance``
     must hold for ``convergence_patience`` consecutive updates after ``min_steps``.
     ``initial_state`` resumes raw parameters and optimizer moments from a previous
-    :class:`mrax.core.fit_execution.FitInfo`; it is mutually exclusive with ``initial_params``.
+    :class:`mrax.core.fit_execution.FitInfo`. It is mutually exclusive with ``initial_params``.
     ``return_fit_info`` appends :class:`mrax.core.fit_execution.FitInfo` to the normal return tuple. Its
-    ``final_loss`` evaluates the returned parameters; history entries precede updates.
+    ``final_loss`` evaluates the returned parameters. History entries precede updates.
     Nonfinite fits raise :class:`mrax.core.fit_execution.FitError` with the last valid chunk checkpoint.
-    ``data_normalization="roi"`` uses retained observations for RMS scaling;
-    select ``"full"`` to reproduce the previous finite-image normalization.
+    ``data_normalization="roi"`` uses retained observations for RMS scaling.
+    Select ``"full"`` to reproduce the previous finite-image normalization.
     ``physical_metric`` selects a fixed curvature or initial-gradient block
-    metric for true-TV fitting; coordinates, boxes and TV weights are rescaled
+    metric for true-TV fitting. Coordinates, boxes and TV weights are rescaled
     together. ``balance_physical_parameters=False`` disables this balancing.
     ``proximal_max_step_size`` optionally caps line-search step growth.
     ``parameter_space="physical"`` also permits affine coordinates with smooth
-    model penalties; ``"auto"`` retains the default optimizer-dependent choice.
+    model penalties. ``"auto"`` retains the default optimizer-dependent choice.
     ``fit_active_only=True`` packs the positive mask support and native TV graph
     while retaining the original forward-model geometry and output fields.
-    ``grad_clip_norm`` optionally clips gradients of built-in optimizers;
-    proximal convergence checks still use the unmodified gradient.
-    Split Bregman uses one safeguarded Newton/CG primal iteration by default;
+    ``grad_clip_norm`` optionally clips gradients of built-in optimizers.
+    Proximal convergence checks still use the unmodified gradient.
+    Split Bregman uses one safeguarded Newton/CG primal iteration by default.
     ``bregman_inner_steps`` controls additional primal work before shrinkage
     and the Bregman multiplier update. ``proximal_max_steps`` bounds each CG
     solve. Named, injected and factory-based proximal fits share defaults.
@@ -1100,8 +1100,8 @@ def run_fit(
     if native_name is not None:
         selected = native_name
     elif custom_optimizer and selected == "fista":
-        raise ValueError("Injected FISTA must retain its native fitting interface; use make_optimizer "
-                         "directly or an optimizer_factory, not an Optax chain wrapper for field TV")
+        raise ValueError("Create injected FISTA with make_optimizer or optimizer_factory "
+                         "to preserve its native field-TV interface")
     if custom_optimizer and grad_clip_norm is not None:
         raise ValueError("Configure clipping in an injected optimizer or optimizer_factory")
     if selected == "auto":
@@ -1116,7 +1116,7 @@ def run_fit(
         raise ValueError("parameter_space must be auto, raw or physical")
     true_tv = has_tv and selected in ("fista", "split_bregman") and (not custom_optimizer or native_name is not None)
     if true_tv and selected == "fista" and parameter_space == "raw":
-        raise ValueError("Native field TV FISTA requires physical or auto parameter_space; "
+        raise ValueError("Native field TV FISTA requires physical or auto parameter_space. "
                          "a nonlinear raw transform does not preserve its convex TV proximal problem")
     physical = true_tv or parameter_space == "physical"
     if physical and (selected not in ("fista", "split_bregman") or (custom_optimizer and native_name is None)):
@@ -1124,11 +1124,11 @@ def run_fit(
     parameter_space, regularization_mode = "raw", "none"
     if physical:
         if regularizer_prox is not None or any(np.any(np.asarray(w) != 0) for w in jax.tree.leaves(regularizer_weight)) or box_constraints is not None:
-            raise ValueError("TV map fitting uses physical parameter_specs bounds; separate raw-parameter proximal penalties are unsupported")
+            raise ValueError("TV map fitting uses physical parameter_specs bounds. Separate raw-parameter proximal penalties are unsupported")
         if optimizer_base_factory is not None:
             import optax
             if optimizer_base_factory is not optax.sgd:
-                raise ValueError("True TV FISTA and split Bregman use objective-aware gradient steps, not an Adam base")
+                raise ValueError("True TV FISTA and split Bregman require objective-aware gradient steps")
         loss_fn, default_params, unpack = build_loss(
             experiment, model, dataset, parameter_space="physical", balance_parameters=False,
             physical_scales=getattr(initial_state, "parameter_scales", None), **loss_kwargs)
@@ -1172,9 +1172,9 @@ def run_fit(
         if not isinstance(initial_state, FitState):
             raise TypeError("initial_state must be a FitState")
         if initial_params is not None:
-            raise ValueError("Provide initial_params or initial_state, not both")
+            raise ValueError("Provide exactly one of initial_params and initial_state")
         if initial_state.parameter_space != parameter_space:
-            raise ValueError("initial_state uses a different parameter space; use raw initial_params to start a new optimizer")
+            raise ValueError("initial_state uses a different parameter space. Use raw initial_params to start a new optimizer")
         if initial_state.optimizer_name is not None and initial_state.optimizer_name != state_optimizer:
             raise ValueError("initial_state belongs to a different optimizer")
         initial_params = initial_state.params
@@ -1182,7 +1182,7 @@ def run_fit(
         initial_params = _collapse_params_for_constant_dims(initial_params, constant_param_axes)
         initial_params = unpack._mrax_from_raw(initial_params)
     # A resumed active state is already packed. Reconstruct full coordinates
-    # only to build the same objective/metric; validate its layout before use.
+    # only to build the same objective/metric. Validate its layout before use.
     if initial_state is not None and initial_state.active_layout is not None:
         if not fit_active_only:
             raise ValueError("Resuming an active state requires fit_active_only=True")

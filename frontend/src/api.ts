@@ -108,7 +108,7 @@ export async function api<T>(
             typeof item.msg === 'string' ? item.msg.slice(0, 500) : '',
           )
           .filter(Boolean)
-          .join('; ')
+          .join('. ')
       : '';
     throw new Error(
       typeof error.detail === 'string'

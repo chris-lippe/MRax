@@ -1,4 +1,4 @@
-"""Bounded in-memory scientific jobs; disk output is explicit."""
+"""Bounded in-memory scientific jobs. Disk output is explicit."""
 
 from __future__ import annotations
 
@@ -150,13 +150,13 @@ class Jobs:
                         summary = {**summary, "download": f"/api/jobs/{key}/download"}
                     result = summary if operation == "preview" else None
                 else:
-                    status, detail = "stale", "Inputs changed; result was not applied"
+                    status, detail = "stale", "Inputs changed. Result was not applied"
             except (CancelledError, InterruptedError):
                 status, detail = "cancelled", "Operation cancelled"
             except Exception as exc:
                 status, detail = (
                     "failed",
-                    str(exc)[:2000] or "Operation failed; the workspace is unchanged",
+                    str(exc)[:2000] or "Operation failed. The workspace is unchanged",
                 )
                 if self.on_failure is not None:
                     self.on_failure(workspace_id, operation, detail)
@@ -213,7 +213,7 @@ class Jobs:
                 else:
                     item.update(
                         status="cancelling",
-                        detail="Cancellation requested; waiting for a safe boundary",
+                        detail="Cancellation requested. Waiting for a safe boundary",
                     )
         return self.get(key)
 
@@ -222,12 +222,12 @@ class Jobs:
         with self.lock:
             item = self.items.get(key)
             if not item or not item.get("_pending_export") or item["status"] != "completed":
-                raise ValueError("The prepared export expired; select the folder again")
+                raise ValueError("The prepared export expired. Select the folder again")
             if item["workspace_id"] != workspace_id or item["_revision"] != revision:
-                raise ValueError("The study changed; select the export folder again")
+                raise ValueError("The study changed. Select the export folder again")
             path = self.root / key / "export"
             if not (path / "pending.json").is_file():
-                raise ValueError("The prepared export expired; select the folder again")
+                raise ValueError("The prepared export expired. Select the folder again")
             return path
 
     def artifact(self, key):

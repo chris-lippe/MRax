@@ -86,7 +86,7 @@ def total_variation_penalty(
     field: jnp.ndarray, axes: tuple[int, ...] | None = None, mask: jnp.ndarray | None = None,
     *, smoothed: bool = False,
 ) -> jnp.ndarray:
-    """Masked isotropic TV; smoothing is an explicit gradient-only option."""
+    """Masked isotropic TV. Smoothing is an explicit gradient-only option."""
     from .tv import TVOperator
     return TVOperator.create(field.shape, axes, mask=mask, dtype=jnp.real(field).dtype).value(field, smoothed)
 

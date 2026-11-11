@@ -9,9 +9,8 @@ import numpy as np
 def cartesian_sense_loss(samples, weights, sensitivities, spatial_shape, *, homogeneous=False):
     """Construct the exact weighted loss, streaming receivers through its gradient.
 
-    The custom JVP contracts the explicitly computed Fourier adjoint gradient;
-    reverse-mode differentiation therefore retains an image-sized residual rather
-    than a full stack of receiver images. Forward and higher-order derivatives
+    The custom JVP contracts the explicitly computed Fourier adjoint gradient.
+    Reverse-mode differentiation retains an image-sized residual. Forward and higher-order derivatives
     remain available. Samples and sensitivities retain their existing layouts.
     """
     from .variational import fftnc, ifftnc

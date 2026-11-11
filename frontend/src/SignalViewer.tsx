@@ -84,7 +84,7 @@ export function SignalViewer({
                 ? 'Choose ROI volumes and plot their curves using the controls.'
                 : options.source === 'fit'
                   ? 'Run a preview fit for the selected ROI in Fit.'
-                  : 'Select an ROI in Segment to view its signal profile.')}
+                  : 'Open an experiment to view its signal profile.')}
           </p>
         </div>
         <div className="signal-pages" role="tablist" aria-label="Signal data views">
@@ -218,8 +218,8 @@ export function SignalViewer({
             hidden={page !== 'statistics'}
           >
             <p className="control-note">
-              Included finite samples within the current X range. SD is the sample standard
-              deviation (n − 1); Y display limits do not filter statistics.
+              Statistics use included, finite samples in the current X range. SD uses n − 1. Y
+              display limits affect only the plot.
             </p>
             <div
               className="signal-table-scroll"
@@ -308,14 +308,18 @@ export function SignalSourceControls({
               })
             }
           >
-            <option value="profile">Current slice profile</option>
+            <option value="profile">
+              {w?.non_imaging ? 'Current signal' : 'Current slice profile'}
+            </option>
             <option value="fit" disabled={!w?.preview}>
               Saved fit input
             </option>
-            <option value="volume">ROI volume curves</option>
+            <option value="volume" disabled={!rois.length}>
+              ROI volume curves
+            </option>
           </select>
         </label>
-        {options.source !== 'volume' && (
+        {options.source !== 'volume' && rois.length > 0 && (
           <label>
             ROI
             <select
@@ -324,7 +328,7 @@ export function SignalSourceControls({
               onChange={(event) => void changeView({ selected_roi: event.target.value })}
             >
               <option value="" disabled>
-                Select an ROI
+                Whole image
               </option>
               {rois.map((roi) => (
                 <option key={roi.name}>{roi.name}</option>
@@ -372,7 +376,10 @@ export function SignalSourceControls({
       </fieldset>
       <p className="control-note">
         {options.source === 'profile'
-          ? 'Mean over the ROI in the current slice; other coordinates and fit-input settings follow the workspace.'
+          ? (rois.length
+              ? 'ROI mean in the current slice.'
+              : 'Whole-image mean in the current slice.') +
+            ' Other coordinates follow the workspace.'
           : options.source === 'fit'
             ? 'Recorded observations and predictions from the selected ROI’s preview fit.'
             : 'Curves summarize whole ROI volumes. Other acquisition coordinates follow the workspace.'}

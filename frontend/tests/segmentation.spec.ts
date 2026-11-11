@@ -1,3 +1,4 @@
+import { openControlGroup } from './ui';
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 
 import type { Workspace } from '../src/api';
@@ -56,7 +57,8 @@ test('binary and indexed masks stay editable across 3D expansion and workspace s
   await create(page, 'A', [2, 2, 4, 4]);
   await create(page, 'B', [4, 4, 4, 4]);
   await page.getByRole('separator', { name: 'Resize analysis controls', exact: true }).press('End');
-  await selectWorkflow(page, 'Segment', 'Combine ROIs');
+  await selectWorkflow(page, 'Segment');
+  await openControlGroup(page, 'Combine ROIs');
   await page.getByLabel('Include A', { exact: true }).check();
   await page.getByLabel('Include B', { exact: true }).check();
   await page.getByLabel('Combined ROI name', { exact: true }).fill('Joint');
@@ -71,7 +73,8 @@ test('binary and indexed masks stay editable across 3D expansion and workspace s
     .poll(async () => (await opened(request))[0].rois.find((r) => r.name === 'Labels')?.labels)
     .toEqual([1, 2]);
   await page.screenshot({ path: info.outputPath('segment-combine.png') });
-  await selectWorkflow(page, 'Segment', 'Edit label masks');
+  await selectWorkflow(page, 'Segment');
+  await page.getByRole('button', { name: 'Brush tool', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Paint labels', exact: true })).toBeVisible();
   await expect(page.getByRole('checkbox', { name: 'Auto subtract', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Use label 2', exact: true }).click();
@@ -93,7 +96,8 @@ test('binary and indexed masks stay editable across 3D expansion and workspace s
     .poll(async () => (await opened(request))[0].rois.find((r) => r.name === 'Labels')?.pixels)
     .toBe(28);
   await page.screenshot({ path: info.outputPath('segment-label-mask.png') });
-  await selectWorkflow(page, 'Segment', '3D expansion');
+  await selectWorkflow(page, 'Segment');
+  await openControlGroup(page, '3D expansion');
   await page.getByRole('button', { name: 'Copy current slice', exact: true }).click();
   await expect
     .poll(async () => (await opened(request))[0].rois.find((r) => r.name === 'Labels')?.pixels)

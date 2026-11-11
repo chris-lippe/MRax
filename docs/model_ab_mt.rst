@@ -51,7 +51,7 @@ AB-MT+n model
   Here :math:`t_{sat}`, :math:`t_{delay}`, and :math:`t_{rec}=TR-t_{sat}-t_{delay}`
   are converted to the implementation's ppm-time convention by multiplying
   seconds by the study field strength.  :math:`a_0`, :math:`b_0`, and
-  :math:`\sin\alpha_{eff}` are fitted AB-MT+n parameters; :math:`Z_{prev}=1`
+  :math:`\sin\alpha_{eff}` are fitted AB-MT+n parameters. :math:`Z_{prev}=1`
   unless supplied as an observable.
 - Observables: ``freq_offsets`` (ppm), ``sat_b1`` (uT), ``sat_time`` (ms), ``TR`` (ms),
   plus a study-wide ``field_strength_mhz``.
@@ -59,7 +59,7 @@ AB-MT+n model
 - Use :func:`mrax.data_struct.join_experiments` to stack multiple sat_trans scans with
   different ``sat_b1``/``sat_time`` into a single fit. Repeated acquisitions (``t``)
   expand parameter maps, so a single ``run_fit`` returns ``(t, x, y)`` fields
-  in a single dataset; you can regularize along ``t`` or set ``parameter_constant_dims`` to
+  in a single dataset. You can regularize along ``t`` or set ``parameter_constant_dims`` to
   share parameters. If you want the repeat axis explained by a side model, insert the
   derived observable directly into the experiment (``Experiment.insert_observables``)
   and map the repeat dimension to it.

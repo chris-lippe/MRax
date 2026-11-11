@@ -33,7 +33,7 @@ def navigation_response(record, command):
     scene = scene_settings(candidate)
     if scene["comparison"]["enabled"]:
         comparison = scene["comparison"]
-        # Reuse the catalog; navigation must not clone every open experiment.
+        # Reuse the catalog. Navigation must not clone every open experiment.
         if (
             record.info_cache.get("revision") != record.revision
             or "catalog" not in record.info_cache

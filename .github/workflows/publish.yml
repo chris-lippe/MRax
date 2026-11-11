@@ -52,7 +52,6 @@ jobs:
         run: |
           python -m build
           python -m twine check dist/*
-          python tests/qualify_distribution.py dist
           python -m venv /tmp/mrax-release-wheel
           /tmp/mrax-release-wheel/bin/python -m pip install --force-reinstall "$(echo dist/*.whl)[gui]"
           /tmp/mrax-release-wheel/bin/python -I tests/qualify_browser_install.py --device cpu

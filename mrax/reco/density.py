@@ -38,14 +38,14 @@ def radial_cell_density(trajectory, *, points_per_readout, angular_weights=None,
     """Integrate radial cells, including the central cell and variable spacing.
 
     ``trajectory`` has shape ``(sample, 2 or 3)`` and consists of consecutive,
-    monotonically outward readouts. Midpoints delimit cells; the inner boundary
+    monotonically outward readouts. Midpoints delimit cells. The inner boundary
     is zero, and the last boundary extends half the final sample spacing.
     A cell's radial measure is ``(outer**D - inner**D) / D``. Angular weights
     are solid angles per readout, defaulting to equal angular coverage of the
     circle or sphere. Unequal direction coverage needs explicit angular weights.
 
     With ``target_sum=None``, the result retains geometric units inherited from
-    the trajectory; an explicit positive target requests a global normalization.
+    the trajectory. An explicit positive target requests a global normalization.
     These quadrature weights are separate from statistical noise weights. The
     function operates on the supplied numerical geometry.
     """

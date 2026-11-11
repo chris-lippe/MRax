@@ -72,7 +72,7 @@ class DefinitionLibrary:
                 if set(row) != {"name", "role", "match", "settings"}:
                     raise ValueError("Import profiles require name, role, match and settings")
                 if not isinstance(row["name"], str) or not isinstance(row["role"], str) or not isinstance(row["match"], dict) or not isinstance(row["settings"], dict):
-                    raise ValueError("Profile names and roles must be strings; predicates and settings must be tables")
+                    raise ValueError("Profile names and roles must be strings. Predicates and settings must be tables")
                 if row["name"] in names:
                     raise ValueError("Import profile names must be unique")
                 names.add(row["name"])
@@ -86,5 +86,5 @@ class DefinitionLibrary:
                 for key, value in p.match.items())]
         if len(candidates) != 1:
             state = "No supported" if not candidates else "Ambiguous"
-            raise ValueError(f"{state} {role} import profile; provide an explicit compatible profile")
+            raise ValueError(f"{state} {role} import profile. Provide an explicit compatible profile")
         return candidates[0]

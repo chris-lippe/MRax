@@ -228,10 +228,10 @@ def _resolve_string_observable(
 
 
 def _resolve_field_strength_mhz(observables: dict | None) -> float:
-    """Extract scanner field strength in MHz; raises if absent."""
+    """Extract scanner field strength in MHz. Raises if absent."""
     if observables is None or "field_strength_mhz" not in observables:
         raise ValueError(
-            "field_strength_mhz is required; set it once via Study.study_globals['field_strength_mhz']"
+            "field_strength_mhz is required. Set it once via Study.study_globals['field_strength_mhz']"
         )
     field = observables.get("field_strength_mhz")
     arr = jnp.asarray(field.values if isinstance(field, Quantity) else field)

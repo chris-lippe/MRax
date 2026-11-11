@@ -363,7 +363,7 @@ def _runtime_import(module: str):
         raise ImportError(
             f"Optional dependency '{module}' is required for this denoiser. "
             "Install it with `pip install 'mrax[denoise-external]'`. "
-            "BM3D/BM4D are licensed for non-commercial use; review their licenses before use."
+            "BM3D/BM4D are licensed for non-commercial use. Review their licenses before use."
         ) from exc
 
 
@@ -388,7 +388,7 @@ def denoise_bm3d(
     ``sigma`` is the noise standard deviation in input intensity units. If unset,
     estimate it from local detrended MRI patches, excluding zero-filled background.
     ``noise_mask``, ``noise_model`` and ``noise_coils`` select the estimation
-    region and assumptions; see :func:`mrax.preprocessing.estimate_noise`.
+    region and assumptions. See :func:`mrax.preprocessing.estimate_noise`.
     Pass package-specific options through ``kwargs``.
     """
 
@@ -436,7 +436,7 @@ def denoise_bm4d(
     ``sigma`` is the noise standard deviation in input intensity units. If unset,
     estimate it from local detrended MRI patches, excluding zero-filled background.
     ``noise_mask``, ``noise_model`` and ``noise_coils`` select the estimation
-    region and assumptions; see :func:`mrax.preprocessing.estimate_noise`.
+    region and assumptions. See :func:`mrax.preprocessing.estimate_noise`.
     Pass package-specific options through ``kwargs``.
     """
 

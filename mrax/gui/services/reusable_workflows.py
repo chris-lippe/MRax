@@ -36,7 +36,7 @@ def _json_settings(value):
 
 
 def resource_choices(workspace):
-    """Metadata-only choices; no images, masks, transforms or acquisition values."""
+    """Metadata-only choices. No images, masks, transforms or acquisition values."""
     context = clone_workspace(workspace, readonly_arrays=True)
     choices = []
     for name in context.session.experiment_names:
@@ -433,7 +433,7 @@ def validate_workflow_targets(workspace, document, experiments, bindings, *, mod
                 existing = (current_pipeline(context) or {}).get("steps", [])
                 kinds = [s["kind"] for s in existing] + [s.operation for s in document.steps]
                 if [i for i, kind in enumerate(kinds) if kind == "reconstruct"] not in ([], [0]):
-                    raise ValueError("A reconstruction block can occur only once, first; replace the pipeline instead of appending it")
+                    raise ValueError("A reconstruction block must occur once at the start. Replace the pipeline to load it")
             _validate_target(context, document, bindings.get(name, {}))
             results.append({"experiment": name, "ready": True, "errors": []})
         except (ValueError, TypeError, KeyError, RuntimeError) as exc:

@@ -49,11 +49,11 @@ def read_measurement(path: str | Path, *, format: str | None = None, **options) 
     """Read an extracted file using a named adapter or an unambiguous extension."""
     path = Path(path)
     if not path.is_file():
-        raise ValueError("A measurement file is required; extract archives before importing")
+        raise ValueError("A measurement file is required. Extract archives before importing")
     if format is None:
         matches = [name for name, (exts, _, _) in _READERS.items() if any(path.name.lower().endswith(x) for x in exts)]
         if len(matches) != 1:
-            raise ValueError("Unknown or ambiguous measurement format; choose format explicitly")
+            raise ValueError("Unknown or ambiguous measurement format. Choose format explicitly")
         format = matches[0]
     if format not in _READERS:
         raise ValueError(f"Unknown measurement reader: {format}")
@@ -139,7 +139,7 @@ def _read_matlab(path, *, image_key=None, sample_key=None, axes=None,
     from scipy.io import loadmat
 
     if (image_key is None) == (sample_key is None):
-        raise ValueError("MATLAB input requires exactly one of image_key or sample_key; variables are never guessed")
+        raise ValueError("MATLAB input requires exactly one of image_key or sample_key. Variables are never guessed")
     if axes is None:
         raise ValueError("MATLAB arrays require explicit axes, e.g. ('y', 'x', 'frame')")
     key = image_key or sample_key
@@ -183,7 +183,7 @@ def _frame_metadata(meta, coordinates, frame_count):
             if len(array) not in (1, frame_count):
                 contrast = coordinates.get('contrast')
                 if contrast is None or np.max(contrast) >= len(array):
-                    raise ValueError(f"{name} does not match frames; supply explicit normalized metadata")
+                    raise ValueError(f"{name} does not match frames. Supply explicit normalized metadata")
                 array = array[np.asarray(contrast, int)]
             values[name] = array.tolist()
     return replace(meta, frame_count=frame_count, **values)
@@ -207,7 +207,7 @@ def _output_metadata(meta, acquisition, groups):
             reference = grouped[:, :1]
             equal = np.allclose(grouped, reference, equal_nan=True) if np.issubdtype(array.dtype, np.number) else np.all(grouped == reference)
             if not equal:
-                raise ValueError(f"{item.name} varies within a slice/repeat group; select slices separately or supply voxel-specific observables")
+                raise ValueError(f"{item.name} varies within a slice/repeat group. Select slices separately or supply voxel-specific observables")
             values[item.name] = grouped[:, 0].tolist()
     return replace(meta, **values)
 
@@ -277,7 +277,7 @@ def _axis_observables(observables, exp_type, frame_count):
 def build_measurement_experiment(measurement: MeasurementData, *, image_data=None,
                                          override_type=None, name=None, model_map_by_type=None,
                                          device='cpu'):
-    """Materialize an image experiment; reconstruction is an explicit prior step."""
+    """Materialize an image experiment. Reconstruction is an explicit prior step."""
     data = measurement.image_data if image_data is None else np.asarray(image_data)
     if data is None:
         raise ValueError("Raw-only measurement: call reconstruct_acquisition first and supply image_data")

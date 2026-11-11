@@ -68,7 +68,7 @@ def _pack_operator(op, active, shape):
 
 
 def pack_problem(loss, params, unpack, support):
-    """Pack every nonconstant leaf; collapse support along shared dimensions."""
+    """Pack every nonconstant leaf. Collapse support along shared dimensions."""
     defaults, indices, packed = {}, {}, {}
     digest = sha256()
     support = np.asarray(support) > 0

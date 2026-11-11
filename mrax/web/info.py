@@ -1,10 +1,11 @@
-"""Bounded browser metadata; full volumes stay in the Python application."""
+"""Bounded browser metadata. Full volumes stay in the Python application."""
 
 from __future__ import annotations
 
 import numpy as np
 
 from mrax.gui.models import model_choices
+from mrax.gui.plotting import profile_dimension
 from mrax.gui.services.pipeline import display_session, display_steps, pipeline_info, project_roi
 from mrax.gui.services.reconstruction import reconstruction_label
 from mrax.gui.services.roi_tools import roi_runs
@@ -128,16 +129,13 @@ def workspace_info(record):
         and (selected_roi is None or preview["roi_name"] != selected_roi.name)
     ):
         preview = None
-    axis = workspace.plot_x_axis_key
-    if loaded and (axis == "auto" or axis not in session.experiment_dims):
-        axis = next(
-            (
-                name
-                for name in (session.non_spatial_dim_names or session.spatial_dim_names)
-                if name != "slice_package"
-            ),
-            "",
+    axis_key = (session.selected_experiment, workspace.plot_x_axis_key)
+    if loaded and cache.get("profile_axis_key") != axis_key:
+        cache.update(
+            profile_axis_key=axis_key,
+            profile_axis=profile_dimension(session.build_experiment(), workspace.plot_x_axis_key, non_imaging=session.is_non_imaging),
         )
+    axis = cache.get("profile_axis", "")
     profile_indices = dict(session.active_indices)
     profile_indices.pop(axis, None)
     if axis == "t":
@@ -209,6 +207,8 @@ def workspace_info(record):
             "revision": record.revision,
             "view_revision": record.view_revision,
             "loaded": loaded,
+            "non_imaging": session.is_non_imaging if loaded else False,
+            "data_role": session.data_role if loaded else None,
             "experiments": session.experiment_names,
             "experiment_catalog": catalog,
             "scene": scene_info(

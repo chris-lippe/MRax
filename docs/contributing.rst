@@ -28,10 +28,8 @@ Run these checks from the repository root before opening a pull request:
    git diff --check
 
 For documentation-only changes, run the Sphinx build and ``git diff --check``.
-For code changes, run the affected feature tests; run the CPU regression suite
-before a release or when changes cross feature boundaries. Extend an existing
-workflow for a distinct public behavior rather than preserving each development
-step as a separate test. See ``tests/README.md`` for the regression scope.
+For code changes, run the affected feature tests. Run the CPU regression suite
+before a release or when changes cross feature boundaries. Cover each public behavior in the relevant feature workflow. See ``tests/README.md`` for the regression scope.
 Report each check's outcome and environment requirements in the pull request.
 
 Docs changes:
@@ -42,7 +40,7 @@ Docs changes:
 Dependency and release changes:
 
 - Shared runtime dependencies live in ``pyproject.toml``. The ``full`` extra adds
-  specialized scientific tools; ``gui`` adds those tools and the web backend.
+  specialized scientific tools. ``gui`` adds those tools and the web backend.
   Keep imports usable without unrelated extras and make missing-feature errors
   name the required extra.
 - Development, documentation, and notebook authoring tools belong in contributor extras.
@@ -64,7 +62,7 @@ its GUI:
    mrax-gui
 
 Run the Chromium workflows with ``npm --prefix frontend test``. A single complete
-workflow is available through ``npm --prefix frontend run test:smoke``; use
+workflow is available through ``npm --prefix frontend run test:smoke``. Use
 ``test:cross-browser`` for the Firefox/WebKit smoke checks.
 
 Documentation build

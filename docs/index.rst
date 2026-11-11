@@ -62,7 +62,7 @@ Core workflow
    :func:`mrax.core.study_runner.execute_study_plan`, or call
    :func:`mrax.core.loss_builder.run_fit` directly for a single experiment.
 4. Inspect fitted fields, derived maps, and convergence history.
-5. Save the study and results in a ``.mrax`` bundle; see :doc:`storage`. Use
+5. Save the study and results in a ``.mrax`` bundle. See :doc:`storage`. Use
    :doc:`analysis` for ROI or group summaries.
 
 Start Here

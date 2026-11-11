@@ -155,12 +155,12 @@ class AcquisitionData:
     """Measured samples with explicit frame, receiver, and encoding axes.
 
     Cartesian samples are ``(frame, coil, *encoding_shape)``. Sampled data are
-    ``(frame, coil, sample)``; trajectory columns follow ``encoding_axes`` and
+    ``(frame, coil, sample)``. Trajectory columns follow ``encoding_axes`` and
     use cycles/pixel of the explicitly declared encoding grid. This normalized
     coordinate view is independent of the source's physical coordinate units.
     Validity is separate from signal values and from quadrature/statistical
-    weights. The numerical contract contains normalized arrays and geometry;
-    import metadata retains source paths and vendor dictionaries.
+    weights. The numerical contract contains normalized arrays and geometry.
+    Import metadata retains source paths and vendor dictionaries.
     """
 
     samples: np.ndarray
@@ -300,7 +300,7 @@ class AcquisitionData:
         """Select reconstructed frames while retaining their raw slice groups.
 
         Encoding coordinates and calibration streams remain unchanged. Arrays
-        with an explicit acquisition-frame axis follow the selection; shared
+        with an explicit acquisition-frame axis follow the selection. Shared
         masks and weights remain shared. Selection follows the explicitly declared
         acquisition-frame axis.
         """

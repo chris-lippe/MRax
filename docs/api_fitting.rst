@@ -11,10 +11,10 @@ Objective and inputs
 
 ``build_loss`` returns the scalar loss, initial parameter tree and field unpacker.
 Weighted least squares is the default. Masks combine spatial confidence, frames
-and observable support; ``mask_dims`` specifies their axis order.
+and observable support. ``mask_dims`` specifies their axis order.
 Each fit requires usable finite observations.
 
-``data_normalization="roi"`` computes RMS over retained finite observations;
+``data_normalization="roi"`` computes RMS over retained finite observations.
 ``"full"`` uses all finite image data. To preserve regularization balance when
 switching from full-image to ROI normalization, multiply each regularizer weight
 by ``(RMS_full / RMS_roi)**2``. Double-precision fits use
@@ -33,7 +33,7 @@ fitting mask. See :doc:`variance_weighting`.
 A custom differentiable ``data_loss(residual, weights)`` receives RMS-normalized
 residuals and the combined mask/precision weights and returns a real scalar.
 All optimizer interfaces use that callable. Grouped pseudo-Huber loss applies
-one bounded influence to the RMS of consecutive frames at each spatial position;
+one bounded influence to the RMS of consecutive frames at each spatial position.
 ``delta`` is in normalized residual units. Calibrate it from the training noise
 for the intended statistical objective.
 
@@ -47,18 +47,18 @@ Execution and continuation
 --------------------------
 
 ``run_fit`` returns fitted fields with units and a loss history.
-``return_model_callable=True`` adds the prediction callable;
+``return_model_callable=True`` adds the prediction callable.
 ``return_fit_info=True`` adds ``FitInfo`` after it. Study globals and
 observables are merged by ``make_model_callable``.
 
 ``step_size`` accepts a constant or Optax schedule. ``chunk_size`` sets the
-interval between host progress and finiteness checks; a progress callback may
+interval between host progress and finiteness checks. A progress callback may
 cancel by raising an exception. Early stopping uses ``convergence_tolerance``,
 ``parameter_tolerance``, ``convergence_patience`` and ``min_steps``, with
 ``num_steps`` as the maximum.
 
 History entries precede updates. ``info.final_loss`` evaluates the returned
-fields; ``info`` also records completed updates, termination and the complete
+fields. ``info`` also records completed updates, termination and the complete
 checkpoint. Continue with ``initial_state=info.state`` and matching model,
 data, regularizers and optimizer. ``initial_params`` instead starts a fresh
 optimizer. Solver-family and state-layout changes require fresh optimizer state.
@@ -73,7 +73,7 @@ Study plans and diagnostics
 ---------------------------
 
 Study plans order experiments by their observable dependencies and may reuse
-precomputed fields. Shared options use ``run_fit_kwargs``; per-experiment
+precomputed fields. Shared options use ``run_fit_kwargs``. Per-experiment
 options use ``run_fit_overrides``. By default, experiments requiring additional
 observables receive ``skipped=True``.
 

@@ -11,11 +11,58 @@ from mrax.data_struct.geometry import SpatialGeometry
 _TIME_TO_SECONDS = {"s": 1., "ms": .001, "us": 1e-6, "min": 60.}
 
 
-def axis_coordinates(experiment, dimension, indices=None, *, geometry=None):
+def _spectral_coordinates(experiment):
+    names = {"frequency", "frequencies", "freq", "spectral_frequency", "chemical_shift", "ppm", "freq_offsets", "offsets"}
+    for name, quantity in experiment.observables.items():
+        values = np.asarray(quantity.values)
+        if name.casefold() not in names or values.ndim != 1 or values.size <= 1:
+            continue
+        dimensions = tuple(getattr(quantity, "dims", None) or ())
+        matches = list(dimensions) if dimensions else [dim for dim, size in experiment.dims.items() if size == values.size]
+        if len(matches) == 1 and experiment.dims.get(matches[0]) == values.size:
+            yield matches[0], name, quantity
+
+
+def profile_dimension(experiment, requested="auto", *, non_imaging=False):
+    """Choose a varying profile axis, using declared spectral coordinates when available."""
+    if requested in experiment.dims:
+        return requested
+    if non_imaging:
+        spectral = next(_spectral_coordinates(experiment), None)
+        if spectral is not None:
+            return spectral[0]
+        named = [name for name in experiment.dims
+                 if name.casefold() in {"frequency", "frequencies", "freq", "f", "ppm", "spectral", "spectrum", "sample", "samples"}
+                 and experiment.dims[name] > 1]
+        if named:
+            return max(named, key=lambda name: experiment.dims[name])
+        spatial = [name for name in experiment.spatial_dim_names if experiment.dims[name] > 1]
+        if spatial:
+            return max(spatial, key=lambda name: experiment.dims[name])
+    non_spatial = [name for name in experiment.non_spatial_dim_names if name != "slice_package"]
+    candidates = non_spatial or list(experiment.spatial_dim_names)
+    return next((name for name in candidates if experiment.dims[name] > 1), next(iter(experiment.dims)))
+
+
+def axis_coordinates(experiment, dimension, indices=None, *, geometry=None, spectral=False):
     """Return a unit-labelled coordinate vector for a declared dimension."""
     indices = indices or {}
     size = experiment.dims[dimension]
     obs = experiment.observables
+    if spectral:
+        for dim, name, quantity in _spectral_coordinates(experiment):
+            if dim == dimension:
+                unit = "" if quantity.si_unit == "1" else f" ({quantity.si_unit})"
+                return f"{name}{unit}", np.asarray(quantity.values)
+        mapping = getattr(experiment, "_mrax_dim_observables", None) or {}
+        for name, quantity in obs.items():
+            declared = tuple(getattr(quantity, "dims", None) or ()) == (dimension,)
+            matched = mapping.get(dimension) == name or name.casefold() == dimension.casefold()
+            timed = name.casefold() in {"time", "t", "sample_times"} and sum(value == size for value in experiment.dims.values()) == 1
+            if (declared or matched or timed) and np.shape(quantity.values) == (size,):
+                unit = "" if quantity.si_unit == "1" else f" ({quantity.si_unit})"
+                return f"{name}{unit}", np.asarray(quantity.values)
+        return "Sample index" if dimension in experiment.spatial_dim_names else f"{dimension} index", np.arange(size)
     if dimension in experiment.spatial_dim_names:
         if isinstance(geometry, dict):
             geometry = SpatialGeometry.from_metadata(geometry)

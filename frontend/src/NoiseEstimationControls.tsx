@@ -131,7 +131,7 @@ export function NoiseEstimationControls({
       <p className="control-note">
         Sigma uses input intensity units. Noise ROIs do not limit processing.
         {model === 'background'
-          ? ' Select signal-free magnitude background; one effective coil means Rician noise. Receiver count may differ.'
+          ? ' Select signal-free magnitude background. One effective coil means Rician noise. Receiver count may differ.'
           : ' Use a uniform region and avoid tissue boundaries.'}
       </p>
       <button
@@ -158,7 +158,7 @@ export function NoiseEstimationControls({
             Estimated σ <output aria-label="Estimated noise sigma">{number(value.sigma)}</output>
           </span>
           <span className="control-note">
-            Range {number(value.range[0])}–{number(value.range[1])}; {value.estimated_blocks} of{' '}
+            Range {number(value.range[0])}–{number(value.range[1])} · {value.estimated_blocks} of{' '}
             {value.blocks} blocks sampled.
           </span>
           {value.components && (

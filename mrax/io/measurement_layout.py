@@ -8,8 +8,7 @@ def slice_stack_layout(coordinates, positions, normals):
     """Return slice count, frame order, volume centres and spacing, or None.
 
     Every repeat must contain the same distinct slice labels and uniformly
-    spaced parallel planes. Incomplete or moving slice sets remain separate
-    frames rather than being padded or assigned fabricated geometry.
+    spaced parallel planes. Incomplete or moving slice sets remain separate frames.
     """
     if 'slice' not in coordinates:
         return None
@@ -61,7 +60,7 @@ def sequence_slice_positions(labels, positions, normals, definitions):
         return positions
     offsets = definitions.get('SlicePositions')
     if offsets is None:
-        warnings.warn("Distinct slice labels share one scanner plane; provide sequence SlicePositions for volume geometry", RuntimeWarning, stacklevel=3)
+        warnings.warn("Distinct slice labels share one scanner plane. Provide sequence SlicePositions for volume geometry", RuntimeWarning, stacklevel=3)
         return positions
     offsets = np.asarray(offsets, float)
     units = str(definitions.get('SlicePositionsUnit', 'm')).lower()

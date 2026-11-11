@@ -31,12 +31,12 @@ Zaiss analytical model
   model-based fallback :math:`(R_{1w}+f_{mt}R_{1,mt})/(1+f_{mt})` when the MT
   pool is present (:math:`R_{1w}` otherwise).
 
-  The shipped forward model fixes :math:`Z_i=1`; the factor is shown explicitly
+  The shipped forward model fixes :math:`Z_i=1`. The factor is shown explicitly
   because it defines the initial longitudinal magnetization term.
 - Observables: ``freq_offsets`` (ppm), ``sat_b1`` (uT), ``sat_time`` (ms), plus
   study-wide ``field_strength_mhz``. Optional ``t1_map``/``r1_map``,
   ``b0_map`` and ``b1_map`` are consumed with the same units as AB-MT+n.
 - Unit convention: frequency offsets and chemical shifts are converted to
-  angular ppm via :math:`2\pi`; saturation amplitude uses
+  angular ppm via :math:`2\pi`. Saturation amplitude uses
   ``SAT_GAMMA * sat_b1_uT / field_strength_mhz``. Pool rate parameters remain
   in the parameter-library ``ppm`` convention used by AB-MT+n.

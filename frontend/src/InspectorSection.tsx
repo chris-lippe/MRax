@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from 'react';
+import { useEffect, useState, type ComponentProps, type ReactNode } from 'react';
 import { WorkbenchIcon } from './WorkbenchIcon';
 
 export function InspectorChoice({
@@ -28,6 +28,41 @@ export function InspectorChoice({
         ))}
       </select>
     </label>
+  );
+}
+
+export function InspectorGroup({
+  title,
+  icon,
+  children,
+  revealKey,
+  onOpenChange,
+}: {
+  title: string;
+  icon: ComponentProps<typeof WorkbenchIcon>['name'];
+  children: ReactNode;
+  revealKey?: string;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    if (revealKey) setExpanded(true);
+  }, [revealKey]);
+  return (
+    <details
+      className="control-advanced control-wide control-group"
+      open={expanded}
+      onToggle={(event) => {
+        setExpanded(event.currentTarget.open);
+        onOpenChange?.(event.currentTarget.open);
+      }}
+    >
+      <summary>
+        <WorkbenchIcon name={icon} />
+        {title}
+      </summary>
+      <div className="control-group-body">{children}</div>
+    </details>
   );
 }
 

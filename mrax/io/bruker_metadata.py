@@ -539,7 +539,7 @@ def _apply_recipe(
     try:
         result = recipe(visu, method, frame_count)
     except Exception as exc:  # pragma: no cover - user-provided hook
-        warnings.warn(f"Experiment recipe failed with {exc}; falling back to defaults.", RuntimeWarning, stacklevel=2)
+        warnings.warn(f"Experiment recipe failed with {exc}. Falling back to defaults.", RuntimeWarning, stacklevel=2)
         return None, None, None
 
     if isinstance(result, tuple):
@@ -570,7 +570,7 @@ def _fit_override_warning_message(
     if manual_type_override_required:
         message = _manual_override_warning_message(meta, source)
         if default_identity_model:
-            message += " The imported default model is 'identity'; fitting it only estimates an amplitude image."
+            message += " The imported default model is 'identity'. Fitting it only estimates an amplitude image."
         return message + " A manual experiment/model override is required before quantitative fitting."
     return (
         f"Experiment imported from {source} uses the default identity model for exp_type='{exp_type}'. "
@@ -627,5 +627,5 @@ def _bruker_sequence_type(method: dict, visu: dict | None = None) -> str:
     return normalize_sequence_type(method.get("Method"))
 
 
-"""Bruker metadata translation; MRI reconstruction is separate."""
+"""Bruker metadata translation."""
 

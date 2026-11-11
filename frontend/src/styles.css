@@ -1382,6 +1382,14 @@ canvas {
   border-top: 1px solid var(--line);
   background: var(--surface);
 }
+
+main.spectrum-active {
+  overflow: auto;
+}
+.spectrum-active .signal-viewer {
+  min-height: 460px;
+  flex: 1 0 460px;
+}
 .intensity-bounds {
   min-width: 0;
 }
@@ -4699,4 +4707,24 @@ input[type='file'].visually-hidden {
 .pipeline-workflow-block summary {
   cursor: pointer;
   padding-block: 6px;
+}
+
+.control-group > summary > svg {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  vertical-align: -3px;
+}
+.control-group-body {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  min-width: 0;
+}
+.signal-navigation {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
 }

@@ -46,23 +46,15 @@ export const workflows = [
   {
     id: 'rois',
     label: 'Segment',
-    tasks: [
-      { id: 'roi-edit', label: 'Create and edit ROIs', icon: 'rois' },
-      { id: 'label-edit', label: 'Edit label masks', icon: 'brush' },
-      { id: 'roi-volume', label: '3D expansion', icon: 'layers' },
-      { id: 'roi-combine', label: 'Combine ROIs', icon: 'layers' },
-      { id: 'mask-import', label: 'Import masks and ROI sets', icon: 'import' },
-    ],
+    tasks: [{ id: 'roi-edit', label: 'ROIs and masks', icon: 'rois' }],
   },
   { id: 'fit', label: 'Fit', tasks: [{ id: 'model-fit', label: 'Model fitting', icon: 'fit' }] },
   {
     id: 'analyze',
     label: 'Analyze',
     tasks: [
-      { id: 'timecourse', label: 'ROI timecourses', icon: 'timecourse' },
-      { id: 'series-processing', label: 'Time-series corrections', icon: 'series' },
-      { id: 'statistics', label: 'ROI map statistics', icon: 'statistics' },
-      { id: 'derived-maps', label: 'Derived maps', icon: 'maps' },
+      { id: 'timecourse', label: 'Signal and time series', icon: 'timecourse' },
+      { id: 'statistics', label: 'Maps and statistics', icon: 'statistics' },
     ],
   },
 ] as const;

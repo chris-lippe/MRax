@@ -8,7 +8,7 @@ from mrax.data_struct.geometry import SpatialGeometry
 
 
 def freeze_scope(session, options, dims=None):
-    """Capture the cursor once; legacy steps without a scope keep their meaning."""
+    """Capture the cursor once. Legacy steps without a scope keep their meaning."""
     if "scope" not in options:
         if {"indices", "plane_dims"} & options.keys():
             raise ValueError("Denoising target coordinates require a scope")
@@ -18,7 +18,7 @@ def freeze_scope(session, options, dims=None):
     if not isinstance(scope, str) or scope not in {"image", "package", "dataset"}:
         raise ValueError("Choose the viewed image, active slice package or whole dataset")
     if scope == "package" and "slice_package" not in dims:
-        raise ValueError("This experiment has no slice packages; choose the whole dataset")
+        raise ValueError("This experiment has no slice packages. Choose the whole dataset")
     plane = options.get("plane_dims", list(session.image_plane_dims))
     if scope == "image" and (
         not isinstance(plane, list)

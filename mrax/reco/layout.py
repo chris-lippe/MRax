@@ -31,7 +31,7 @@ def encoding_frame_map(acquisition: AcquisitionData):
     recipe = acquisition.recipe
     order = np.asarray(recipe.output_frame_indices or tuple(range(acquisition.frame_count)))
     if len(order) != acquisition.frame_count or not np.array_equal(np.sort(order), np.arange(acquisition.frame_count)):
-        raise ValueError("Model-based encoding requires every acquired frame exactly once; subset the acquisition first")
+        raise ValueError("Model-based encoding requires every acquired frame exactly once. Subset the acquisition first")
     if recipe.output_slice_counts:
         groups = np.asarray(recipe.output_slice_counts) * recipe.average_repeats
         if int(groups.sum()) != len(order):

@@ -2,7 +2,7 @@ import { useEffect, useRef, type RefObject } from 'react';
 import { MIN_ZOOM, MAX_ZOOM, type ImageDisplay } from './useImageDisplay';
 
 export const imageNavigationHelp =
-  'Scroll to zoom; drag to pan. Alt-drag or middle-drag pans while drawing. Double-click to fit the image. Keyboard bindings are available in Settings.';
+  'Scroll to zoom. Drag to pan. Alt-drag or middle-drag pans while drawing. Double-click to fit the image. Keyboard bindings are available in Settings.';
 
 export function useImageNavigation(
   viewport: RefObject<HTMLDivElement | null>,

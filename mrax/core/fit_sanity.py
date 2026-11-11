@@ -306,7 +306,7 @@ def check_fit_sanity(
 
     data = np.asarray(dataset.data)
     if not np.isfinite(data).all():
-        report.warnings.append("dataset contains NaNs/Infs; consider auto_mask_nan_observables=True or a mask")
+        report.warnings.append("dataset contains NaNs/Infs. Consider auto_mask_nan_observables=True or a mask")
 
     frame_count = frame_count_from_dims(experiment.dims)
     non_spatial = non_spatial_names(experiment.dims)
@@ -473,7 +473,7 @@ def debug_fit_prototype(
                 proximal_context=(loss_fn, unpack._mrax_smooth_loss,
                                   unpack._mrax_physical_bounds, unpack._mrax_tv_operators))
             gradient_loss = unpack._mrax_smooth_loss
-            report.notes.append("TV is applied proximally; gradient summaries describe the smooth objective")
+            report.notes.append("TV is applied proximally. Gradient summaries describe the smooth objective")
         else:
             params = raw_before
             opt = optimizer or (optimizer_factory(step_size) if optimizer_factory is not None else make_optimizer(

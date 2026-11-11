@@ -1,4 +1,4 @@
-"""Synthetic browser contracts and real numerical integration; no measurement files."""
+"""Synthetic browser contracts and numerical integration."""
 
 from __future__ import annotations
 

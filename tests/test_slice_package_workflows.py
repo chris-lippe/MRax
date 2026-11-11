@@ -1,4 +1,4 @@
-"""One experiment with independently oriented packages; all inputs are synthetic."""
+"""Synthetic experiments with independently oriented slice packages."""
 
 import numpy as np
 import pytest

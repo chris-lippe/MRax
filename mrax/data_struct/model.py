@@ -281,7 +281,7 @@ class Model:
                 "mt_line_shape",
             )
             notes.append(
-                "AB-MT models need r1_map or t1_map; insert it from a prior T1 fit "
+                "AB-MT models need r1_map or t1_map. Insert it from a prior T1 fit "
                 "(Experiment.insert_observables) and consider adding b0_map/b1_map from WASABI."
             )
         if name in ("t1_ir", "t1"):

@@ -35,7 +35,7 @@ nbsphinx_prolog = r"""
 {{ '=' * nbtitle|length }}
 """
 
-# Pandoc may be unavailable in minimal environments; fall back to HTML for Markdown cells.
+# Pandoc may be unavailable in minimal environments. Fall back to HTML for Markdown cells.
 try:
     import nbsphinx as _nbsphinx
     from nbconvert.filters.markdown import markdown2html_mistune

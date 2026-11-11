@@ -17,8 +17,8 @@ from .variational import fftnc, ifftnc
 def resample_readout(samples, coordinates, target, *, kernel="linear", radius=8):
     """Interpolate complex ADC values at explicit increasing readout coordinates.
 
-    Coordinates and targets must share units. Out-of-support values are zero;
-    resampling retains the original coordinate scale.
+    Coordinates and targets must share units. Out-of-support values are zero.
+    Resampling retains the original coordinate scale.
     """
     array = jnp.asarray(samples)
     source = np.asarray(coordinates)
@@ -93,12 +93,12 @@ def regrid_readouts(samples, coordinates, polarity, acquired, *, kernel="adjoint
     negative = jnp.broadcast_to(jnp.asarray(polarity) < 0, array.shape)
     valid = jnp.broadcast_to(jnp.asarray(acquired, bool), array.shape)
     if not np.array_equal(np.asarray(valid), np.broadcast_to(np.asarray(valid)[..., :1], array.shape)):
-        raise ValueError("Readout interpolation requires complete ADC profiles; retain sparse coordinates for iterative encoding")
+        raise ValueError("Readout interpolation requires complete ADC profiles. Retain sparse coordinates for iterative encoding")
     target = np.fft.fftshift(np.fft.fftfreq(array.shape[-1]))
     if kernel == "adjoint":
         # Direct one-dimensional Fourier quadrature avoids an interpolation
         # kernel's spatial noise modulation. Density is Voronoi interval length
-        # in Fourier-grid units; coincident ADC locations share their cell.
+        # in Fourier-grid units. Coincident ADC locations share their cell.
         position = np.arange(array.shape[-1]) - array.shape[-1] // 2
         parts = []
         for opposite, source in enumerate(coordinates):

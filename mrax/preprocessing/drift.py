@@ -71,7 +71,7 @@ def _interpolation_order(order: InterpolationOrder) -> int:
         }
         if key not in aliases:
             raise ValueError(
-                f"Unknown interpolation {order!r}; use 'nearest' or 'linear'"
+                f"Unknown interpolation {order!r}. Use 'nearest' or 'linear'"
             )
         return aliases[key]
     resolved_order = int(order)
@@ -622,10 +622,10 @@ def linear_drift_correct_framestack(
     ``identity + design(time) @ coefficients`` and evaluates
     the chosen image transform and similarity metric for each frame under that
     shared model. By default the line is anchored at identity for the reference
-    frame or the first frame; set ``fit_intercept=True`` to fit a free line.
+    frame or the first frame. Set ``fit_intercept=True`` to fit a free line.
     ``mask`` restricts every objective and similarity evaluation to selected
     reference-grid pixels. Custom metrics and transforms used in this objective
-    must be JAX-compatible; when ``mask`` is passed the metric must accept a
+    must be JAX-compatible. When ``mask`` is passed the metric must accept a
     ``mask=`` keyword.
     """
 
@@ -756,7 +756,7 @@ def linear_drift_correct_framestack(
         status = 2
         message = (
             f"{optimizer_name} stopped after {completed_iterations} finite step(s): "
-            f"{stop_detail}; keeping the last finite transform coefficients"
+            f"{stop_detail}. Keeping the last finite transform coefficients"
         )
     elif np.isfinite(final_objective):
         status = 0

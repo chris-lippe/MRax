@@ -50,7 +50,9 @@ test('Analyze compares ROI timecourses and exports values from the study sidebar
   ).not.toBeVisible();
   await selectWorkflow(page, 'Analyze');
   await expect(page.getByRole('tab', { name: 'Maps', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'ROI timecourses', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Signal and time series', exact: true }),
+  ).toBeVisible();
   const controls = page.getByRole('region', { name: 'Timecourse analysis', exact: true });
   await controls.getByRole('button', { name: 'Clear selection', exact: true }).click();
   await expect(

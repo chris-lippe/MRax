@@ -1,3 +1,4 @@
+import { openControlGroup } from './ui';
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 
 import type { Workspace } from '../src/api';
@@ -34,7 +35,8 @@ async function setup(page: Page, request: APIRequestContext, baseline = true) {
   await expect.poll(async () => (await current(request)).pipeline.steps.length).toBe(1);
   await expect(page.locator('.job-status strong')).toHaveText('Operation complete');
   if (baseline) {
-    await selectWorkflow(page, 'Analyze', 'Time-series corrections');
+    await selectWorkflow(page, 'Analyze', 'Signal and time series');
+    await openControlGroup(page, 'Time-series corrections');
     await page.getByLabel('Time-series correction', { exact: true }).selectOption('baseline');
     await page.getByRole('button', { name: 'Apply baseline correction', exact: true }).click();
     await expect.poll(async () => (await current(request)).pipeline.steps.length).toBe(2);

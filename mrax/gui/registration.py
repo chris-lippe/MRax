@@ -417,8 +417,8 @@ def _configure_metric(method, sitk, options: RegistrationOptions) -> None:
         method.SetMetricAsANTSNeighborhoodCorrelation(radius=2)
     elif metric == "demons":
         raise ValueError(
-            "The Demons metric requires displacement-field registration; "
-            "choose a metric supported by the linear transforms"
+            "The Demons metric requires displacement-field registration. "
+            "Choose a metric supported by the linear transforms"
         )
     else:
         raise ValueError(f"Unsupported SimpleITK metric {metric!r}")
@@ -558,7 +558,7 @@ def _sitk_metric_mask(mask: np.ndarray, reference_image, name: str):
     arr = np.asarray(mask, dtype=bool)
     if arr.ndim != int(reference_image.GetDimension()):
         raise ValueError(
-            f"{name} registration mask has {arr.ndim} dimensions; image has {reference_image.GetDimension()}"
+            f"{name} registration mask has {arr.ndim} dimensions. Image has {reference_image.GetDimension()}"
         )
     image = sitk.GetImageFromArray(arr.astype(np.uint8))
     expected_size = tuple(int(v) for v in reference_image.GetSize())

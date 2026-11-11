@@ -12,7 +12,7 @@ from mrax.io.import_definitions import NormalizedMetadata
 
 
 def sequence_metadata(definitions, frame_count, path, *, definition_paths=()):
-    """Translate declared Pulseq values; time aliases in the library use seconds."""
+    """Translate declared Pulseq values. Time aliases in the library use seconds."""
     document = tomllib.loads(files('mrax.io.definitions').joinpath('pulseq.toml').read_text())
     rules = dict(document['observables'])
     for filename in definition_paths:

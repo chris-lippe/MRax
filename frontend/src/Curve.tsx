@@ -28,18 +28,20 @@ export const Curve = memo(function Curve({
   useEffect(() => closeMenu(false), [workspace?.id, workspace?.view_revision, hidden, closeMenu]);
   if (hidden) return <section className="curve-panel" hidden aria-label="ROI signal" />;
   const predicted = workspace?.preview?.predicted;
+  const region = curve?.roi_name ?? workspace?.selected_roi;
+  const heading = region ? 'ROI signal' : 'Image signal';
   const label = curve ? signalAxisLabel(curve.x_name, curve.x_unit) : '';
   return (
     <section
       className="curve-panel"
-      aria-label="ROI signal"
+      aria-label={heading}
       tabIndex={0}
       onContextMenu={menu.onContextMenu}
       onKeyDown={menu.onKeyDown}
     >
       <div className="section-heading">
         <h2 title={workspace?.selected_roi ?? undefined}>
-          ROI signal
+          {heading}
           {workspace?.selected_roi && (
             <span className="signal-preview-roi"> · {workspace.selected_roi}</span>
           )}
@@ -68,11 +70,11 @@ export const Curve = memo(function Curve({
         </div>
       </div>
       {!curve ? (
-        <div className="curve-empty">Select an ROI to display its mean signal.</div>
+        <div className="curve-empty">Open an experiment to view its mean signal.</div>
       ) : table ? (
-        <div className="table-scroll" tabIndex={0} aria-label="ROI signal table scroll area">
+        <div className="table-scroll" tabIndex={0} aria-label={heading + ' table scroll area'}>
           <table>
-            <caption>ROI signal values</caption>
+            <caption>{heading} values</caption>
             <thead>
               <tr>
                 <th>{label}</th>
@@ -101,7 +103,9 @@ export const Curve = memo(function Curve({
           label={
             predicted
               ? 'Observed ROI signal and fitted decay curve'
-              : 'Observed ROI signal across echoes'
+              : region
+                ? 'Observed ROI signal profile'
+                : 'Whole image mean signal'
           }
           traces={[
             { name: 'Observed', values: curve.observed, colour: 'var(--accent)', points: true },

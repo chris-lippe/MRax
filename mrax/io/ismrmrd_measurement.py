@@ -73,7 +73,7 @@ def _metadata_template(path, group, heads):
             template[key] = heads[key]
         xml = source['xml'][0]
         header = _read_header(xml)
-    warnings.warn("Using explicit MRD metadata template; acquisition order must match the raw samples",
+    warnings.warn("Using explicit MRD metadata template. Acquisition order must match the raw samples",
                   RuntimeWarning, stacklevel=3)
     return header, template
 
@@ -93,7 +93,7 @@ def _phase_index(value, limit, size):
 
 
 def _sequence_profiles(info, heads, indices, shape, encoding):
-    """Use common sequence readout vectors; MRD indices retain phase ordering."""
+    """Use common sequence readout vectors. MRD indices retain phase ordering."""
     if info is None or info.trajectory_physical is None or not info.adc_counts:
         return None
     counts = np.asarray(info.adc_counts, int)
@@ -116,7 +116,7 @@ def _sequence_profiles(info, heads, indices, shape, encoding):
     fov = np.asarray(info.definitions.get('FOV', []), float)
     target_fov = float(encoding.reconSpace.fieldOfView_mm.x) / 1000.
     if len(fov) <= read_axis or not np.isclose(fov[read_axis], target_fov, rtol=.01, atol=1e-6):
-        warnings.warn("Sequence and MRD readout FOV differ; retaining declared MRD encoding", RuntimeWarning, stacklevel=3)
+        warnings.warn("Sequence and MRD readout FOV differ. Retaining declared MRD encoding", RuntimeWarning, stacklevel=3)
         return None
     stored_signs = np.where(_flag(heads['flags'][indices], 22), -1, 1)
     orientation = stored_signs[0] * signs[0] if len(np.unique(signs)) == len(np.unique(stored_signs)) == 1 else 1.
@@ -129,7 +129,7 @@ def _sequence_profiles(info, heads, indices, shape, encoding):
         same = np.flatnonzero(signs == sign)
         vector = read[same[0]] if len(same) else None
         if vector is not None and not np.allclose(read[same], vector, atol=2e-6, rtol=1e-5):
-            warnings.warn("Sequence readout profiles vary; supply measured trajectories for exact encoding", RuntimeWarning, stacklevel=3)
+            warnings.warn("Sequence readout profiles vary. Supply measured trajectories for exact encoding", RuntimeWarning, stacklevel=3)
             return None
         vectors.append(vector)
     if vectors[0] is None:
@@ -166,7 +166,7 @@ def _images(group, header, *, series=None, frame_selection=None, sequence_info=N
     choices = [name for name in group if isinstance(group[name], h5py.Group) and {'data', 'header'} <= set(group[name])]
     if series is None:
         if len(choices) != 1:
-            raise ValueError(f"ISMRMRD contains {len(choices)} image series; choose image_series explicitly")
+            raise ValueError(f"ISMRMRD contains {len(choices)} image series. Choose image_series explicitly")
         series = choices[0]
     if series not in choices:
         raise ValueError("Requested ISMRMRD image series is absent")
@@ -191,7 +191,7 @@ def _images(group, header, *, series=None, frame_selection=None, sequence_info=N
         unique, inverse = np.unique(selection, return_inverse=True)
         arrays, heads = np.asarray(pixel_source[unique])[inverse], heads[selection]
     if arrays.ndim != 5 or arrays.shape[1] != 1:
-        raise ValueError("ISMRMRD images require (frame, 1, z, y, x); receiver images must be combined explicitly")
+        raise ValueError("ISMRMRD images require (frame, 1, z, y, x). Receiver images must be combined explicitly")
     arrays = arrays[:, 0]
     if arrays.shape[1] == 1:
         arrays = arrays[:, 0]
@@ -351,7 +351,7 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
             if str(enc.trajectory.value if hasattr(enc.trajectory, 'value') else enc.trajectory).lower() != 'cartesian':
                 raise ValueError("Cartesian trajectory_mode requires a declared Cartesian MRD encoding")
             if has_trajectory:
-                warnings.warn("Using explicit Cartesian counters instead of stored MRD trajectories",
+                warnings.warn("Using explicit Cartesian counters for MRD encoding",
                               RuntimeWarning, stacklevel=2)
         is_sampled = has_trajectory and trajectory_mode != 'cartesian' and not (cartesian_grid and trajectory_mode == 'auto')
         if is_sampled:
@@ -415,7 +415,7 @@ def read_ismrmrd_measurement(path, *, group=None, image_series=None, encoding_re
             np.divide(samples, np.maximum(counts, 1), out=samples)
             undersampled = np.any(counts == 0)
             if undersampled:
-                warnings.warn("Cartesian acquisition is undersampled; FFT gives a zero-filled preview. Use calibrated iterative reconstruction for unfolding", RuntimeWarning, stacklevel=2)
+                warnings.warn("Cartesian acquisition is undersampled. FFT gives a zero-filled preview. Use calibrated iterative reconstruction for unfolding", RuntimeWarning, stacklevel=2)
             epi = bool(np.any(polarity < 0))
             recipe = ReconstructionRecipe(output_shape=tuple(reversed(recon_xyz[:ndim])),
                 epi_phase_correction='entropy' if epi and len(auxiliary_indices['phase_correction']) else 'none',
@@ -494,7 +494,7 @@ def _sampled(records, heads, indices, frame_inverse, frames, coils, xyz, encodin
             largest = max(largest, float(np.max(np.abs(coords[:, :ndim]))))
         units = 'cycles/pixel' if largest <= .75 else 'cycles/fov'
         if units == 'cycles/fov':
-            warnings.warn("ISMRMRD trajectory units inferred as cycles/fov; set trajectory_units explicitly to confirm", RuntimeWarning, stacklevel=3)
+            warnings.warn("ISMRMRD trajectory units inferred as cycles/fov. Set trajectory_units explicitly to confirm", RuntimeWarning, stacklevel=3)
     # A trajectory slot is shared only when both encoding counters and coordinates agree.
     slots = sorted({(int(heads[j]['idx']['kspace_encode_step_2']), int(heads[j]['idx']['kspace_encode_step_1']), int(heads[j]['idx']['segment'])) for j in indices})
     slot_lookup = {key: i for i, key in enumerate(slots)}
@@ -528,7 +528,7 @@ def _sampled(records, heads, indices, frame_inverse, frames, coils, xyz, encodin
         coords = convert_coordinates(coords, units, xyz, encoding, ndim, axes)
         coords = coords[:, ::-1]
         if np.isfinite(trajectory[target]).all() and not np.allclose(trajectory[target], coords, atol=2e-6, rtol=1e-5):
-            raise ValueError("Trajectory changes between frames; import individual frames explicitly")
+            raise ValueError("Trajectory changes between frames. Import individual frames explicitly")
         trajectory[target] = coords
         samples[int(frame), :, target] += values
         counts[int(frame), :, target] += 1
@@ -547,7 +547,7 @@ def _calibration_grid(records, heads, indices, encoding, shape, coils):
         try:
             phase[:, dim] = [_phase_index(int(value), limit, shape[dim]) for value in phase[:, dim]]
         except ValueError:
-            warnings.warn("Calibration indices exceed declared encoding limits; raw records were retained",
+            warnings.warn("Calibration indices exceed declared encoding limits. Raw records were retained",
                           RuntimeWarning, stacklevel=3)
             return None
     pre = heads['discard_pre'][indices].astype(int)
@@ -558,7 +558,7 @@ def _calibration_grid(records, heads, indices, encoding, shape, coils):
     upper = np.r_[phase.max(0) + 1, end_x.max()]
     size = upper - lower
     if np.any(lower < 0) or np.any(upper > np.asarray(shape)) or not np.array_equal(lower, np.asarray(shape) // 2 - size // 2):
-        warnings.warn("Calibration is not a centred Cartesian block; raw calibration records were retained", RuntimeWarning, stacklevel=3)
+        warnings.warn("Calibration is not a centred Cartesian block. Raw calibration records were retained", RuntimeWarning, stacklevel=3)
         return None
     grid = np.zeros((coils,) + tuple(size), np.complex64)
     counts = np.zeros(tuple(size), np.uint16)
@@ -574,7 +574,7 @@ def _calibration_grid(records, heads, indices, encoding, shape, coils):
         grid[(slice(None),) + key + (target,)] += raw
         counts[key + (target,)] += 1
     if np.any(counts == 0):
-        warnings.warn("Calibration block is incomplete; raw calibration records were retained", RuntimeWarning, stacklevel=3)
+        warnings.warn("Calibration block is incomplete. Raw calibration records were retained", RuntimeWarning, stacklevel=3)
         return None
     grid /= counts[None]
     return grid

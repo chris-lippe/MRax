@@ -404,7 +404,7 @@ def _fit_override_warning_message(
     if manual_type_override_required:
         message = _manual_override_warning_message(meta, path)
         if default_identity_model:
-            message += " The imported default model is 'identity'; fitting it only estimates an amplitude image."
+            message += " The imported default model is 'identity'. Fitting it only estimates an amplitude image."
         return message + " A manual experiment/model override is required before quantitative fitting."
     return (
         f"Experiment imported from {path} uses the default identity model for exp_type='{exp_type}'. "
@@ -521,7 +521,7 @@ def read_pulseq(
                         adc_echo_times_ms = (adc_times[centres] - excitation[previous]) * 1000.
     except ImportError:
         warnings.warn(
-            "pypulseq is not installed; returning Pulseq definitions without calculated trajectory.",
+            "pypulseq is not installed. Returning Pulseq definitions without calculated trajectory.",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -540,7 +540,7 @@ def read_pulseq(
         raise ValueError("Pulseq FOVUnit must be m or mm")
     if fov and (fov_unit == "mm" or not fov_unit and max(fov) > 10):
         if not fov_unit:
-            warnings.warn("Pulseq FOV appears to use millimetres; converting to metres. Declare FOVUnit to make the convention explicit", RuntimeWarning, stacklevel=2)
+            warnings.warn("Pulseq FOV appears to use millimetres. Converting to metres. Declare FOVUnit to make the convention explicit", RuntimeWarning, stacklevel=2)
         definitions = {**definitions, "FOV": [v / 1000. for v in fov], "FOVUnit": "m"}
     spatial_shape = _infer_trajectory_shape(definitions, adc_counts, trajectory_physical)
     trajectory = (
@@ -781,7 +781,7 @@ def import_pulseq_experiment(
 ) -> tuple[Experiment, DataSet, Model, dict]:
     """Build MRax containers from a Pulseq sequence and optional acquired data.
 
-    Pulseq files define the sequence and ADC trajectory; measured signal samples
+    Pulseq files define the sequence and ADC trajectory. Measured signal samples
     come from the paired recording. Supply ``image_data`` for the experiment and optionally ``kspace``.
     Raw-only workflows use ``read_pulseq_acquisition`` and reconstruct separately.
     """
@@ -843,7 +843,7 @@ def import_pulseq_experiment(
         )
 
     if image_data is None:
-        raise ValueError("Image data are required for an experiment; prepare raw samples with read_pulseq_acquisition and reconstruct_acquisition first")
+        raise ValueError("Image data are required for an experiment. Prepare raw samples with read_pulseq_acquisition and reconstruct_acquisition first")
 
     from dataclasses import replace
 

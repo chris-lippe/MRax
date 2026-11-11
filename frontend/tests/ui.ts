@@ -104,6 +104,13 @@ export async function selectWorkflow(page: Page, name: string, task?: string) {
   );
 }
 
+export async function openControlGroup(page: Page, title: string) {
+  const summary = page.locator('.control-group > summary').filter({ hasText: title });
+  await expect(summary).toHaveText(title);
+  await expect(summary).toBeVisible();
+  if ((await summary.locator('..').getAttribute('open')) === null) await summary.click();
+}
+
 export async function selectTheme(page: Page, theme: 'light' | 'dark') {
   const controls = page.getByRole('dialog', { name: 'Analysis controls', exact: true });
   const restoreControls = await controls.isVisible();

@@ -200,7 +200,7 @@ export function PipelineWorkflowBlock({
           {kind === 'fit' && (
             <p className="control-note">
               Model: {String((document.steps[0].settings.settings as Options)?.model_name ?? '')}.
-              Maps are stored separately; image data pass through this block.
+              Maps are stored separately. Image data pass through this block.
             </p>
           )}
           {document.bindings.map((binding) => {

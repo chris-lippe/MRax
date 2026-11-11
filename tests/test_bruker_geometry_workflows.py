@@ -180,7 +180,7 @@ def test_multiple_packages_import_on_one_axis_and_reconstruct_without_transpose(
 def test_rectangular_storage_transposition_matches_the_raw_reconstruction(tmp_path):
     scan, frames, _, _, _, _ = _scan(tmp_path, shape=(5, 7), counts=(2,), echoes=1)
     pdata = scan / "pdata/1"
-    # Storage and raw encoding are 5x7; the declared logical image is 7x5.
+    # Storage and raw encoding are 5x7. The declared logical image is 7x5.
     with (pdata / "visu_pars").open("a") as handle:
         handle.write("\n" + _array("VisuCoreSize", [7, 5]) + "\n##$VisuCoreTransposition=1\n")
     experiment, dataset, _, _ = import_bruker_experiment(scan)

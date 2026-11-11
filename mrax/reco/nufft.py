@@ -75,9 +75,9 @@ def _separable_stencil(first, offset, *, grid_shape, width, beta):
 class NUFFTPlan:
     """Reusable encoding for fixed coordinates in cycles/pixel, in axis order.
 
-    Prepare outside ``jit``/``grad``; transform calls support both and arbitrary
+    Prepare outside ``jit``/``grad``. Transform calls support both and arbitrary
     leading batch axes. Gradients are defined for images and samples at a fixed
-    trajectory. ``eps`` selects interpolation accuracy; floating-point error
+    trajectory. ``eps`` selects interpolation accuracy. Floating-point error
     also depends on dtype and accumulation.
     Sample chunks and batches bound temporary stencil and oversampled-grid memory.
     """
@@ -153,7 +153,7 @@ class NUFFTPlan:
         groups = 1
         if grid_dtype == jnp.complex64 and long_sum:
             # Partial sums reduce coherent single-precision accumulation error.
-            # Bound replicated-grid workspace; one large FFT grid is unavoidable.
+            # Bound replicated-grid workspace. One large FFT grid is unavoidable.
             groups = max(1, min(8, (512 * 1024**2) // (samples.shape[0] * grid_size * samples.dtype.itemsize)))
 
         def spread(grid, chunk):
@@ -187,7 +187,7 @@ class NUFFTPlan:
         count = prod(leading)
         if count == 0:
             raise ValueError("NUFFT batch dimensions must be nonempty")
-        # Limit each FFT grid to 64 MiB where possible; a single large volume
+        # Limit each FFT grid to 64 MiB where possible. A single large volume
         # still needs its full grid. FFT workspaces are additional allocations.
         grid_batch = max(1, (64 * 1024**2) // (prod(self.grid_shape) * dtype.itemsize))
         batch = min(count, self.batch_size, grid_batch)
@@ -213,10 +213,10 @@ def prepare_nufft(spatial_shape, trajectory, *, eps=1e-6, chunk_size=None, batch
     """Prepare a portable 1D/2D/3D NUFFT with twofold grid oversampling.
 
     ``eps`` in [1e-12, 1e-2] selects the Kaiser--Bessel width conservatively.
-    Single precision has a coordinate/roundoff floor; use float64 trajectories
+    Single precision has a coordinate/roundoff floor. Use float64 trajectories
     and JAX x64 for tighter accuracy. Preparation validates concrete coordinates
     once. Separable stencils exceeding ``cache_budget_bytes`` are evaluated per
-    chunk from compact positions instead of cached. Zero disables stencil caching.
+    chunk from compact positions. Zero disables stencil caching.
     """
     shape = tuple(int(size) for size in spatial_shape)
     if not 1 <= len(shape) <= 3 or any(size <= 0 for size in shape):
@@ -225,7 +225,7 @@ def prepare_nufft(spatial_shape, trajectory, *, eps=1e-6, chunk_size=None, batch
         raise ValueError("NUFFT eps must be between 1e-12 and 1e-2")
     coordinates = jnp.asarray(trajectory)
     if isinstance(coordinates, Tracer):
-        raise ValueError("Prepare a fixed-trajectory NUFFT outside jit/grad; trajectory gradients are unsupported")
+        raise ValueError("Prepare a fixed-trajectory NUFFT outside jit/grad. Trajectory gradients are unsupported")
     if jnp.issubdtype(coordinates.dtype, jnp.integer) or coordinates.dtype == jnp.float16:
         coordinates = coordinates.astype(jnp.float32)
     if (coordinates.ndim != 2 or coordinates.shape[1] != len(shape)
@@ -233,8 +233,8 @@ def prepare_nufft(spatial_shape, trajectory, *, eps=1e-6, chunk_size=None, batch
             or not jnp.issubdtype(coordinates.dtype, jnp.floating)):
         raise ValueError("NUFFT trajectory must be a nonempty finite real (samples, ndim) array")
     if eps < 1e-6 and coordinates.dtype == jnp.float32:
-        warnings.warn("NUFFT eps below 1e-6 needs float64 coordinates and JAX x64; "
-                      "single-precision roundoff may dominate", RuntimeWarning, stacklevel=2)
+        warnings.warn("NUFFT eps below 1e-6 needs float64 coordinates and JAX x64. "
+                      "Single-precision roundoff may dominate", RuntimeWarning, stacklevel=2)
     width = max(4, ceil(-np.log10(eps)) + 1)
     grid_shape = tuple(2 * size for size in shape)
     if prod(grid_shape) > np.iinfo(np.int32).max:

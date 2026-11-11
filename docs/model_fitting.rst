@@ -23,7 +23,7 @@ Choose an optimizer
 
 Automatic selection uses FISTA for enabled TV terms and Adam otherwise.
 Explicit Adam uses smoothed TV and emits a warning. FISTA and split Bregman
-use native TV with physical field bounds; temporal smoothness
+use native TV with physical field bounds. Temporal smoothness
 remains a squared-difference penalty. Model parameter specifications define
 bounds, constant dimensions and regularizer weights.
 
@@ -45,7 +45,7 @@ Prepare the objective
 
 Check the model's units, observables, parameter bounds and initialization.
 Use Boolean masks for equal-weight regions or numeric masks for confidence
-weights. ROI normalization uses the retained finite observations; full-image
+weights. ROI normalization uses the retained finite observations. Full-image
 normalization uses all finite image data. Adjust regularizer weights consistently
 when changing normalization. See :doc:`variance_weighting` for noise weighting.
 
@@ -57,7 +57,7 @@ custom losses.
 Run and inspect
 ----------------
 
-Fits default to CPU. Select a local device with ``device``; use
+Fits default to CPU. Select a local device with ``device``. Use
 ``mrax.get_available_devices()`` to list available devices. GPU setup is covered
 in :doc:`docker_setup` and :doc:`windows_setup`.
 

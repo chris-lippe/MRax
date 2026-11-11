@@ -18,7 +18,7 @@ def convert_coordinates(coords, units, xyz, encoding, ndim, axes=None):
     elif units not in (None, 'cycles/pixel'):
         raise ValueError("Unsupported ISMRMRD trajectory_units")
     if not np.isfinite(coords).all() or np.max(np.abs(coords)) > .75:
-        raise ValueError("Trajectory exceeds cycles/pixel bounds; specify its physical trajectory_units explicitly")
+        raise ValueError("Trajectory exceeds cycles/pixel bounds. Specify its physical trajectory_units explicitly")
     return coords
 
 
@@ -59,7 +59,7 @@ def sequence_trajectory_encoding(records, heads, indices, info, encoding, xyz, n
     if declared != 'cartesian':
         return units, axes, True, False, ()
     if axes is None:
-        # Pulseq gradients use physical channels; MRD counters use read/phase.
+        # Pulseq gradients use physical channels. MRD counters use read/phase.
         spreads = [np.ptp(physical[starts[j]:starts[j + 1], :ndim], axis=0) for j in indices]
         read = int(np.argmax(np.median(spreads, axis=0)))
         axes = [read] + [i for i in range(ndim) if i != read]

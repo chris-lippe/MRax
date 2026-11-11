@@ -1,6 +1,6 @@
 """Versioned, data-free workflow documents shared by Python and the browser GUI.
 
-The filename suffix describes the workflow kind; all three use UTF-8 JSON.
+The filename suffix describes the workflow kind. All three use UTF-8 JSON.
 See docs/workflows.rst for the compatibility and execution contract.
 """
 
@@ -54,7 +54,7 @@ class WorkflowStep(_StrictModel):
     def supported_operation(cls, value):
         if value != 1:
             raise ValueError(
-                "Unsupported operation version; update MRax before opening this workflow"
+                "Unsupported operation version. Update MRax before opening this workflow"
             )
         return value
 
@@ -77,7 +77,7 @@ class WorkflowDocument(_StrictModel):
     def supported_format(cls, value):
         if value not in {FORMAT_VERSION, COMPOSITE_FORMAT_VERSION}:
             raise ValueError(
-                "Unsupported workflow format version; no automatic conversion is attempted"
+                "Unsupported workflow format version. No automatic conversion is attempted"
             )
         return value
 
@@ -173,7 +173,7 @@ class WorkflowDocument(_StrictModel):
 
 
 def validate_operations(document):
-    """Reject unknown executable fields instead of silently changing their meaning."""
+    """Reject unknown executable fields."""
     from mrax.gui.session import FitSettings
 
     portable_fit = set(FitSettings.__dataclass_fields__) - {
@@ -261,7 +261,7 @@ def validate_operations(document):
                 raise ValueError("A processing step needs a method")
             if settings.get("input", "image") == "view":
                 raise ValueError(
-                    "Use an explicit image source; display adjustments are not portable"
+                    "Use an explicit image source. Display adjustments are not portable"
                 )
             source = settings.get("input", "image")
             if isinstance(source, dict):

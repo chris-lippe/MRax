@@ -45,7 +45,7 @@ register_measurement_reader('siemens', ('.dat',), _read_twix)
 
 
 def discover_pulseq_measurements(root: str | Path, *, recursive=True):
-    """Discover extracted measurement files; archives and analysis files are ignored.
+    """Discover extracted measurement files. Archives and analysis files are ignored.
 
     MATLAB variables require an explicit reader mapping.
     DICOM series use MRax's existing ``discover_dicom_series/load_dicom_study``.
@@ -149,7 +149,7 @@ def read_pulseq_measurement(path: str | Path, *, sequence_path=None, format=None
         if frequency is not None:
             recorded = extra.get('field_strength_mhz')
             if recorded and not np.isclose(recorded, frequency, rtol=1e-4):
-                warnings.warn("MRD resonance frequency disagrees with paired acquisition metadata; using the acquisition frequency in Hz", RuntimeWarning, stacklevel=2)
+                warnings.warn("MRD resonance frequency disagrees with paired acquisition metadata. Using the acquisition frequency in Hz", RuntimeWarning, stacklevel=2)
             extra['field_strength_mhz'] = frequency
         if coordinates:
             extra['frame_coordinates'] = coordinates
@@ -169,7 +169,7 @@ def import_pulseq_study(root: str | Path, *, sequence_map=None, image_data=None,
                         reader_options=None, type_overrides=None, metadata_overrides=None,
                         study_globals=None, device='cpu', progress_callback=None, include_dicom=True,
                         definition_paths=(), dicom_series_groups=None):
-    """Import extracted images; return raw-only entries for explicit reconstruction.
+    """Import extracted images. Return raw-only entries for explicit reconstruction.
 
     Per-file mappings use paths relative to ``root``. Valid experiments continue
     importing when another input produces a warning. Raw-only entries remain

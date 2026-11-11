@@ -224,6 +224,7 @@ class CurveInfo(BaseModel):
     x_unit: str | None = None
     included: list[bool] | None = None
     dimension: str | None = None
+    roi_name: str | None = None
 
     @model_validator(mode="after")
     def matching_curve_lengths(self):
@@ -238,7 +239,6 @@ class PreviewResult(CurveInfo):
     model: str
     parameters: dict[str, FiniteFloat] | None = None
     relative_rmse: FiniteFloat | None = None
-    roi_name: str | None = None
 
     @model_validator(mode="after")
     def matching_prediction_lengths(self):
@@ -329,6 +329,8 @@ class WorkspaceInfo(BaseModel):
     preview: PreviewResult | None
     dirty: bool
     loaded: bool = True
+    non_imaging: bool = False
+    data_role: str | None = None
     experiments: list[str] = []
     experiment_catalog: list[ExperimentInfo] = []
     scene: SceneInfo

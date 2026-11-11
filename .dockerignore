@@ -2,11 +2,9 @@
 .env
 .venv
 data/
-.data/
 **/*.egg-info/
 .wheel-env/
 .ruff_cache/
-local_testing/
 build/
 dist/
 docs/_build/

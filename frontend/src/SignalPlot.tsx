@@ -313,7 +313,7 @@ export function SignalPlot({ data, traces, options, xDomain, yDomain, svgRef, up
       >
         <title>{options.title || 'Signal curves'}</title>
         <desc>
-          {data.description}. {traces.map((t) => t.name).join('; ')}. Hollow points mark samples
+          {data.description}. {traces.map((t) => t.name).join(', ')}. Hollow points mark samples
           excluded from fitting.
         </desc>
         <defs>
@@ -482,7 +482,7 @@ export function SignalPlot({ data, traces, options, xDomain, yDomain, svgRef, up
       </svg>
       <p id="signal-plot-help" className="control-note">
         Inspect with the pointer or focus the plot and use Left/Right, Home/End. Select X range by
-        dragging; Escape cancels. Hollow points are excluded from fitting.
+        dragging. Escape cancels. Hollow points are excluded from fitting.
       </p>
       {omitted > 0 && (
         <p className="control-note" role="status">
@@ -491,7 +491,7 @@ export function SignalPlot({ data, traces, options, xDomain, yDomain, svgRef, up
       )}
       {data.x.length > 800 && (
         <p className="control-note">
-          Dense traces retain extrema and gaps; markers are thinned. Inspection and CSV retain every
+          Dense traces retain extrema and gaps. Markers are thinned. Inspection and CSV retain every
           sample.
         </p>
       )}

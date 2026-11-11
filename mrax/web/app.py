@@ -1,4 +1,4 @@
-"""Local browser API. Runtime files live outside the checkout; no arbitrary path API."""
+"""Browser API and application lifecycle."""
 
 from __future__ import annotations
 
@@ -210,7 +210,7 @@ def create_app(
                             )
                         except Exception:
                             app.state.recovery_errors.append(
-                                {"message": "Recovery checkpoint failed; save a workspace bundle"}
+                                {"message": "Recovery checkpoint failed. Save a workspace bundle"}
                             )
 
                 saver.submit(write)
@@ -355,7 +355,7 @@ def create_app(
                     except Exception:
                         app.state.recovery_errors.append(
                             {
-                                "message": "A recovery file could not be restored; the original file is retained"
+                                "message": "A recovery file could not be restored. The original file is retained"
                             }
                         )
             try:
@@ -442,7 +442,7 @@ def create_app(
         if record.revision != revision or (
             view_revision is not None and record.view_revision != view_revision
         ):
-            raise HTTPException(409, "The workspace changed; refresh before editing")
+            raise HTTPException(409, "The workspace changed. Refresh before editing")
 
     def add_record(workspace, *, file_location=None):
         from .schemas import PreviewResult
@@ -514,7 +514,7 @@ def create_app(
                     size += len(block)
                     if size > MAX_UPLOAD_BYTES:
                         raise HTTPException(
-                            413, "Upload exceeds 2 GiB; connect a local folder instead"
+                            413, "Upload exceeds 2 GiB. Connect a local folder instead"
                         )
                     output.write(block)
             with zipfile.ZipFile(path) as archive:
@@ -532,7 +532,7 @@ def create_app(
             return result
         except (ValueError, OSError, zipfile.BadZipFile, KeyError) as exc:
             raise HTTPException(
-                422, "Invalid or unsupported MRax bundle; no workspace was opened"
+                422, "Invalid or unsupported MRax bundle. No workspace was opened"
             ) from exc
         finally:
             path.unlink(missing_ok=True)

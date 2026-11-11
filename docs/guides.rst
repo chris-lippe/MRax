@@ -2,7 +2,7 @@ Guides and Workflows
 ====================
 
 Choose a workflow below. Section Navigation links to pages in the current
-section; notebooks accompany the relevant workflows.
+section. Notebooks accompany the relevant workflows.
 
 Core workflows
 --------------

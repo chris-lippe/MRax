@@ -211,7 +211,7 @@ export function App() {
     else if (step.kind === 'drift') selectWorkflow('registration', 'drift');
     else if (step.family === 'denoise') selectWorkflow('preprocess', 'denoising');
     else if (step.family === 'normalize') selectWorkflow('preprocess', 'normalization');
-    else selectWorkflow('analyze', 'series-processing');
+    else selectWorkflow('analyze', step.family === 'analyze' ? 'statistics' : 'timecourse');
   }
   useEffect(() => {
     if (job?.pipeline) {
@@ -362,12 +362,7 @@ export function App() {
       return true;
     }
     if (name === 'drawing') {
-      if (
-        busy ||
-        active(job) ||
-        !current.current?.editable ||
-        !['roi-edit', 'label-edit'].includes(workflowTask)
-      )
+      if (busy || active(job) || !current.current?.editable || workflowTask !== 'roi-edit')
         return false;
       setDrawing((value) => !value);
       return true;
@@ -1024,7 +1019,7 @@ export function App() {
         setMessage(
           kind === 'multimodal'
             ? 'Synthetic multimodal study loaded'
-            : 'Synthetic T2 study loaded; reference T2 = 80 ms',
+            : 'Synthetic T2 study loaded. Reference T2 = 80 ms',
         );
       }
     }, true);
@@ -1035,8 +1030,6 @@ export function App() {
     setWorkflowTasks((previous) => ({ ...previous, [value]: selectedTask }));
     if (value !== 'image') viewingContext.current = { section: value, task: selectedTask };
     if (selectedTask !== 'roi-edit') setDrawing(false);
-    if (selectedTask === 'label-edit' && !['brush', 'erase', 'pan'].includes(tool))
-      setTool('brush');
     const w = current.current;
     if (selectedTask === 'overlays' && w?.scene.comparison.enabled)
       void changeView({ scene: { comparison: { ...w.scene.comparison, enabled: false } } });
@@ -1056,6 +1049,18 @@ export function App() {
     } else if (!large) setPanel('tools');
   }
 
+  const primarySignal = Boolean(
+    workspace?.non_imaging &&
+    !['metadata', 'signal'].includes(workflowTask) &&
+    workspace.view === 'Image' &&
+    !workspace.scene.comparison.enabled &&
+    workflow !== 'reconstruct',
+  );
+  const signalActive = workflowTask === 'signal' || primarySignal;
+  const followProcessing = primarySignal && workflow !== 'image';
+  const displayedSignalOptions = followProcessing
+    ? { ...signalOptions, source: 'profile' as const, residuals: false }
+    : signalOptions;
   const jobStudyLabel = workspaces.find((item) => item.id === job?.workspace_id)?.label;
   const currentTimecourse =
     timecourse &&
@@ -1067,10 +1072,10 @@ export function App() {
   const scientificSignal = useMemo(
     () =>
       signalData(workspace, currentTimecourse, {
-        source: signalOptions.source,
-        residuals: signalOptions.residuals,
+        source: followProcessing ? 'profile' : signalOptions.source,
+        residuals: followProcessing ? false : signalOptions.residuals,
       }),
-    [workspace, currentTimecourse, signalOptions.source, signalOptions.residuals],
+    [workspace, currentTimecourse, signalOptions.source, signalOptions.residuals, followProcessing],
   );
   function openSignalViewer(source: SignalOptions['source']) {
     updateSignal({ source, residuals: false, hidden: [], xMin: '', xMax: '', yMin: '', yMax: '' });
@@ -1136,6 +1141,64 @@ export function App() {
     />
   );
 
+  const dimensionControls = workspace && (
+    <div className="dimension-controls" hidden={workspace.scene.comparison.enabled}>
+      {workspace.dimension_controls
+        .filter((control) => !primarySignal || control.key !== workspace.timecourse?.dimension)
+        .map((control) => {
+          const key = String(control.key),
+            size = Number(control.size),
+            value = Number(pendingIndices[key] ?? workspace.indices[key] ?? 0);
+          const name =
+            (key === 'frame' || key === 't') && workspace.model === 't2_se'
+              ? 'Echo'
+              : key === workspace.slice_dim
+                ? 'Slice'
+                : String(control.label ?? key);
+          if (key === 'slice_package') {
+            const choices = (control.choices ?? []) as {
+              value: number;
+              label: string;
+            }[];
+            return (
+              <label key={key}>
+                Slice package
+                <select
+                  aria-label="Slice package"
+                  value={value}
+                  disabled={taskBusy}
+                  onChange={(event) => void navigateIndex(key, Number(event.target.value))}
+                >
+                  {choices.map((choice) => (
+                    <option key={choice.value} value={choice.value}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            );
+          }
+          return (
+            <label key={key}>
+              {name}{' '}
+              <strong>
+                {value + 1} / {size}
+              </strong>
+              <input
+                aria-label={name}
+                type="range"
+                min={0}
+                max={Math.max(0, size - 1)}
+                value={value}
+                disabled={taskBusy}
+                onChange={(event) => void navigateIndex(key, Number(event.target.value))}
+              />
+            </label>
+          );
+        })}
+    </div>
+  );
+
   const tools = (
     <AnalysisPanel
       section={workflow}
@@ -1145,13 +1208,16 @@ export function App() {
       }}
       task={workflowTask}
       onTimecourseResult={setTimecourse}
-      signalComparison={workflowTask === 'signal' && signalOptions.source === 'volume'}
+      signalPrimary={primarySignal}
+      signalComparison={
+        workflow === 'image' && signalActive && displayedSignalOptions.source === 'volume'
+      }
       signalSourceControls={
-        signalOpened && (
+        (signalOpened || primarySignal) && (
           <Suspense fallback={<p>Loading signal controls…</p>}>
             <SignalSourceControls
               workspace={workspace}
-              options={signalOptions}
+              options={displayedSignalOptions}
               update={updateSignal}
               busy={busy || Boolean(active(job))}
               changeView={changeView}
@@ -1160,11 +1226,11 @@ export function App() {
         )
       }
       signalDisplayControls={
-        signalOpened && (
+        (signalOpened || primarySignal) && (
           <Suspense fallback={null}>
             <SignalAppearanceControls
               data={scientificSignal}
-              options={signalOptions}
+              options={displayedSignalOptions}
               update={updateSignal}
             />
           </Suspense>
@@ -1258,8 +1324,10 @@ export function App() {
         <StudyDivider layout={browser} />
         <main
           className={
-            workflowTask === 'signal'
-              ? 'signal-active'
+            signalActive
+              ? primarySignal
+                ? 'signal-active spectrum-active'
+                : 'signal-active'
               : workflowTask === 'metadata'
                 ? 'metadata-active'
                 : workspace?.loaded
@@ -1335,12 +1403,13 @@ export function App() {
               return updated;
             }}
           />
-          {signalOpened && (
+          {primarySignal && <div className="signal-navigation">{dimensionControls}</div>}
+          {(signalOpened || primarySignal) && (
             <Suspense fallback={<p>Loading signal viewer…</p>}>
               <SignalViewer
-                active={workflowTask === 'signal'}
+                active={signalActive}
                 data={scientificSignal}
-                options={signalOptions}
+                options={displayedSignalOptions}
                 update={updateSignal}
                 figureRef={signalFigure}
               />
@@ -1354,7 +1423,7 @@ export function App() {
             minimum={360}
             maximum={2400}
             growWithContent
-            hidden={['metadata', 'signal'].includes(workflowTask)}
+            hidden={signalActive || workflowTask === 'metadata'}
           >
             <section
               id="image-viewer-body"
@@ -1407,7 +1476,7 @@ export function App() {
                       layerValues={layerValues}
                       scenePreview={scenePreview}
                       display={display}
-                      editingEnabled={['roi-edit', 'label-edit'].includes(workflowTask)}
+                      editingEnabled={workflowTask === 'roi-edit'}
                       drawing={drawing}
                       tool={tool}
                       brushSize={brushSize}
@@ -1417,63 +1486,7 @@ export function App() {
                       onRectangle={(bounds) => void addRectangle(bounds)}
                     />
                   )}
-                  <div className="dimension-controls" hidden={workspace.scene.comparison.enabled}>
-                    {workspace.dimension_controls.map((control) => {
-                      const key = String(control.key),
-                        size = Number(control.size),
-                        value = Number(pendingIndices[key] ?? workspace.indices[key] ?? 0);
-                      const name =
-                        (key === 'frame' || key === 't') && workspace.model === 't2_se'
-                          ? 'Echo'
-                          : key === workspace.slice_dim
-                            ? 'Slice'
-                            : String(control.label ?? key);
-                      if (key === 'slice_package') {
-                        const choices = (control.choices ?? []) as {
-                          value: number;
-                          label: string;
-                        }[];
-                        return (
-                          <label key={key}>
-                            Slice package
-                            <select
-                              aria-label="Slice package"
-                              value={value}
-                              disabled={taskBusy}
-                              onChange={(event) =>
-                                void navigateIndex(key, Number(event.target.value))
-                              }
-                            >
-                              {choices.map((choice) => (
-                                <option key={choice.value} value={choice.value}>
-                                  {choice.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        );
-                      }
-                      return (
-                        <label key={key}>
-                          {name}{' '}
-                          <strong>
-                            {value + 1} / {size}
-                          </strong>
-                          <input
-                            aria-label={name}
-                            type="range"
-                            min={0}
-                            max={Math.max(0, size - 1)}
-                            value={value}
-                            disabled={taskBusy}
-                            onChange={(event) =>
-                              void navigateIndex(key, Number(event.target.value))
-                            }
-                          />
-                        </label>
-                      );
-                    })}
-                  </div>
+                  {!primarySignal && dimensionControls}
                 </>
               ) : (
                 <div className="empty-view">
@@ -1485,24 +1498,25 @@ export function App() {
           </ResizablePreview>
           <SignalPreview
             hidden={
-              workflowTask !== 'timecourse' &&
-              (['metadata', 'signal'].includes(workflowTask) ||
-                viewingContext.current.section === 'reconstruct' ||
-                Boolean(workspace?.scene.comparison.enabled))
+              signalActive ||
+              (workflowTask !== 'timecourse' &&
+                (['metadata', 'signal'].includes(workflowTask) ||
+                  viewingContext.current.section === 'reconstruct' ||
+                  Boolean(workspace?.scene.comparison.enabled)))
             }
           >
             <TimecoursePlot
               styles={workspace?.scene.roi_styles}
               result={currentTimecourse}
-              hidden={workflowTask !== 'timecourse'}
+              hidden={workflowTask !== 'timecourse' || !currentTimecourse}
               onOpen={() => openSignalViewer('volume')}
             />
             <Curve
               workspace={workspace}
               hidden={
-                workflowTask === 'timecourse' ||
+                (workflowTask === 'timecourse' && Boolean(currentTimecourse)) ||
                 workflowTask === 'metadata' ||
-                workflowTask === 'signal' ||
+                signalActive ||
                 viewingContext.current.section === 'reconstruct' ||
                 workspace?.scene.comparison.enabled
               }
@@ -1548,7 +1562,7 @@ export function App() {
         save={save}
         timecourse={currentTimecourse}
         signalExport={
-          workflowTask === 'signal' && scientificSignal
+          signalActive && scientificSignal
             ? {
                 csv: () =>
                   signalCsv(

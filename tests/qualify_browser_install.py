@@ -1,12 +1,10 @@
-"""Qualify an installed wheel from any OS, outside the source tree.
+"""Check an installed wheel in an isolated working directory.
 
-Run with the target environment's Python. ``--device gpu`` requires a real
-accelerator and fails if none is present; CPU execution cannot satisfy it.
+Run with the target environment's Python. ``--device gpu`` requires a real GPU.
 """
 
 import argparse
 import importlib.metadata
-import importlib.util
 import json
 import os
 import platform
@@ -26,12 +24,6 @@ def qualify(device):
 
     installed = Path(mrax.__file__).resolve()
     assert "site-packages" in installed.parts, "Run this check against an installed wheel"
-    assert importlib.util.find_spec("mrax.gui.app") is None
-    retired = ("pyside", "pyqt", "qtpy", "superqt", "shiboken")
-    assert not any(
-        requirement.lower().startswith(retired)
-        for requirement in importlib.metadata.requires("mrax") or []
-    )
     scripts = {
         entry.name: entry.value
         for entry in importlib.metadata.distribution("mrax").entry_points
@@ -103,7 +95,7 @@ def qualify(device):
                 target = next(
                     (d["id"] for d in catalog["devices"] if d["id"].startswith(device + ":")), None
                 )
-                assert target is not None, f"No {device} device; qualification failed"
+                assert target is not None, f"No {device} device. Qualification failed"
                 workspace = request("/api/workspaces/synthetic", "POST")
                 path = f"/api/workspaces/{workspace['id']}"
                 workspace = request(

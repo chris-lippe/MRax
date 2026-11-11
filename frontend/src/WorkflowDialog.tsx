@@ -250,7 +250,7 @@ export function WorkflowDialog({
         );
         for (const row of checks.targets)
           if (!row.ready)
-            problems.push(study.label + ' / ' + row.experiment + ': ' + row.errors.join('; '));
+            problems.push(study.label + ' / ' + row.experiment + ': ' + row.errors.join('. '));
       }
       if (problems.length) {
         setReport(problems);
@@ -615,9 +615,9 @@ export function WorkflowDialog({
                       </div>
                       <p className="hint">
                         {entry.kind === 'processing'
-                          ? 'Reconstruction and existing fit maps are retained. Replace starts from the protected source; append starts from the current pipeline output.'
+                          ? 'Reconstruction and existing fit maps are retained. Replace starts from the source data. Append starts from the current pipeline output.'
                           : entry.kind === 'reconstruction'
-                            ? 'Reconstruction is replaced; existing processing is reapplied. Fit maps are retained.'
+                            ? 'Reconstruction is replaced. Existing processing is reapplied. Fit maps are retained.'
                             : 'Fitting uses the current processing state. Maps are replaced only when fits run.'}
                       </p>
                     </>

@@ -165,7 +165,7 @@ def _bruker_slice_spacing_from_positions(visu: dict) -> float | None:
 
 
 def bruker_affine_from_visu(visu: dict, *, frame_index: int | None = None) -> np.ndarray | list[np.ndarray]:
-    """Map decoded pixel centres to RAS, once per output volume rather than slice."""
+    """Map decoded pixel centres to RAS once per output volume."""
     cached_grid = visu.get("_mrax_output_frame_indices")
     grid = np.asarray(cached_grid, dtype=int) if cached_grid is not None else output_frame_grid(
         visu, visu.get("_mrax_selected_package"))[0]
@@ -247,8 +247,7 @@ def bruker_spatial_geometry(
     first = np.asarray(affines[0] if isinstance(affines, list) else affines)
     spacing = tuple(np.linalg.norm(first[:3, :3], axis=0)[:spatial_ndim])
     # SpatialGeometry maps the array at MRax's NIfTI boundary, which reverses
-    # native spatial axes. Keep native pixel order and describe that boundary
-    # explicitly rather than attaching an XYZ affine to a ZYX export.
+    # native spatial axes. Keep native pixel order and describe that boundary.
     def nifti_affine(matrix):
         matrix = np.asarray(matrix).copy()
         order = tuple(reversed(range(spatial_ndim))) + tuple(range(spatial_ndim, 3))
@@ -428,5 +427,5 @@ def _bruker_visu_scaling_metadata(visu: dict, *, frame_count: int) -> dict:
     }
 
 
-"""Bruker images translation; MRI reconstruction is separate."""
+"""Bruker image metadata translation."""
 

@@ -709,7 +709,7 @@ def _load_experiment_metadata_template_from_file(
             name = next(iter(experiments.keys()))
         else:
             choices = ", ".join(sorted(str(key) for key in experiments))
-            raise ValueError(f"Manifest contains multiple experiments; enter one of: {choices}")
+            raise ValueError(f"Manifest contains multiple experiments. Enter one of: {choices}")
         entry = dict(experiments[name] or {})
         rel_metadata = entry.get("metadata")
         if not rel_metadata:

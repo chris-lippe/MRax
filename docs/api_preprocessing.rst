@@ -7,7 +7,7 @@ Denoising and motion-correction helpers for image stacks.
 
 - ``denoise_filter`` applies Gaussian/median/uniform filtering on N-D arrays.
 - ``regularized_denoise`` runs TV, higher-order TV, and smoothness regularizers using
-  project optimizers; see [Rudin1992]_ for the TV background.
+  project optimizers. See [Rudin1992]_ for the TV background.
 - ``denoise_bm3d`` and ``denoise_bm4d`` wrap the bundled external denoiser packages
   [Dabov2007]_ [Maggioni2013]_.
 - ``linear_drift_correct_framestack`` and ``linear_drift_correct_dataset`` fit
@@ -16,7 +16,7 @@ Denoising and motion-correction helpers for image stacks.
   ``Affine2DTransform`` provide differentiable JAX transforms for that drift fit.
 - ``register_image`` and ``motion_correct_framestack`` provide SimpleITK-backed
   image registration.
-- ``motion_correct_dataset`` handles MRax experiment dimensions; use
+- ``motion_correct_dataset`` handles MRax experiment dimensions. Use
   ``register_experiment_to_reference`` to align an experiment to a reference
   experiment image dataset.
 - ``resample_image`` applies a SimpleITK transform to another image on a chosen

@@ -385,9 +385,9 @@ def interpolate_mask_along_slices(
 
     ``interpolation`` controls slices between annotated masks. ``extrapolation``
     controls slices before the first and after the last annotated mask. Supported
-    strategies are ``"linear"``, ``"spline"``, and ``"constant"``; extrapolation
-    also accepts ``"none"``. Linear and spline modes interpolate signed distance
-    fields so ROI boundaries morph smoothly instead of switching voxel labels.
+    strategies are ``"linear"``, ``"spline"``, and ``"constant"``. Extrapolation
+    also accepts ``"none"``. Linear and spline modes interpolate signed distance fields for smooth ROI
+    boundaries.
     """
 
     arr = np.asarray(mask, dtype=bool)

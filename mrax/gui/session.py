@@ -1523,7 +1523,7 @@ class GuiSession:
             return {**IMAGE_PLANE_DIMS, native: ("x", "y")} if native in IMAGE_PLANE_DIMS else dict(IMAGE_PLANE_DIMS)
         dimension_for_axis = dict(zip(labels, spatial_dims))
         # A displayed array is [row, column]. Anatomical X belongs on the
-        # horizontal axis; superior/inferior is vertical in coronal/sagittal.
+        # horizontal axis. Superior/inferior is vertical in coronal/sagittal.
         planes = {"axial": ("y", "x"), "coronal": ("z", "x"), "sagittal": ("z", "y")}
         result = dict(IMAGE_PLANE_DIMS)
         for plane, axes in planes.items():
@@ -1970,7 +1970,7 @@ class GuiSession:
             )
             target_shape = tuple(int(dims[dim]) for dim in target_dims)
             if source_dims != target_dims or source_shape != target_shape:
-                raise ValueError("Native grids differ; register experiments before sharing ROIs")
+                raise ValueError("Native grids differ. Register experiments before sharing ROIs")
             geometry = _spatial_geometry_from_experiment_data(
                 self.data["experiments"][name], dims=dims
             )
@@ -1979,7 +1979,7 @@ class GuiSession:
                 spacing is not None
                 and not np.allclose(spacing, geometry.voxel_sizes, atol=1e-6, rtol=1e-6)
             ):
-                raise ValueError("Voxel spacing differs; register experiments before sharing ROIs")
+                raise ValueError("Voxel spacing differs. Register experiments before sharing ROIs")
             for frame in range(
                 max(1, len(source_geometry.frame_affines) if source_geometry else 0,
                     len(geometry.frame_affines))
@@ -1993,7 +1993,7 @@ class GuiSession:
                     and not np.allclose(source_affine, target_affine, atol=1e-6, rtol=1e-6)
                 ):
                     raise ValueError(
-                        "Physical geometry differs; register experiments before sharing ROIs"
+                        "Physical geometry differs. Register experiments before sharing ROIs"
                     )
         current_rois = [_copy_roi(roi) for roi in self.rois]
         selected_roi = self.fit_settings.selected_roi
@@ -2342,7 +2342,7 @@ class GuiSession:
         )
         fit_notes.extend(replacement_notes)
         if fit_info.regularization_mode == "smoothed_tv":
-            fit_notes.append(f"Warning: {fit_info.optimizer_name} uses smoothed TV gradients; choose auto, FISTA, or split_bregman for true TV proximal fitting.")
+            fit_notes.append(f"Warning: {fit_info.optimizer_name} uses smoothed TV gradients. Choose auto, FISTA, or split_bregman for true TV proximal fitting.")
         return {
             "name": self.selected_experiment or "gui_fit",
             "model": model.name,
@@ -2388,7 +2388,7 @@ class GuiSession:
             rank = dti_design_rank(bvals_fit, bvecs_fit)
             if rank < 7:
                 return None, [
-                    f"DTI tensor initialization skipped because the active frame set has design rank {rank}/7; include b0 frames and at least six independent diffusion directions for tensor fitting."
+                    f"DTI tensor initialization skipped because the active frame set has design rank {rank}/7. Include b0 frames and at least six independent diffusion directions for tensor fitting."
                 ]
             direct = fit_dti_log_linear(data, bvals_fit, bvecs_fit, mask=None)
             initial_params = _fields_to_initial_params(model, direct)
@@ -3405,8 +3405,7 @@ def _display_slice(
         return selected.reshape((1, selected.shape[0]))
     if selected.ndim == 2:
         return selected
-    # If some unknown dimension remains, keep the first plane instead of
-    # flattening unrelated axes into a confusing preview.
+    # Keep the first plane when a dimension remains unresolved.
     while selected.ndim > 2:
         selected = np.take(selected, 0, axis=0)
     return selected

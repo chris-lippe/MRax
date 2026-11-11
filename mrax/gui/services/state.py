@@ -307,7 +307,7 @@ def _restore_gui_state(
     version = _safe_int_value(payload.get("version"), -1)
     if version != _GUI_STATE_CURRENT_VERSION:
         raise ValueError(
-            f"GUI state version {version} is not supported; expected {_GUI_STATE_CURRENT_VERSION}."
+            f"GUI state version {version} is not supported. Expected {_GUI_STATE_CURRENT_VERSION}."
         )
     if payload.get("spatial_plane_contract") != "fixed_xyz_v1":
         raise ValueError("GUI state spatial_plane_contract must be 'fixed_xyz_v1'.")
@@ -477,7 +477,7 @@ def _restore_gui_state(
     elif selected:
         _warn_restore(
             warnings,
-            f"Selected experiment '{selected}' is missing; using the default selected experiment.",
+            f"Selected experiment '{selected}' is missing. Using the default selected experiment.",
         )
     session._restore_or_reset_current_view_state()
 

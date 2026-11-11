@@ -53,7 +53,7 @@ def save_acquisition(path: str | Path, acquisition: AcquisitionData) -> None:
 
 
 def load_acquisition(path: str | Path) -> AcquisitionData:
-    """Load and validate an acquisition; archives containing pickle are rejected."""
+    """Load and validate an acquisition. Archives containing pickle are rejected."""
     with np.load(path, allow_pickle=False) as archive:
         metadata = json.loads(str(archive["metadata"]))
         if metadata.get("schema_version") != 1:

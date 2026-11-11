@@ -147,7 +147,7 @@ def export_into_directory(workspace, options, root, progress, *, output_guard=No
         previous = {row["path"]: row["identity"] for row in pending["conflicts"]}
         actual = {row["path"]: row["identity"] for row in conflicts}
         if actual != previous or files != pending["files"]:
-            raise ValueError("Output files changed after review; select the folder again")
+            raise ValueError("Output files changed after review. Select the folder again")
         requested = options.get("replace_files") or []
         if (
             not isinstance(requested, list)
@@ -219,7 +219,7 @@ def export_workspace(workspace, options, root, progress, *, output_guard=None):
         check_workspace_output(workspace, destination, image_export=image_export)
         if destination.exists() and kind not in {"bundle", "package", "state"} and not image_export:
             raise ValueError(
-                "Choose a new file name; existing metadata and text files are not replaced"
+                "Choose a new file name. Existing metadata and text files are not replaced"
             )
         if kind == "bundle":
             if destination.suffix.lower() != ".mrax":

@@ -21,8 +21,8 @@ class NormalizedMetadata:
 
     Vendor-specific importers should translate scanner metadata into this schema before
     creating MRax :class:`Experiment` and :class:`DataSet` objects. The fields are limited
-    to concepts the internal factory understands; raw scanner dictionaries should remain
-    importer metadata; normalized concepts define the downstream model contract.
+    to concepts the internal factory understands. Raw scanner dictionaries should remain
+    importer metadata. Normalized concepts define the downstream model contract.
     """
 
     method_name: str = ""

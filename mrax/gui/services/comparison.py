@@ -1,4 +1,4 @@
-"""Read-only native-grid comparison planes; never apply or bypass a pipeline."""
+"""Read-only native-grid comparison planes. Never apply or bypass a pipeline."""
 
 from __future__ import annotations
 
@@ -185,7 +185,7 @@ def validate_comparison(workspace, raw, catalog):
 
 
 def _plane(workspace, source, navigation):
-    """Clone metadata only; render one plane from the chosen immutable buffer."""
+    """Clone metadata only. Render one plane from the chosen immutable buffer."""
     from .scene import render_overlay
 
     context = clone_workspace(workspace)

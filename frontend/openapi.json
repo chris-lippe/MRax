@@ -472,6 +472,17 @@
             "title": "Observed",
             "type": "array"
           },
+          "roi_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roi Name"
+          },
           "x": {
             "items": {
               "anyOf": [
@@ -3095,6 +3106,17 @@
             "title": "Coil Count",
             "type": "integer"
           },
+          "data_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Role"
+          },
           "diagnostics_count": {
             "default": 0,
             "title": "Diagnostics Count",
@@ -3285,6 +3307,11 @@
             },
             "title": "Models",
             "type": "array"
+          },
+          "non_imaging": {
+            "default": false,
+            "title": "Non Imaging",
+            "type": "boolean"
           },
           "pipeline": {
             "$ref": "#/components/schemas/PipelineInfo"

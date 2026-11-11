@@ -283,7 +283,7 @@ def reconstruction_catalog(workspace):
                 "insert_options": additions.get(kind, {}),
                 "available": reason is None,
                 "reason": reason,
-                "note": "No acquisition density weights are available; the NUFFT adjoint is unweighted."
+                "note": "No acquisition density weights are available. The NUFFT adjoint is unweighted."
                 if kind == "nufft"
                 and acquisition is not None
                 and acquisition.density is None

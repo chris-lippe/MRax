@@ -60,7 +60,7 @@ def _transpose(cotangent, values, *coefficients, configuration):
         result = ad.Zero(values.aval)
     else:
         opposite = configuration[:-1] + (not configuration[-1],)
-        # JAX uses a bilinear transpose for complex cotangents; conjugation
+        # JAX uses a bilinear transpose for complex cotangents. Conjugation
         # converts the mathematical Hermitian adjoint into that convention.
         result = jnp.conj(_nufft.bind(jnp.conj(cotangent), *coefficients,
                                     configuration=opposite))

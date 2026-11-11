@@ -69,7 +69,7 @@ def _validate_options(kind, options):
             if not valid:
                 raise ValueError(f"Invalid value for {key}")
         # Partial options inherit other fields from the target acquisition. Supply
-        # only dependent placeholders here; compile_plan validates the merged recipe.
+        # only dependent placeholders here. Compile_plan validates the merged recipe.
         validation = dict(options)
         if validation.get("output_product") == "frequency_hz":
             validation.setdefault("echo_spacing_seconds", 1.0)
@@ -184,7 +184,7 @@ def normalize_plan(value):
         if stage.get("enabled", True):
             order.append(_ORDER[kind])
     if len(names) != len(set(names)):
-        raise ValueError("Each reconstruction stage can occur once; replace its settings instead")
+        raise ValueError("Each reconstruction stage can occur once. Replace its settings instead")
     active = [s["kind"] for s in stages if s.get("enabled", True)]
     if sum(kind in SOLVERS for kind in active) != 1:
         raise ValueError("Keep exactly one Fourier, variational or NUFFT solver")
@@ -192,10 +192,10 @@ def normalize_plan(value):
         raise ValueError("Keep output geometry and coil combination stages")
     if order != sorted(order):
         raise ValueError(
-            "K-space corrections precede the solver; geometry and coil combination follow it"
+            "K-space corrections precede the solver. Geometry and coil combination follow it"
         )
     if "nufft" in active and "gridding" in active:
-        raise ValueError("NUFFT has its own interpolation; remove the gridding stage")
+        raise ValueError("NUFFT has its own interpolation. Remove the gridding stage")
     try:
         json.dumps(value, allow_nan=False)
     except (TypeError, ValueError) as error:

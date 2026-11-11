@@ -344,7 +344,7 @@ def center_crop_spatial(
     """Crop the last ``len(output_shape)`` axes of an image or coil-image stack.
 
     Use this after reconstructing on an oversampled grid. ``crop_offset=None`` performs a
-    centered crop; explicit offsets reproduce vendor cutoff windows or asymmetric grids.
+    centered crop. Explicit offsets reproduce vendor cutoff windows or asymmetric grids.
     """
 
     return _center_crop_lastn(jnp.asarray(image), output_shape, crop_offset)
@@ -359,7 +359,7 @@ def apply_regrid_apodization_correction(
 
     Apply this only when the gridding kernel matches the correction. For example, a
     vendor reconstruction using a Kaiser-Bessel convolution kernel can require this
-    image-domain correction; applying it to nearest-neighbor gridding is usually only a
+    image-domain correction. Applying it to nearest-neighbor gridding is usually only a
     diagnostic experiment.
     """
 
@@ -548,7 +548,7 @@ def prox_tv_chambolle(
 ) -> Array:
     """prox_{weight*TV}(x) via Chambolle's projection algorithm (2D TV on last two axes).
 
-    Works on batched arrays; TV is computed along the last two axes.
+    Works on batched arrays. TV is computed along the last two axes.
     """
 
     weight_f = jnp.asarray(weight, dtype=jnp.float32)
@@ -694,7 +694,7 @@ class MRIEncodingOperator:
         return positive + opposite * jnp.conj(phase)
 
     def forward(self, image: Array, *, image_has_coils: bool | None = None) -> Array:
-        """Encode image batches; a receiver axis is always explicitly requested."""
+        """Encode image batches. A receiver axis is always explicitly requested."""
         x = jnp.asarray(image)
         ndim = len(self.spatial_shape)
         if tuple(x.shape[-ndim:]) != self.spatial_shape:
@@ -722,7 +722,7 @@ class MRIEncodingOperator:
         self, kspace: Array, *, kspace_has_coils: bool | None = None,
         density_compensation: bool = False, normalize_sensitivities: bool = False,
     ) -> Array:
-        """Apply the true adjoint; compensation and SENSE normalization are opt-in."""
+        """Apply the true adjoint. Compensation and SENSE normalization are opt-in."""
         y = jnp.asarray(kspace)
         ndim = len(self.spatial_shape)
         if not self.is_non_cartesian:
@@ -864,7 +864,7 @@ def solve_variational(
     """Minimize a measured-sample mean squared error plus an image penalty.
 
     Sampling masks retain frame and receiver dimensions. Density compensation
-    only initializes the image; statistical likelihood weights are supplied
+    only initializes the image. Statistical likelihood weights are supplied
     separately through ``data_weights``. TV defaults to objective-aware FISTA
     with a certified proximal step. Explicit Adam with TV warns and smooths TV.
     Spatial grids can have one, two or three dimensions.
@@ -892,7 +892,7 @@ def solve_variational(
         name = "split_bregman"
     proximal = name in {"fista", "split_bregman"}
     if reg in {"tv", "l1"} and regularizer_weight and not proximal:
-        warnings.warn(f"{name} uses a smoothed {reg.upper()} penalty; select FISTA or split_bregman for exact proximal regularization",
+        warnings.warn(f"{name} uses a smoothed {reg.upper()} penalty. Select FISTA or split_bregman for exact proximal regularization",
                       UserWarning, stacklevel=2)
     op = build_operator(spatial_shape=spatial_shape, kspace=kspace,
         sensitivities=sensitivities, trajectory=trajectory, density=density,
@@ -1260,7 +1260,7 @@ def solve_model_based(
     """Directly reconstruct parameter maps from k-space via a chained model+encoding operator.
 
     Minimizes RMS-normalized mean squared encoding error plus field regularizers.
-    ``encoding_batch_size`` bounds frame-wise encoding workspace (default 32);
+    ``encoding_batch_size`` bounds frame-wise encoding workspace (default 32).
     ``None`` uses all frames at once. Temporal model/regularizer axes remain intact.
 
     Notes
@@ -1273,7 +1273,7 @@ def solve_model_based(
       support is supplied separately with ``object_support_mask``. Fourier encoding
       retains the full object signal across analysis ROI boundaries.
     - ``frame_mask`` (or ``auto_mask_nan_observables=True``) can drop frames with missing
-      per-frame observables; valid frames define the data term.
+      per-frame observables. Valid frames define the data term.
     - ``reference_image`` / ``reference_kspace`` can be used to model acquisitions where the
       signal model predicts a *relative* image series (e.g., Z-spectra). In that case the
       encoded prediction becomes :math:`A(reference\\_image \\cdot M(\\theta))`. When
@@ -1350,12 +1350,12 @@ def solve_model_based(
     true_tv = has_tv and selected in {"fista", "split_bregman"}
     if has_tv and not true_tv:
         import warnings
-        warnings.warn(f"{selected} uses smoothed TV; select FISTA or split_bregman for exact proximal TV", UserWarning, stacklevel=2)
+        warnings.warn(f"{selected} uses smoothed TV. Select FISTA or split_bregman for exact proximal TV", UserWarning, stacklevel=2)
         reg_terms = model.make_regularizer_terms(field_shape, regularizer_configs=regularizer_configs,
             regularizer_type=regularizer_type, reg_weights=regularizer_weights, smoothed_tv=True)
     if true_tv:
         if reference_kspace is not None:
-            raise ValueError("Joint reference estimation with exact TV is not yet supported; supply a fixed reference_image")
+            raise ValueError("Joint reference estimation with exact TV is not yet supported. Supply a fixed reference_image")
         if regularizer_prox is not None or any(np.any(np.asarray(v) != 0) for v in jax.tree.leaves(regularizer_weight)) or box_constraints is not None:
             raise ValueError("Exact field TV uses physical parameter bounds and cannot combine raw proximal penalties")
         if optimizer_base_factory is not None and optimizer_base_factory is not optax.sgd:
@@ -1408,7 +1408,7 @@ def solve_model_based(
     y = jnp.asarray(kspace)
     # A zero measurement is valid data. Missingness must be declared explicitly.
     if mask is not None and not np.all((np.asarray(mask) == 0) | (np.asarray(mask) == 1)):
-        raise ValueError("Model-based sampling masks must be binary; use data_weights for statistical weights")
+        raise ValueError("Model-based sampling masks must be binary. Use data_weights for statistical weights")
 
     op = build_operator(
         spatial_shape=spatial_shape,

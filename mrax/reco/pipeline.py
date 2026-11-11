@@ -1,7 +1,7 @@
 """Editable, vendor-independent reconstruction stage plans.
 
-Plans declaratively describe algorithms. Importers may suggest a plan;
-editing it preserves the acquired samples and their validity mask.
+Plans declaratively describe algorithms. Importers may suggest a plan.
+Editing it preserves the acquired samples and their validity mask.
 """
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ _ORDER = {"profile_inversion": -3, "shift": -2, "readout_regrid": -1, "epi_phase
 
 @dataclass(frozen=True)
 class ReconstructionStage:
-    """One named algorithm and explicit options; unknown names are rejected."""
+    """One named algorithm and explicit options. Unknown names are rejected."""
 
     kind: str
     options: Mapping[str, Any] = field(default_factory=dict)
@@ -94,7 +94,7 @@ class ReconstructionPipeline:
 
     Shift and partial-Fourier/gridding stages precede exactly one solver. Output
     formatting and coil combination follow it. Partial-Fourier values initialize
-    iterative solvers; the acquired support defines their data term.
+    iterative solvers. The acquired support defines their data term.
     """
 
     stages: tuple[ReconstructionStage, ...]
@@ -160,7 +160,7 @@ class ReconstructionPipeline:
         return cls(tuple(stages))
 
     def replace_stage(self, kind, *, replacement=None, **options):
-        """Return a modified plan; the original acquisition remains untouched."""
+        """Return a modified plan. The original acquisition remains untouched."""
         if kind not in {stage.kind for stage in self.stages}:
             raise ValueError(f"No reconstruction stage named {kind}")
         return type(self)(tuple(ReconstructionStage(replacement or kind, {**stage.options, **options})
@@ -173,7 +173,7 @@ class ReconstructionPipeline:
         if acquisition.kind == "sampled" and "gridding" not in names and "nufft" not in names:
             raise ValueError("Sampled acquisitions require an explicit gridding stage")
         if "nufft" in names and "gridding" in names:
-            raise ValueError("NUFFT uses its own interpolation; remove the gridding stage")
+            raise ValueError("NUFFT uses its own interpolation. Remove the gridding stage")
         if acquisition.kind == "cartesian" and "gridding" in names:
             raise ValueError("Cartesian acquisitions cannot use a sampled-data gridding stage")
         recipe = replace(acquisition.recipe, kspace_window=(), window_parameters=(), output_product="image", profile_inversion=False, readout_regrid=False, epi_phase_correction="none", image_shift=(), frame_image_shifts=(), partial_fourier="none")

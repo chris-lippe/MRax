@@ -753,7 +753,7 @@ def _apply_alignment(workspace, step, options, progress):
         try:
             state["data"] = reshape_frames_to_dims(data, state["dims"])
         except ValueError as error:
-            raise ValueError("Reconstruction output must match the experiment grid; keep its native output geometry") from error
+            raise ValueError("Reconstruction output must match the experiment grid. Keep its native output geometry") from error
         if component == "phase":
             state.update(unit="rad", model="identity")
         install(workspace, state)

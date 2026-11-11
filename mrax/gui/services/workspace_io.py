@@ -41,8 +41,7 @@ def save_workspace_folder(workspace, root):
     if not session.is_loaded:
         raise ValueError("Add an experiment before saving this study")
     # ISMRMRD images have at most four axes. Store larger processed buffers
-    # losslessly in the workflow archive instead of letting that writer skip them.
-    # Processing masks are workflow provenance, not reconstruction products.
+    # and processing masks losslessly in the workflow archive.
     portable = clone_workspace(workspace).session
     supplemental = {}
     for name, row in (portable.data or {}).get("experiments", {}).items():
@@ -166,7 +165,7 @@ def validate_workspace_replacement(path):
         ):
             raise ValueError("Invalid workspace manifest")
     except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
-        raise ValueError("Choose a new name; this destination is not an MRax workspace") from exc
+        raise ValueError("Choose a new name. This destination is not an MRax workspace") from exc
 
 
 def save_workspace_bundle(workspace, path, *, progress_callback=None, overwrite=False):

@@ -8,7 +8,7 @@ import numpy as np
 
 from mrax.data_struct.dimensions import reshape_dims_to_frames
 from mrax.gui.masks import mask_slice_for_display
-from mrax.gui.plotting import axis_coordinates, image_profile, profile_selection
+from mrax.gui.plotting import axis_coordinates, image_profile, profile_dimension, profile_selection
 from mrax.gui.registration import (
     apply_transform_to_image,
     inverse_transform,
@@ -269,9 +269,9 @@ def displayed_roi(workspace, roi, image, editable):
 def curve_for_workspace(workspace):
     session = workspace.session
     selected = session.roi(session.fit_settings.selected_roi) if session.rois else None
-    if selected is None or not session.experiment_dims:
+    if not session.experiment_dims:
         return None
-    if session.selected_experiment in workspace.pipelines:
+    if selected is not None and session.selected_experiment in workspace.pipelines:
         from .pipeline import project_roi
 
         selected = project_roi(workspace, selected)
@@ -280,20 +280,16 @@ def curve_for_workspace(workspace):
     if session.fit_settings.use_view_state_data:
         from .view_state import WorkspaceFitInputs
 
-        fitted_inputs = WorkspaceFitInputs(workspace)._visual_state_fit_kwargs(include_roi=True)
+        fitted_inputs = WorkspaceFitInputs(workspace)._visual_state_fit_kwargs(include_roi=selected is not None)
         experiment = fitted_inputs.get("input_experiment", experiment)
         selected = fitted_inputs.get("input_roi", selected)
-    dimension = workspace.plot_x_axis_key
-    if dimension == "auto" or dimension not in experiment.dims:
-        dimension = next(
-            (name for name in experiment.non_spatial_dim_names if name != "slice_package"),
-            experiment.spatial_dim_names[0],
-        )
+    dimension = profile_dimension(experiment, workspace.plot_x_axis_key, non_imaging=session.is_non_imaging)
     label, axis = axis_coordinates(
         experiment,
         dimension,
         session.active_indices,
         geometry=session.current_experiment.get("spatial_geometry"),
+        spectral=session.is_non_imaging,
     )
     data = (
         session.original_image_array if session.visual_state.show_original else session.image_array
@@ -324,7 +320,10 @@ def curve_for_workspace(workspace):
         ),
         None,
     )
-    if observable is None and dimension not in session.spatial_dim_names:
+    if observable is None and session.is_non_imaging:
+        observable = next(((key, value) for key, value in experiment.observables.items()
+                           if label in {key, f"{key} ({value.si_unit})"}), None)
+    if observable is None and not session.is_non_imaging and dimension not in session.spatial_dim_names:
         from mrax.gui.session import frame_axis_values
 
         frame_label, frame_axis = frame_axis_values(experiment)
@@ -338,4 +337,5 @@ def curve_for_workspace(workspace):
         "x_unit": getattr(observable[1], "si_unit", None) if observable else None,
         "included": included.tolist(),
         "dimension": dimension,
+        "roi_name": selected.name if selected is not None else None,
     }

@@ -14,7 +14,7 @@ This includes CPU fitting, reconstruction, analysis, common MRI I/O and MRax
 storage and workflow files. Use ``mrax[full]`` for specialized raw importers,
 SimpleITK registration, DIPY interoperability and plotting. Use ``mrax[gui]``
 for those scientific tools and the browser GUI, started with ``mrax-gui``.
-Built wheels include the frontend; Node is only needed for frontend development.
+Built wheels include the frontend. Node is needed only for frontend development.
 
 Compressed DICOM codecs are available through ``mrax[dicom-codecs]``.
 The optional ``mrax[denoise-external]`` denoisers have their own upstream

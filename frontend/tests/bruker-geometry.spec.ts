@@ -124,7 +124,7 @@ test('Bruker packages retain their anatomical planes through viewing and lazy re
     expect((await selected()).plane).toBe(plane);
     await compare.getByRole('button', { name: 'Experiment', exact: true }).click();
   }
-  await selectWorkflow(page, 'Segment', 'Create and edit ROIs');
+  await selectWorkflow(page, 'Segment');
   await page.getByRole('button', { name: 'Draw rectangle', exact: true }).click();
   const surface = page.getByTestId('roi-surface');
   const box = (await surface.boundingBox())!;

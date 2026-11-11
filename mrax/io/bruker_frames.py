@@ -85,7 +85,7 @@ def frame_parameter(visu: dict, key: str, width: int = 1, *, default=None) -> np
 
 
 def slice_frame_grid(visu: dict) -> tuple[np.ndarray, bool]:
-    """Return [non-spatial frame, slice] indices; descriptor zero varies fastest."""
+    """Return [non-spatial frame, slice] indices. Descriptor zero varies fastest."""
     count = int(visu.get("VisuCoreFrameCount", 1))
     groups = frame_group_entries(visu)
     slice_group = next(
@@ -146,7 +146,7 @@ def output_frame_grid(visu: dict, slice_package: int | None = None) -> tuple[np.
     packages = slice_packages(visu)
     if len(packages) > 1 and slice_package is None:
         raise ValueError(
-            "This Bruker reconstruction has multiple slice packages; select slice_package or import the study"
+            "This Bruker reconstruction has multiple slice packages. Select slice_package or import the study"
         )
     selected = 0 if slice_package is None else int(slice_package)
     if not 0 <= selected < len(packages):

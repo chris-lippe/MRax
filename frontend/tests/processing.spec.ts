@@ -1,3 +1,4 @@
+import { openControlGroup } from './ui';
 import { loadExample } from './ui';
 
 import { openRoiCoordinates } from './ui';
@@ -70,7 +71,8 @@ test('processing stays in one experiment and an editable pipeline preserves sour
   expect(await slice(w.id)).not.toBe(original);
   const denoise = w.pipeline.steps[0];
 
-  await selectWorkflow(page, 'Analyze', 'Time-series corrections');
+  await selectWorkflow(page, 'Analyze', 'Signal and time series');
+  await openControlGroup(page, 'Time-series corrections');
   await page.getByLabel('Time-series correction', { exact: true }).selectOption('baseline');
   await page.getByRole('button', { name: 'Apply baseline correction', exact: true }).click();
   await expect.poll(async () => (await opened(request))[0].pipeline.steps.length).toBe(2);

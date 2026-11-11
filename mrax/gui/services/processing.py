@@ -792,7 +792,7 @@ def apply_processing(workspace, options, progress):
         raise ValueError(method["unavailable"] if method else "Choose a processing method")
     if method["id"] not in FILTERS and {"scope", "indices", "plane_dims"} & options.keys():
         raise ValueError(
-            "Image/package scopes apply to denoising, not time-series or map calculations"
+            "Image/package scopes are available only for denoising"
         )
     parameters = _settings(method, options.get("parameters", {}))
     if method["id"] == "dti":
@@ -855,7 +855,7 @@ def apply_processing(workspace, options, progress):
             else np.isfinite(work_data)
         ) and not (key == "gaussian" and parameters.get("preserve_nan")):
             raise ValueError(
-                "This method needs finite input; use NaN-aware Gaussian for missing samples"
+                "This method needs finite input. Use NaN-aware Gaussian for missing samples"
             )
         estimation_mask = None
         if key in {"bm3d", "bm4d"} and parameters["sigma"] is None:

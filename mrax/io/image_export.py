@@ -39,7 +39,7 @@ def _image_layout(array, dims=None):
                 ]
                 candidates = repeats if len(repeats) == 1 else candidates
             if len(candidates) != 1:
-                raise ValueError("Ambiguous map dimensions; provide the map's explicit dimension names")
+                raise ValueError("Ambiguous map dimensions. Provide the map's explicit dimension names")
             names = list(candidates[0]) + spatial
         else:
             raise ValueError("Image dimensions do not match the exported array")
@@ -157,7 +157,7 @@ def _export_dicom_frame(path, volume, affine, unit, description, study_uid, fram
         raise ValueError("DICOM export requires a finite, nondegenerate affine")
     directions = lps[:3, :3] / spacing
     if not np.allclose(directions.T @ directions, np.eye(3), atol=1e-5):
-        raise ValueError("DICOM export requires orthogonal image axes; resample sheared geometry first")
+        raise ValueError("DICOM export requires orthogonal image axes. Resample sheared geometry first")
     lo, hi = float(np.min(xyz)), float(np.max(xyz))
     integer = np.all(xyz == np.rint(xyz))
     unsigned = integer and lo >= 0 and hi > 32767 and hi <= 65535

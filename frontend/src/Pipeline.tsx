@@ -270,11 +270,11 @@ export function Pipeline({
     matchingRun?.status === 'completed'
       ? 'Pipeline applied'
       : matchingRun?.status === 'failed'
-        ? 'Pipeline failed; previous data kept'
+        ? 'Pipeline failed. Previous data kept'
         : matchingRun?.status === 'cancelled'
-          ? 'Pipeline cancelled; previous data kept'
+          ? 'Pipeline cancelled. Previous data kept'
           : matchingRun?.status === 'stale'
-            ? 'Inputs changed; pipeline was not applied'
+            ? 'Inputs changed. Pipeline was not applied'
             : matchingRun?.status === 'cancelling'
               ? 'Cancelling pipeline'
               : currentStep
@@ -674,7 +674,7 @@ export function Pipeline({
                 {methods.map((method) => (
                   <option key={method.id} value={method.id} disabled={Boolean(method.unavailable)}>
                     {method.label}
-                    {method.unavailable ? ' — unavailable' : ''}
+                    {method.unavailable ? ' (unavailable)' : ''}
                   </option>
                 ))}
                 <option value="register">Registration</option>

@@ -14,7 +14,7 @@ def estimate_noise_whitener(noise, *, coil_axis=1, eigenvalue_floor=1e-6, covari
     All axes except ``coil_axis`` are independent noise observations. The default
     accepts (record, receiver, sample) arrays. Eigenvalues below the declared
     fraction of the largest are floored with a warning. Absolute amplitudes
-    become noise-normalized; different noise/imaging bandwidths need an explicit
+    become noise-normalized. Different noise/imaging bandwidths need an explicit
     scale correction supplied by the caller.
     """
     values = np.asarray(noise)
@@ -36,7 +36,7 @@ def estimate_noise_whitener(noise, *, coil_axis=1, eigenvalue_floor=1e-6, covari
         raise ValueError("Noise calibration has zero covariance")
     floor = maximum * eigenvalue_floor
     if np.any(eigenvalues < floor):
-        warnings.warn("Noise covariance is poorly conditioned; eigenvalues were floored",
+        warnings.warn("Noise covariance is poorly conditioned. Eigenvalues were floored",
                       RuntimeWarning, stacklevel=2)
     return (eigenvectors / np.sqrt(np.maximum(eigenvalues, floor))) @ eigenvectors.conj().T
 
@@ -61,7 +61,7 @@ def prewhiten_acquisition(acquisition, *, noise=None, noise_coil_axis=1, eigenva
     Apply W to externally supplied sensitivities as well. Calibrate sensitivities
     after whitening when using attached calibration data. Receiver-dependent
     sampling masks and statistical weights must match across mixed receivers.
-    Raw auxiliary roles use (record, receiver, sample) axes; prepared calibration
+    Raw auxiliary roles use (record, receiver, sample) axes. Prepared calibration
     grids and EPI navigators use receiver axes 0 and 2, respectively. Supply
     ``auxiliary_coil_axes`` for custom role layouts.
     """
@@ -80,7 +80,7 @@ def prewhiten_acquisition(acquisition, *, noise=None, noise_coil_axis=1, eigenva
                                        eigenvalue_floor=eigenvalue_floor, covariance_scale=covariance_scale)
     auxiliary = {}
     for name, values in acquisition.auxiliary_samples.items():
-        # Prepared calibration grids are C,*encoding; raw roles are record,C,N.
+        # Prepared calibration grids are C,*encoding. Raw roles are record,C,N.
         axis = (auxiliary_coil_axes or {}).get(name, {'calibration_grid': 0, 'epi_navigators': 2}.get(name, 1))
         auxiliary[name] = apply_receiver_transform(values, transform, coil_axis=axis)
     prepared = replace(acquisition,

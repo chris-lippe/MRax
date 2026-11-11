@@ -12,8 +12,8 @@ def pseudo_huber_loss(residual, weights, *, delta, group_size=1):
 
     ``delta`` is a positive cutoff in the RMS-scaled residual's units. With
     ``group_size > 1``, the whole group's weighted RMS determines its common
-    influence weight. The first dimension must contain consecutive groups;
-    other dimensions remain independent. Near zero, this agrees with weighted
+    influence weight. The first dimension must contain consecutive groups.
+    Other dimensions remain independent. Near zero, this agrees with weighted
     mean squared error. It approaches linear growth in the group's RMS for
     large residuals. The rationalized expression avoids cancellation at zero.
     """

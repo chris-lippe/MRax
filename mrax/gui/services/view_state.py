@@ -106,7 +106,7 @@ class ViewStateFitMixin:
         experiment = metadata.get("experiment")
         if selected is not None and experiment is not None and str(selected) != str(experiment):
             raise RuntimeError(
-                f"drift correction source is {experiment}; current experiment is {selected}"
+                f"drift correction source is {experiment}. Current experiment is {selected}"
             )
         corrected = np.asarray(result.get("corrected"))
         if tuple(corrected.shape) != tuple(np.asarray(self.session.image_array).shape):
@@ -166,7 +166,7 @@ class ViewStateFitMixin:
             reference = np.asarray(result["fixed"])
             transform = result["transform"]
         if selected is not None and source is not None and str(selected) != str(source):
-            raise RuntimeError(f"transform source is {source}; current experiment is {selected}")
+            raise RuntimeError(f"transform source is {source}. Current experiment is {selected}")
         return reference, transform
 
     def _visual_state_fit_roi(

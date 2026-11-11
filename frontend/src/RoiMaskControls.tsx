@@ -3,17 +3,16 @@ import type { AnalysisProps, DrawingProps } from './analysisTypes';
 import { NumberField } from './Controls';
 import { InspectorChoice, InspectorSection } from './InspectorSection';
 import { roiColor } from './scene';
-import type { WorkflowTask } from './WorkflowNav';
 
 export function RoiMaskControls({
   workspace: w,
   busy,
   action,
-  task,
+  mode,
   label,
   setLabel,
 }: Pick<AnalysisProps, 'workspace' | 'busy' | 'action'> &
-  Pick<DrawingProps, 'label' | 'setLabel'> & { task: WorkflowTask }) {
+  Pick<DrawingProps, 'label' | 'setLabel'> & { mode: 'labels' | 'volume' | 'combine' }) {
   const [targets, setTargets] = useState('');
   const [interpolation, setInterpolation] = useState('linear');
   const [extrapolation, setExtrapolation] = useState('none');
@@ -34,7 +33,7 @@ export function RoiMaskControls({
   const selectedSources = sources.filter((key) => w?.rois.some((r) => r.name === key));
   const labelNames = roi?.metadata.label_names as Record<string, string> | undefined;
 
-  if (task === 'label-edit')
+  if (mode === 'labels')
     return (
       <InspectorSection
         title="Mask labels"
@@ -97,19 +96,19 @@ export function RoiMaskControls({
       </InspectorSection>
     );
 
-  if (task === 'roi-volume')
+  if (mode === 'volume')
     return (
       <>
         <InspectorSection
           title="Expand across slices"
           icon="layers"
-          help="Expand along the current viewing plane's slice axis. Copy replaces target slices; interpolation preserves existing labelled voxels. Undo restores the previous mask."
+          help="Expand along the current viewing plane's slice axis. Copy replaces target slices. Interpolation preserves existing labelled voxels. Undo restores the previous mask."
         >
           <p className="control-note">
             Axis {axis} · current slice {(w?.indices[axis] ?? w?.z ?? 0) + 1} of {sliceCount}
           </p>
           <label>
-            Target slices (1 based; leave blank for all)
+            Target slices (1 based. Leave blank for all)
             <input
               aria-label="Target slices"
               placeholder="1, 2, 3"
@@ -182,7 +181,7 @@ export function RoiMaskControls({
         <InspectorSection
           title="Grow in 3D"
           icon="rois"
-          help="Grow into background voxels by Euclidean distance in voxel units. New voxels take the nearest label; existing labels are retained."
+          help="Grow into background voxels by Euclidean distance in voxel units. New voxels take the nearest label. Existing labels are retained."
         >
           <NumberField
             label="Growth (voxels)"
@@ -204,7 +203,6 @@ export function RoiMaskControls({
       </>
     );
 
-  if (task !== 'roi-combine') return null;
   return (
     <InspectorSection
       title="Combined mask"
@@ -287,6 +285,32 @@ export function RoiMaskControls({
         >
           {output === 'binary' ? 'Create joint binary ROI' : 'Create indexed label mask'}
         </button>
+        <div className="button-row">
+          <button
+            className="secondary"
+            disabled={!roi || !selectedSources.some((name) => name !== roi.name)}
+            onClick={() =>
+              void action('roi.combine', {
+                name: roi?.name,
+                others: selectedSources.filter((name) => name !== roi?.name),
+              })
+            }
+          >
+            Merge into selected ROI
+          </button>
+          <button
+            className="secondary"
+            disabled={!roi || !selectedSources.some((name) => name !== roi.name)}
+            onClick={() =>
+              void action('roi.subtract', {
+                name: roi?.name,
+                others: selectedSources.filter((name) => name !== roi?.name),
+              })
+            }
+          >
+            Subtract
+          </button>
+        </div>
       </fieldset>
     </InspectorSection>
   );

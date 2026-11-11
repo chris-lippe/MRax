@@ -12,11 +12,11 @@ from scipy.sparse.csgraph import connected_components, minimum_spanning_tree
 def quality_guided_unwrap(phase, *, spatial_ndim, mask=None, weights=None, period=2 * np.pi):
     """Unwrap valid spatial neighbours within each independent leading index.
 
-    A curvature reliability measure ranks edges; a maximum-reliability spanning
+    A curvature reliability measure ranks edges. A maximum-reliability spanning
     forest chooses integration paths. Each connected component starts at its
     strongest voxel with a principal-valued phase anchor. Disconnected components
     retain an independent integer-period ambiguity. Sparse graph construction and
-    sorting run on the CPU; the result is returned in the current JAX context.
+    sorting run on the CPU. The result is returned in the current JAX context.
     """
     values = np.asarray(phase)
     if np.iscomplexobj(values) or spatial_ndim not in (1, 2, 3) or values.ndim < spatial_ndim or not np.isfinite(period) or period <= 0:

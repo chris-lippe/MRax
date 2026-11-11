@@ -212,7 +212,7 @@ def reconstruct_acquisition(
 
     FFT, variational and signal-model reconstruction share the same measured
     samples, encoding grid, calibration convention and output recipe. Completion
-    supplies initialization; iterative objectives retain the acquired support.
+    supplies initialization. Iterative objectives retain the acquired support.
     """
     acquisition.require_prepared()
     name = method.lower().replace("-", "_")

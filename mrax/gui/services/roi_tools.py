@@ -160,7 +160,7 @@ def _compose_rois(workspace, options):
         covered = np.asarray(source.mask) != 0
         if mode == "indexed":
             if overlap == "error" and np.any(covered & (mask != 0)):
-                raise ValueError("Source ROIs overlap; choose a priority rule")
+                raise ValueError("Source ROIs overlap. Choose a priority rule")
             if overlap == "first":
                 covered &= mask == 0
         mask[covered] = index if mode == "indexed" else 1
@@ -288,7 +288,7 @@ def _native_roi_command(workspace, action, options, image=None):
         plane, metadata = geometry_mask(session, options, image)
         label = int(options.get("label", 1))
         if not 1 <= label <= 65535:
-            raise ValueError("Labels must be between 1 and 65535; zero is background")
+            raise ValueError("Labels must be between 1 and 65535. Zero is background")
         remember_rois(workspace)
         covered = _embed(session, plane)
         if action == "draw":

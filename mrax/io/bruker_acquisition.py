@@ -33,7 +33,7 @@ def _series(value, count, default=0):
 def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), profiles=None, slice_package=None):
     """Read prepared samples and geometry for explicit reconstruction.
 
-    Calibration and source loop interpretation are resolved here; image reconstruction only
+    Calibration and source loop interpretation are resolved here. Image reconstruction only
     consumes the returned vendor-independent acquisition contract.
     """
     from .bruker_images import (
@@ -169,8 +169,7 @@ def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), pro
     if sorting["ignored_scan_count"]:
         # A reversible raw import is still possible when a reconstruction graph
         # describes additional profile groups with unresolved roles.
-        # Preserve every ADC record rather than discarding it or labelling an
-        # approximate inverse-FID transform as measured Fourier data.
+        # Preserve every ADC record for profile groups with unresolved roles.
         return AcquisitionData(records.samples, (records.samples.shape[-1],),
             ("readout_sample",), domain="adc", geometry=geometry, auxiliary_samples=auxiliary), {
             "raw_status": "decoded", "storage_profile": records.profile,

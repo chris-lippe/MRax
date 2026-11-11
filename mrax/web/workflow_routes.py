@@ -81,7 +81,7 @@ def register_workflow_routes(app, get_record, check_revision):
     def check_workflow(key, revision):
         row = item(key)
         if row["revision"] != revision:
-            raise HTTPException(409, "The workflow changed; reopen it before continuing")
+            raise HTTPException(409, "The workflow changed. Reopen it before continuing")
         return row
 
     def add(document, *, suggested=None, origin=None):
