@@ -553,6 +553,17 @@
       },
       "ExperimentInfo": {
         "properties": {
+          "exp_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exp Type"
+          },
           "frames": {
             "title": "Frames",
             "type": "integer"
@@ -1684,6 +1695,34 @@
         "title": "PreviewResult",
         "type": "object"
       },
+      "ProcessingAxisInfo": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "spatial": {
+            "title": "Spatial",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "size",
+          "spatial"
+        ],
+        "title": "ProcessingAxisInfo",
+        "type": "object"
+      },
       "ProcessingCatalog": {
         "properties": {
           "axes": {
@@ -1691,6 +1730,14 @@
               "type": "string"
             },
             "title": "Axes",
+            "type": "array"
+          },
+          "axis_info": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ProcessingAxisInfo"
+            },
+            "title": "Axis Info",
             "type": "array"
           },
           "history": {
@@ -4960,6 +5007,32 @@
             "schema": {
               "title": "Key",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "input_source",
+            "required": false,
+            "schema": {
+              "default": "image",
+              "title": "Input Source",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "package",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Package"
             }
           }
         ],

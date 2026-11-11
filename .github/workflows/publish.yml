@@ -47,6 +47,7 @@ jobs:
         run: |
           npx playwright install --with-deps chromium firefox webkit
           npm test
+          npm run test:cross-browser
       - name: Build and inspect distribution
         run: |
           python -m build

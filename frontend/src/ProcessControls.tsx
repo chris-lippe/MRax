@@ -21,6 +21,9 @@ type Draft = {
   limited?: boolean;
   rois?: string[];
   noiseRois?: string[] | null;
+  scope?: 'image' | 'package' | 'dataset';
+  indices?: Record<string, number>;
+  planeDims?: string[];
 };
 
 const choiceLabels: Record<string, string> = {
@@ -59,14 +62,6 @@ const methodLabels: Record<ProcessingSection, string> = {
   analyze: 'Map calculation',
 };
 
-function axisGroups(axes: string[], count: number): string[][] {
-  if (!count) return [[]];
-  return axes.flatMap((name, index) =>
-    axisGroups(axes.slice(index + 1), count - 1).map((tail) => [name, ...tail]),
-  );
-}
-const axisKey = (axes: string[]) => JSON.stringify([...axes].sort());
-
 export function ProcessControls({
   workspace: w,
   busy,
@@ -83,7 +78,6 @@ export function ProcessControls({
   const [error, setError] = useState('');
   const axesHelpId = useId();
   const context = JSON.stringify([w?.id, w?.experiment, section]);
-  const requestKey = JSON.stringify([w?.id, w?.experiment, w?.revision]);
   const editing =
     editingStep?.kind === 'process' &&
     (editingStep.family === section ||
@@ -109,17 +103,34 @@ export function ProcessControls({
         limited: options.roi_names !== null && options.roi_names !== undefined,
         rois: (options.roi_names as string[]) ?? [],
         noiseRois: (options.noise_roi_names as string[] | null) ?? null,
+        scope: (options.scope as Draft['scope']) ?? 'dataset',
+        indices: (options.indices as Record<string, number>) ?? {},
+        planeDims: options.plane_dims as string[] | undefined,
       },
     }));
   }, [context, editOptions, editKey]);
   const draft = drafts[context] ?? {};
+  const targetIndices = editing && draft.indices ? draft.indices : (w?.indices ?? {});
+  const targetPackage = targetIndices.slice_package ?? w?.indices.slice_package;
+  const requestedSource = draft.source === 'view' ? 'image' : (draft.source ?? 'image');
+  const requestKey = JSON.stringify([
+    w?.id,
+    w?.experiment,
+    w?.revision,
+    requestedSource,
+    targetPackage,
+    w?.plane,
+    w?.plane_dims,
+  ]);
   const methodLabel = methodLabels[section];
   const catalog = loaded?.key === requestKey ? loaded.value : null;
   useEffect(() => {
     let stopped = false;
     setError('');
     if (w?.loaded && active)
-      void api<Catalog>(`/api/workspaces/${w.id}/processing`)
+      void api<Catalog>(
+        `/api/workspaces/${w.id}/processing?input_source=${encodeURIComponent(requestedSource)}${targetPackage === undefined ? '' : '&package=' + targetPackage}`,
+      )
         .then((value) => {
           if (!stopped) setLoaded({ key: requestKey, value });
         })
@@ -129,7 +140,16 @@ export function ProcessControls({
     return () => {
       stopped = true;
     };
-  }, [w?.id, w?.experiment, w?.revision, w?.loaded, requestKey, active]);
+  }, [
+    w?.id,
+    w?.experiment,
+    w?.revision,
+    w?.loaded,
+    requestKey,
+    requestedSource,
+    targetPackage,
+    active,
+  ]);
   const update = (patch: Partial<Draft>) =>
     setDrafts((previous) => ({ ...previous, [context]: { ...previous[context], ...patch } }));
   const groups: string[] = [processingGroups[section]];
@@ -140,23 +160,53 @@ export function ProcessControls({
     draft.source !== 'view' && catalog?.sources.some((s) => s.id === draft.source)
       ? draft.source!
       : 'image';
-  const inputAxes = source.startsWith('map:')
-    ? (catalog?.spatial_axes ?? [])
-    : (catalog?.axes ?? []);
+  const inputAxes = catalog?.axis_info.length
+    ? catalog.axis_info.map((axis) => axis.name)
+    : source.startsWith('map:')
+      ? (catalog?.spatial_axes ?? [])
+      : (catalog?.axes ?? []);
   const seriesAxes = source.startsWith('map:') ? [] : (catalog?.series_axes ?? []);
   const axis = draft.axis && seriesAxes.includes(draft.axis) ? draft.axis : (seriesAxes[0] ?? '');
+  const batchScope = w?.dimensions.slice_package ? 'package' : 'dataset';
+  const scope = draft.scope ?? batchScope;
+  const planeDims = (editing ? draft.planeDims : undefined) ?? w?.plane_dims ?? [];
+  const availableAxes =
+    scope === 'image' && method?.axes === 'filter'
+      ? inputAxes.filter((name) => planeDims.includes(name))
+      : inputAxes;
+  const axisInfo = Object.fromEntries(catalog?.axis_info.map((axis) => [axis.name, axis]) ?? []);
   const axes = method
     ? (
         draft.axes?.[method.id] ??
         (method.id === 'bm3d' ? w?.plane_dims : catalog?.spatial_axes) ??
         []
-      ).filter((name) => inputAxes.includes(name))
+      ).filter((name) => availableAxes.includes(name))
     : [];
-  const axisChoices = axisCount ? axisGroups(inputAxes, axisCount) : [];
-  const independentAxes = (
-    source.startsWith('map:') ? inputAxes : Object.keys(w?.dimensions ?? {})
-  ).filter((name) => !axes.includes(name));
-  const axisLabel = axisCount === 2 ? 'Denoising plane (2D)' : 'Denoising block (3D)';
+  const independentAxes = inputAxes.filter((name) => !axes.includes(name));
+  const maxAxes = axisCount ?? 3;
+  const fixedNames =
+    scope === 'image'
+      ? [
+          ...inputAxes.filter((name) => !planeDims.includes(name)),
+          ...(w?.dimensions.slice_package ? ['slice_package'] : []),
+        ]
+      : scope === 'package'
+        ? ['slice_package']
+        : [];
+  const selectedIndices = Object.fromEntries(
+    fixedNames.map((name) => [name, targetIndices[name] ?? 0]),
+  );
+  const targetLabel = fixedNames
+    .map((name) =>
+      name === 'slice_package'
+        ? `Package ${selectedIndices[name] + 1}`
+        : `${axisInfo[name]?.label ?? name}${axisInfo[name]?.spatial ? ' slice' : ''} ${selectedIndices[name] + 1}`,
+    )
+    .join(' · ');
+  const scopeOptions =
+    method?.axes === 'filter'
+      ? { scope, indices: selectedIndices, plane_dims: scope === 'image' ? planeDims : undefined }
+      : {};
   const reference = draft.reference ?? w?.experiment ?? '';
   const referenceCount = w?.experiment_catalog.find((e) => e.name === reference)?.frames ?? 1;
   const rois =
@@ -168,8 +218,8 @@ export function ProcessControls({
   const noiseRois = draft.noiseRois ?? null;
   const unavailable =
     method?.unavailable ??
-    (axisCount && inputAxes.length < axisCount
-      ? `${method?.label} requires ${axisCount} data dimensions; this input has ${inputAxes.length}.`
+    (axisCount && availableAxes.length < axisCount
+      ? `${method?.label} requires ${axisCount} filter dimensions. ${scope === 'image' ? 'Choose the active slice package or whole dataset to use a 3D block.' : 'This input has too few dimensions.'}`
       : (method?.axes === 'series' || method?.reference === 'series') && !seriesAxes.length
         ? 'Choose image data with an acquisition series.'
         : null);
@@ -264,6 +314,7 @@ export function ProcessControls({
       !primary(index) && !['noise_model', 'noise_coils'].includes(method!.fields[index].key),
   );
   const noiseOptions = {
+    ...scopeOptions,
     method: method?.id,
     input: source,
     component: draft.component ?? 'auto',
@@ -282,6 +333,7 @@ export function ProcessControls({
           event.preventDefault();
           if (!method || invalid) return;
           void run('process', {
+            ...scopeOptions,
             method: method.id,
             input: source,
             component: draft.component ?? 'auto',
@@ -383,77 +435,89 @@ export function ProcessControls({
             >
               {method?.axes === 'filter' && (
                 <fieldset className="processing-axes">
-                  <legend>{axisCount ? axisLabel : 'Filter dimensions'}</legend>
-                  {axisCount ? (
+                  <legend>Filter dimensions{axisCount ? ` · select ${axisCount}` : ''}</legend>
+                  <label>
+                    Apply to
                     <select
-                      aria-label={axisLabel}
-                      aria-describedby={axesHelpId}
-                      value={axes.length === axisCount ? axisKey(axes) : ''}
-                      onChange={(event) =>
+                      aria-label="Denoising scope"
+                      value={scope}
+                      onChange={(event) => {
+                        const next = event.target.value as Draft['scope'];
                         update({
+                          scope: next,
+                          indices: undefined,
+                          planeDims: undefined,
                           axes: {
                             ...draft.axes,
-                            [method.id]: JSON.parse(event.target.value) as string[],
+                            [method.id]:
+                              (next === 'image' || method.id === 'bm3d'
+                                ? w?.plane_dims
+                                : catalog?.spatial_axes) ?? [],
                           },
-                        })
-                      }
+                        });
+                      }}
                     >
-                      <option value="" disabled>
-                        Choose {axisCount} dimensions
+                      <option value="image">Viewed image (current frame and slice)</option>
+                      <option value={batchScope}>
+                        {batchScope === 'package' ? 'Active slice package' : 'Whole dataset'}
                       </option>
-                      {[true, false].map((spatial) => (
-                        <optgroup
-                          label={spatial ? 'Spatial dimensions' : 'Other dimension combinations'}
-                          key={String(spatial)}
-                        >
-                          {axisChoices
-                            .filter(
-                              (choice) =>
-                                choice.every((name) => catalog?.spatial_axes.includes(name)) ===
-                                spatial,
-                            )
-                            .map((choice) => (
-                              <option key={axisKey(choice)} value={axisKey(choice)}>
-                                {choice
-                                  .map((name) => `${name} (${w?.dimensions[name] ?? 1})`)
-                                  .join(' × ')}
-                              </option>
-                            ))}
-                        </optgroup>
-                      ))}
+                      {scope === 'dataset' && batchScope === 'package' && (
+                        <option value="dataset">Whole dataset (all packages)</option>
+                      )}
                     </select>
-                  ) : (
-                    <div className="axis-options">
-                      {inputAxes.map((name) => (
-                        <label className="check-label" key={name}>
-                          <input
-                            type="checkbox"
-                            aria-label={`Filter axis ${name}`}
-                            checked={axes.includes(name)}
-                            disabled={!axes.includes(name) && axes.length >= 3}
-                            onChange={(event) =>
-                              update({
-                                axes: {
-                                  ...draft.axes,
-                                  [method.id]: event.target.checked
-                                    ? [...axes, name]
-                                    : axes.filter((n) => n !== name),
-                                },
-                              })
-                            }
-                          />
-                          {name} ({w?.dimensions[name] ?? 1})
-                        </label>
-                      ))}
-                    </div>
+                  </label>
+                  {targetLabel && (
+                    <p className="control-note" aria-label="Denoising target">
+                      {targetLabel}
+                    </p>
                   )}
+                  {editing && scope !== 'dataset' && (
+                    <button
+                      type="button"
+                      className="quiet"
+                      onClick={() => update({ indices: undefined, planeDims: undefined })}
+                    >
+                      Use current selection
+                    </button>
+                  )}
+                  <div className="axis-options">
+                    {inputAxes.map((name) => (
+                      <label className="check-label" key={name}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Filter axis ${axisInfo[name]?.label ?? name}`}
+                          aria-describedby={axesHelpId}
+                          title={`Stored data dimension: ${name}`}
+                          checked={axes.includes(name)}
+                          disabled={
+                            !axes.includes(name) &&
+                            (axes.length >= maxAxes || !availableAxes.includes(name))
+                          }
+                          onChange={(event) =>
+                            update({
+                              axes: {
+                                ...draft.axes,
+                                [method.id]: event.target.checked
+                                  ? [...axes, name]
+                                  : axes.filter((n) => n !== name),
+                              },
+                            })
+                          }
+                        />
+                        {axisInfo[name]?.label ?? name} (
+                        {axisInfo[name]?.size ?? w?.dimensions[name] ?? 1})
+                      </label>
+                    ))}
+                  </div>
                   <p className="control-note" id={axesHelpId}>
                     {axisCount
                       ? `${method.label.split(' ')[0]} denoises one ${axisCount === 2 ? '2D plane' : '3D block'} at a time. `
                       : 'Choose one to three data dimensions to filter jointly. '}
-                    {independentAxes.length
-                      ? `Processed independently: ${independentAxes.map((name) => `${name} (${w?.dimensions[name] ?? 1})`).join(', ')}.`
-                      : 'The selected dimensions cover the entire input.'}
+                    {scope === 'image'
+                      ? 'Only this image is changed; other frames and slices are retained.'
+                      : independentAxes.length
+                        ? `Processed sequentially: ${independentAxes.map((name) => `${axisInfo[name]?.label ?? name} (${axisInfo[name]?.size ?? w?.dimensions[name] ?? 1})`).join(', ')}.`
+                        : 'The selected dimensions cover the entire input.'}
                   </p>
                 </fieldset>
               )}

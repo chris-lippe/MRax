@@ -106,10 +106,20 @@ def estimate_input(data, dims, axes, parameters, mask=None):
 def preview_noise(workspace, options):
     from .pipeline import _evaluate, current_pipeline, install
     from .processing import _settings, _source, processing_methods
+    from .processing_scope import freeze_scope, region, target_key
+    from .view_data import scalar_component
 
     if options.get("method") not in {"bm3d", "bm4d"}:
         raise ValueError("Choose BM3D or BM4D before estimating noise")
     work = clone_workspace(workspace, readonly_arrays=True)
+    scope_dims = work.session.experiment_dims
+    if str(options.get("input", "image")).startswith("map:"):
+        scope_dims = {
+            name: size for name, size in scope_dims.items() if name in work.session.roi_dim_names
+        }
+    elif options.get("input") in {"original", "reconstruction"} and current_pipeline(work):
+        scope_dims = current_pipeline(work)["source"]["dims"]
+    options = freeze_scope(work.session, copy.deepcopy(options), scope_dims)
     pipeline = current_pipeline(work)
     # Match the input to the replacement step, rather than estimating from an
     # already denoised output. Preceding steps run only on an explicit preview.
@@ -119,7 +129,12 @@ def preview_noise(workspace, options):
             (
                 i
                 for i, s in enumerate(pipeline["steps"])
-                if s["id"] == requested or (not requested and s["family"] == "denoise")
+                if s["id"] == requested
+                or (
+                    not requested
+                    and s["family"] == "denoise"
+                    and target_key(s["options"]) == target_key(options)
+                )
             ),
             len(pipeline["steps"]),
         )
@@ -129,8 +144,11 @@ def preview_noise(workspace, options):
             _evaluate(work, lambda *_args: None)
     method = next(m for m in processing_methods(work.session) if m["id"] == options["method"])
     parameters = _settings(method, options.get("parameters", {}))
-    data, dims, *_ = _source(
-        work, str(options.get("input", "image")), options.get("component", "auto")
+    partial = options.get("scope") in {"image", "package"}
+    data, dims, _observables, _model, _unit, geometry, _rois = _source(
+        work,
+        str(options.get("input", "image")),
+        "auto" if partial else options.get("component", "auto"),
     )
     axes = options.get("axes", list(work.session.spatial_dim_names))
     required = 2 if method["id"] == "bm3d" else 3
@@ -142,5 +160,12 @@ def preview_noise(workspace, options):
     ):
         raise ValueError(f"{method['id'].upper()} needs {required} distinct filter axes")
     mask = noise_mask(work, options, dims, data.shape)
-    result = estimate_input(data, dims, axes, parameters, mask)
+    selection = region(work.session, options, dims, geometry)
+    data = data[selection]
+    if partial and options.get("component", "auto") != "auto":
+        data = scalar_component(data, options["component"])
+    scoped_dims = dict(zip(dims, data.shape))
+    result = estimate_input(
+        data, scoped_dims, axes, parameters, None if mask is None else mask[selection]
+    )
     return copy.deepcopy(result)

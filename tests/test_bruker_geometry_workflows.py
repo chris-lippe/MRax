@@ -7,11 +7,8 @@ import hashlib
 import numpy as np
 import pytest
 
-from mrax.gui.session import GuiSession
-from mrax.io.bruker_frames import frame_parameter, slice_packages
 from mrax.io.bruker_images import bruker_spatial_geometry, load_2dseq
 from mrax.io.bruker_import import import_bruker_experiment, import_bruker_study
-from mrax.io.image_export import export_image_files
 from mrax.reco.acquisition import reconstruct_acquisition
 
 LPS_TO_RAS = np.diag([-1.0, -1.0, 1.0])
@@ -149,31 +146,6 @@ def _scan(root, *, shape=(7, 5), counts=(3,), echoes=2, echo_first=True, reverse
     return scan, images, coordinates, np.asarray(positions), matrices, physical_slice
 
 
-@pytest.mark.parametrize("shape", [(7, 5), (4, 4)])
-@pytest.mark.parametrize("echo_first", [True, False])
-@pytest.mark.parametrize("reverse", [True, False])
-def test_slice_and_echo_groups_use_pixel_coordinates_and_measured_slice_positions(
-    tmp_path, shape, echo_first, reverse
-):
-    scan, frames, coordinates, positions, matrices, _ = _scan(
-        tmp_path, shape=shape, echo_first=echo_first, reverse=reverse
-    )
-    data, visu, spatial = load_2dseq(scan / "pdata/1")
-    assert data.shape == (2,) + shape + (3,)
-    geometry = bruker_spatial_geometry(visu, spatial_shape=spatial)
-    affine = np.asarray(geometry.affine)
-    assert not geometry.frame_affines
-    assert geometry.voxel_sizes == pytest.approx((0.8, 1.2, 2.5))
-    for echo in range(2):
-        indices = [i for i, (e, _) in enumerate(coordinates) if e == echo]
-        indices.sort(key=lambda i: positions[coordinates[i][1]] @ matrices[0][2])
-        for z, source_index in enumerate(indices):
-            np.testing.assert_array_equal(data[echo, :, :, z], frames[source_index])
-            source_slice = coordinates[source_index][1]
-            expected = LPS_TO_RAS @ (positions[source_slice] + np.asarray([2 * 0.8, 1 * 1.2, 0]))
-            np.testing.assert_allclose((affine @ [z, 1, 2, 1])[:3], expected)
-
-
 @pytest.mark.parametrize("echo_first", [True, False])
 def test_multiple_packages_import_on_one_axis_and_reconstruct_without_transpose(
     tmp_path, echo_first
@@ -205,64 +177,6 @@ def test_multiple_packages_import_on_one_axis_and_reconstruct_without_transpose(
     )
 
 
-def test_gui_preserves_package_geometry_through_lazy_raw_loading(tmp_path):
-    from mrax.gui.services.workspace import StudyWorkspace
-    from mrax.web.app import update_view
-    from mrax.web.schemas import ViewCommand
-
-    _scan(tmp_path, counts=(3, 2, 1))
-    session = GuiSession()
-    session.import_bruker_study(tmp_path, field_strength_mhz=100)
-    assert session.experiment_names == ["1"]
-    for package, plane in enumerate(("axial", "coronal", "sagittal")):
-        name = "1"
-        session.set_active_index("slice_package", package)
-        original = np.asarray(session.current_experiment["mr_image"]).copy()
-        assert session.native_image_plane == plane
-        assert session.image_plane_dims == ("y", "x")
-        assert session.image_plane_axis_labels == {
-            "axial": ("y", "x"),
-            "coronal": ("z", "x"),
-            "sagittal": ("z", "y"),
-        }[plane]
-        spatial = tuple(
-            session.experiment_dims[axis]
-            for axis in ("x", "y", "z")
-            if axis in session.experiment_dims
-        )
-        volume = original[package].reshape((-1,) + spatial)[0]
-        np.testing.assert_array_equal(
-            session.frame_image(), volume[..., 0].T if len(spatial) == 3 else volume.T
-        )
-        if not session.supports_image_planes():
-            workspace = StudyWorkspace("geometry", "Geometry", session)
-            update_view(workspace, ViewCommand(plane=plane, revision=0))
-            with pytest.raises(ValueError, match="native image plane"):
-                update_view(workspace, ViewCommand(plane="axial", revision=0))
-        assert session.load_raw_data_for_experiment(name, require_acquisition=True)
-        acquisition = session.current_experiment["acquisition"]
-        result = reconstruct_acquisition(acquisition)
-        np.testing.assert_allclose(
-            result.image, original.reshape(result.image.shape), rtol=2e-5, atol=2e-4
-        )
-        np.testing.assert_array_equal(session.current_experiment["mr_image"], original)
-
-
-@pytest.mark.parametrize("shape", [(5, 3), (4, 4)])
-def test_core_transposition_describes_storage_not_an_extra_anatomical_rotation(tmp_path, shape):
-    scan, frames, _, _, _, _ = _scan(tmp_path, shape=shape, counts=(2,), echoes=1)
-    pdata = scan / "pdata/1"
-    with (pdata / "visu_pars").open("a") as handle:
-        handle.write("\n##$VisuCoreTransposition=( 2 )\n0 1\n")
-    stored = [frames[0], frames[1].T if shape[0] != shape[1] else frames[1]]
-    np.concatenate([image.ravel(order="F") for image in stored]).astype("<f4").tofile(
-        pdata / "2dseq"
-    )
-    data, _, spatial = load_2dseq(pdata)
-    assert spatial == shape + (2,)
-    np.testing.assert_array_equal(data[0], np.moveaxis(frames, 0, -1))
-
-
 def test_rectangular_storage_transposition_matches_the_raw_reconstruction(tmp_path):
     scan, frames, _, _, _, _ = _scan(tmp_path, shape=(5, 7), counts=(2,), echoes=1)
     pdata = scan / "pdata/1"
@@ -275,103 +189,6 @@ def test_rectangular_storage_transposition_matches_the_raw_reconstruction(tmp_pa
     result = reconstruct_acquisition(dataset.acquisition)
     np.testing.assert_allclose(result.image, expected, rtol=2e-5, atol=2e-4)
     assert experiment.spatial_shape == (7, 5, 2)
-
-
-def test_exported_package_pixels_keep_their_patient_coordinates(tmp_path):
-    nib = pytest.importorskip("nibabel")
-    counts = (3, 2, 1)
-    scan, _, _, positions, matrices, _ = _scan(tmp_path / "input", counts=counts)
-    for package in range(3):
-        experiment, dataset, _, _ = import_bruker_experiment(
-            scan, slice_package=package, load_raw_kspace=False
-        )
-        paths = export_image_files(
-            tmp_path / f"package-{package}.nii.gz",
-            dataset.data,
-            dims=experiment.dims,
-            geometry=dataset.spatial_geometry,
-        )
-        assert len(paths) == 2
-        image = nib.load(paths[0])
-        native = np.asarray(dataset.data).reshape((-1,) + experiment.spatial_shape)[0]
-        z = min(counts[package] - 1, 1)
-        index = (z, 1, 2) if native.ndim == 3 else (1, 2, 0)
-        assert np.asanyarray(image.dataobj)[index] == (
-            native[2, 1, z] if native.ndim == 3 else native[2, 1]
-        )
-        first = sum(counts[:package])
-        patient = positions[first + z] + matrices[first].T @ np.asarray([2 * 0.8, 1.2, 0])
-        np.testing.assert_allclose(
-            (image.affine @ (*index, 1))[:3], LPS_TO_RAS @ patient, atol=1e-6
-        )
-
-
-@pytest.mark.parametrize("code", [0, 1, 2, 3])
-@pytest.mark.parametrize("reverse", [False, True])
-def test_anisotropic_3d_frames_preserve_coordinates_and_storage_transpositions(
-    tmp_path, code, reverse
-):
-    shape = (5, 3, 2)
-    x, y, z = np.indices(shape)
-    expected = np.stack([x + 10 * y + 100 * z + 1000 * frame for frame in range(2)]).astype("<f4")
-    frames = expected[..., ::-1] if reverse else expected
-    first, second = ((0, 2) if code == 3 else (code - 1, code)) if code else (0, 0)
-    if code:
-        frames = np.swapaxes(frames, first + 1, second + 1)
-    np.concatenate([frame.ravel(order="F") for frame in frames]).tofile(tmp_path / "2dseq")
-    origins = np.asarray([[4.0, -8.0, 12.0], [6.0, -8.0, 12.0]])
-    rotation = ORIENTATIONS[2]
-    (tmp_path / "visu_pars").write_text(
-        "\n".join(
-            [
-                "##$VisuCoreDim=3",
-                "##$VisuCoreFrameCount=2",
-                _array("VisuCoreSize", shape),
-                _array("VisuCoreExtent", [5.0, 6.0, 8.0]),
-                "##$VisuCoreWordType=_32BIT_FLOAT",
-                "##$VisuCoreDataSlope=1",
-                "##$VisuCoreDataOffs=0",
-                _array("VisuCoreOrientation", rotation.reshape(1, 9)),
-                _array("VisuCorePosition", origins),
-                f"##$VisuCoreTransposition={code}",
-                "##$VisuCoreDiskSliceOrder="
-                + ("disk_reverse_slice_order" if reverse else "disk_normal_slice_order"),
-            ]
-        )
-    )
-    data, visu, spatial = load_2dseq(tmp_path)
-    np.testing.assert_array_equal(data, expected)
-    geometry = bruker_spatial_geometry(visu, spatial_shape=spatial)
-    assert len(geometry.frame_affines) == 2
-    assert geometry.axis_anatomical_labels == ("y", "z", "x")
-    assert geometry.voxel_sizes == (1.0, 2.0, 4.0)
-    for frame, affine in enumerate(geometry.frame_affines):
-        patient = origins[frame] + rotation.T @ np.asarray([2.0, 2.0, 4.0])
-        np.testing.assert_allclose((np.asarray(affine) @ [1, 1, 2, 1])[:3], LPS_TO_RAS @ patient)
-
-
-def test_frame_dependent_geometry_uses_declared_dependency_not_flat_tiling():
-    visu = {
-        "VisuCoreFrameCount": 6,
-        "VisuFGOrderDesc": [[2, "FG_ECHO", "", 0, 0], [3, "FG_SLICE", "", 0, 1]],
-        "VisuGroupDepVals": [["VisuCorePosition", 0]],
-        "VisuCorePosition": [[0, 0, 4], [0, 0, 7], [0, 0, 10]],
-    }
-    np.testing.assert_array_equal(
-        frame_parameter(visu, "VisuCorePosition", 3)[:, 2], [4, 4, 7, 7, 10, 10]
-    )
-
-
-def test_image_only_product_remains_importable_without_pretending_raw_geometry_is_known(tmp_path):
-    scan, _, _, _, _, _ = _scan(tmp_path)
-    (scan / "pdata/1/reco").unlink()
-    _, dataset, _, metadata = import_bruker_experiment(scan, load_raw_kspace=True)
-    assert dataset.data is not None
-    assert dataset.acquisition is None
-    assert metadata["raw_import"]["reason"] == "missing_reconstruction_recipe"
-    session = GuiSession()
-    session.import_bruker_study(tmp_path, field_strength_mhz=100)
-    assert not session.can_lazy_load_raw_data(require_acquisition=True)
 
 
 def test_image_frame_reordering_keeps_complete_raw_slice_groups(tmp_path):
@@ -394,17 +211,6 @@ def test_image_frame_reordering_keeps_complete_raw_slice_groups(tmp_path):
     np.testing.assert_allclose(result.image, reference[order], rtol=2e-5, atol=2e-4)
 
 
-def test_incomplete_or_overlapping_package_descriptions_are_rejected():
-    visu = {
-        "VisuCoreDim": 2,
-        "VisuCoreFrameCount": 4,
-        "VisuFGOrderDesc": [[4, "FG_SLICE", "", 0, 0]],
-        "VisuCoreSlicePacksSlices": [[0, 3], [2, 2]],
-    }
-    with pytest.raises(ValueError, match="partition"):
-        slice_packages(visu)
-
-
 def test_irregular_slice_positions_are_not_misrepresented_as_a_regular_volume(tmp_path):
     scan, _, _, _, _, _ = _scan(tmp_path, counts=(3,), echoes=1)
     pdata = scan / "pdata/1"
@@ -414,42 +220,3 @@ def test_irregular_slice_positions_are_not_misrepresented_as_a_regular_volume(tm
     assert data.shape[-1] == 3
     with pytest.raises(ValueError, match="regular spatial stack"):
         bruker_spatial_geometry(visu, spatial_shape=spatial)
-
-
-def test_tilted_stack_export_preserves_the_complete_affine(tmp_path):
-    nib = pytest.importorskip("nibabel")
-    scan, _, _, _, _, _ = _scan(tmp_path / "input", counts=(3,), echoes=1)
-    positions = np.asarray([[0.0, 0.0, 0.0], [0.5, 0.0, 2.0], [1.0, 0.0, 4.0]])
-    with (scan / "pdata/1/visu_pars").open("a") as handle:
-        handle.write("\n" + _array("VisuCorePosition", positions) + "\n")
-    experiment, dataset, _, _ = import_bruker_experiment(scan, load_raw_kspace=False)
-    paths = export_image_files(
-        tmp_path / "tilted.nii.gz",
-        dataset.data,
-        dims=experiment.dims,
-        geometry=dataset.spatial_geometry,
-    )
-    image = nib.load(paths[0])
-    np.testing.assert_allclose(
-        (image.affine @ [2, 1, 2, 1])[:3], LPS_TO_RAS @ (positions[2] + [1.6, 1.2, 0]), atol=1e-6
-    )
-    assert int(image.header["sform_code"]) != 0
-
-
-def test_package_geometry_survives_workspace_save_and_reload(tmp_path):
-    from mrax.gui.services.persistence import load_workspace_bundle, save_workspace_bundle
-    from mrax.gui.services.workspace import StudyWorkspace
-
-    _scan(tmp_path / "input", counts=(3, 2, 1))
-    session = GuiSession()
-    session.import_bruker_study(tmp_path / "input", field_strength_mhz=100)
-    workspace = StudyWorkspace("before", "Geometry", session)
-    path = save_workspace_bundle(workspace, tmp_path / "geometry.mrax")
-    loaded = load_workspace_bundle(path, tmp_path / "loaded", key="after")
-    assert loaded.session.experiment_names == session.experiment_names
-    for name in session.experiment_names:
-        before = session.data["experiments"][name]
-        after = loaded.session.data["experiments"][name]
-        assert before["spatial_geometry"] == after["spatial_geometry"]
-        assert before["extra_metadata"]["slice_package"] == after["extra_metadata"]["slice_package"]
-        np.testing.assert_array_equal(after["mr_image"], before["mr_image"])

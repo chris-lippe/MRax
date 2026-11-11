@@ -420,7 +420,8 @@ def _commit(workspace, candidate):
 
 
 def _make_step(candidate, options, *, kind="process", previous=None, enabled=True):
-    from .processing import processing_methods
+    from .processing import FILTERS, processing_methods
+    from .processing_scope import freeze_scope
     from .scene import fitting_roi
 
     method = options.get("method") if kind == "process" else kind
@@ -503,10 +504,25 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
         step["input_steps"] = (
             display_steps(candidate, fitted=True, map_name=source[4:]) if source.startswith("map:") else []
         )
+    if kind == "process" and method in FILTERS:
+        dims = step["input"]["dims"] if step.get("input") else candidate.session.experiment_dims
+        freeze_scope(candidate.session, clean, dims)
     return step
 
 
 def apply_step(workspace, options, progress, *, kind="process", append=False, enabled=True):
+    from .processing import FILTERS
+    from .processing_scope import freeze_scope, target_key
+
+    if kind == "process" and options.get("method") in FILTERS:
+        dims = workspace.session.experiment_dims
+        if str(options.get("input", "image")).startswith("map:"):
+            dims = {
+                name: size for name, size in dims.items() if name in workspace.session.roi_dim_names
+            }
+        elif options.get("input") in {"original", "reconstruction"} and current_pipeline(workspace):
+            dims = current_pipeline(workspace)["source"]["dims"]
+        options = freeze_scope(workspace.session, copy.deepcopy(options), dims)
     if kind == "process" and options.get("method") == "dti":
         from .processing import apply_processing
 
@@ -542,7 +558,15 @@ def apply_step(workspace, options, progress, *, kind="process", append=False, en
         if requested
         else None
         if append
-        else next((s for s in pipeline["steps"] if s["family"] == family), None)
+        else next(
+            (
+                s
+                for s in pipeline["steps"]
+                if s["family"] == family
+                and (family != "denoise" or target_key(s["options"]) == target_key(options))
+            ),
+            None,
+        )
     )
     if requested and previous is None:
         raise ValueError("The pipeline step no longer exists")

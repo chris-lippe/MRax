@@ -7,7 +7,7 @@ Version 0.4.0
 Highlights
 ~~~~~~~~~~
 
-- Complete GUI overhaul: Browser-based desktop GUI with action-oriented controls, adjustable panels,
+- Browser-based desktop GUI with action-oriented controls, adjustable panels,
   light/dark themes, keyboard shortcuts, accessibility preferences and a guided
   synthetic-study tutorial.
 - A shared workflow for viewing, reconstruction, preprocessing, registration,
@@ -15,6 +15,10 @@ Highlights
 - Editable processing pipelines retain original image data and fitted maps.
   Reusable processing, reconstruction and fitting workflows can be saved as
   versioned ``.mpip``, ``.mrec`` and ``.mfit`` files.
+- Direct file and folder imports, workspace saving and export with explicit
+  overwrite confirmation; imported files remain unchanged.
+- Improved Bruker geometry and multi-package viewing and reconstruction, plus
+  scoped denoising with automatic or ROI-based MRI noise estimates.
 
 Version 0.3.2
 -------------

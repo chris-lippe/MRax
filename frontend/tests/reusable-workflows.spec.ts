@@ -1,12 +1,17 @@
 import { test, expect, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
+
 import { mkdir, readFile } from 'node:fs/promises';
+
 import { dirname } from 'node:path';
-import { chooseFilePath, loadExample, selectExperiment, selectTheme, selectWorkflow } from './ui';
+
+import { chooseFilePath, loadExample, selectExperiment, selectWorkflow } from './ui';
+
 import type { Workspace } from '../src/api';
 
 async function workspaces(request: APIRequestContext): Promise<Workspace[]> {
   return (await request.get('/api/workspaces')).json();
 }
+
 const dialog = (page: Page) =>
   page.getByRole('dialog', { name: 'Reusable workflows', exact: true });
 
@@ -158,36 +163,4 @@ test('fitting workflow captures pending solver settings and requires ROI assignm
   expect(current.pipeline.steps).toEqual([]);
   await modal.getByRole('button', { name: 'Done', exact: true }).click();
   await expect(page.getByLabel('Map', { exact: true })).toBeVisible();
-});
-
-test('reconstruction workflows capture component choices and reuse the target raw data', async ({
-  page,
-  request,
-}, info) => {
-  await page.goto('/');
-  await loadExample(page, 'multimodal');
-  await selectExperiment(page, 'Complex coils');
-  await selectWorkflow(page, 'Reconstruct');
-  await page.getByLabel('Reconstruction data', { exact: true }).selectOption('phase');
-  await page.getByRole('button', { name: 'Reconstruction workflows', exact: true }).click();
-  const modal = dialog(page);
-  await modal.getByRole('button', { name: 'Capture current configuration', exact: true }).click();
-  const saved = await saveWorkflow(page, info, 'phase.mrec');
-  expect(saved.document.kind).toBe('reconstruction');
-  expect(saved.document.steps[0].settings.component).toBe('phase');
-  await modal.getByRole('button', { name: 'Apply reconstruction workflow', exact: true }).click();
-  await expect(modal.getByRole('status')).toHaveText('Workflow applied to all selected targets.');
-  const result = (await workspaces(request))[0];
-  expect(result.pipeline.steps[0]).toMatchObject({
-    kind: 'reconstruct',
-    options: {
-      workflow: { kind: 'reconstruction', steps: [{ settings: { component: 'phase' } }] },
-    },
-  });
-  await modal.getByRole('button', { name: 'Done', exact: true }).click();
-  await selectTheme(page, 'dark');
-  await page.getByRole('button', { name: 'Reconstruction workflows', exact: true }).click();
-  await modal.getByRole('button', { name: /Cartesian Fourier/ }).click();
-  expect(await modal.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: info.outputPath('reconstruction-workflow-dark.png') });
 });

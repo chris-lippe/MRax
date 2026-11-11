@@ -28,6 +28,14 @@ tmp/
 *.dat
 *.dcm
 *.ima
+*.[dD][cC][mM]
+*.[iI][mM][aA]
+*.[nN][iI][iI]
+*.[nN][iI][iI].[gG][zZ]
+*.raw
+*.bin
+*.pkl
+*.pickle
 *.npy
 *.npz
 *.mat

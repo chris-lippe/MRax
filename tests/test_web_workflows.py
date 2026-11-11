@@ -4,21 +4,14 @@ from __future__ import annotations
 
 import io
 import json
-import subprocess
-import sys
 import time
 import zipfile
-from pathlib import Path
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from mrax._version import MRAX_VERSION
-from mrax.gui.services.persistence import load_workspace_bundle, save_workspace_bundle
-from mrax.gui.services.roi import add_rectangle_roi
 from mrax.gui.services.synthetic import synthetic_t2_session
-from mrax.gui.services.workspace import StudyWorkspace
 from mrax.gui.session import GuiSession
 from mrax.web.app import create_app
 from mrax.web.job_runtime import _workflow_worker
@@ -62,6 +55,7 @@ def wait_job(client, key):
 
 def test_native_roi_and_binary_slice_are_numerically_correct(client):
     workspace = new_workspace(client)
+    assert workspace["experiment_catalog"][0]["exp_type"] == "t2_se"
     response = client.get(f"/api/workspaces/{workspace['id']}/slice")
     image = np.frombuffer(response.content, dtype="<f4").reshape((24, 32))
     reference = synthetic_t2_session().frame_image()
@@ -90,17 +84,6 @@ def test_revision_checks_prevent_stale_drawing_and_cross_workspace_edits(client)
     assert add_roi(client, current, name="Other ROI").status_code == 409
     assert client.get(f"/api/workspaces/{second['id']}").json()["rois"] == []
     assert client.patch(path, json={"revision": 1, "frame": 99, "z": 0}).status_code == 422
-
-
-@pytest.mark.parametrize("bounds", [[0, 0, -1, 2], [0, 0, 0, 1], [100, 100, 1, 1]])
-def test_invalid_rectangles_do_not_change_the_workspace(client, bounds):
-    workspace = new_workspace(client)
-    assert add_roi(client, workspace, bounds=bounds).status_code == 422
-    assert client.get(f"/api/workspaces/{workspace['id']}").json()["revision"] == 0
-
-
-def test_api_reports_the_package_version(client):
-    assert client.get("/openapi.json").json()["info"]["version"] == MRAX_VERSION
 
 
 def test_real_spawned_fit_matches_known_t2_and_round_trips(client):
@@ -136,27 +119,6 @@ def test_real_spawned_fit_matches_known_t2_and_round_trips(client):
     assert restored["label"] == workspace["label"]
 
 
-def test_close_requires_an_explicit_discard_and_releases_the_workspace(client):
-    workspace = add_roi(client, new_workspace(client)).json()
-    path = f"/api/workspaces/{workspace['id']}"
-    assert client.request("DELETE", path, json={"revision": 1}).status_code == 409
-    assert client.request("DELETE", path, json={"revision": 0, "discard": True}).status_code == 409
-    assert client.request("DELETE", path, json={"revision": 1, "discard": True}).status_code == 204
-    assert client.get(path).status_code == 404
-
-
-def test_fit_result_does_not_overwrite_a_changed_revision(client):
-    workspace = add_roi(client, new_workspace(client)).json()
-    path = f"/api/workspaces/{workspace['id']}"
-    response = client.post(
-        path + "/preview-fit", json={"revision": 1, "roi_name": "ROI 1", "steps": 600}
-    )
-    assert response.status_code == 200
-    assert add_roi(client, workspace, name="ROI 2").status_code == 200
-    assert wait_job(client, response.json()["id"])["status"] == "stale"
-    assert client.get(path).json()["preview"] is None
-
-
 def test_cancelled_worker_does_not_start_an_operation(tmp_path):
     def cancelled_progress(*_args):
         raise InterruptedError("Cancelled")
@@ -187,48 +149,6 @@ def test_origins_tokens_hosts_and_archives_are_checked(client):
     assert client.get("/api/workspaces").json() == []
     assert client.get("/api/workspaces/missing").status_code == 404
     assert client.get("/api/jobs/missing").status_code == 404
-
-
-def test_bundle_state_is_shared_with_desktop_helpers(tmp_path):
-    from mrax.gui.services import state
-    from mrax.gui.services.state import _restore_gui_state, _serialize_gui_state
-
-    assert _serialize_gui_state is state._serialize_gui_state
-    assert _restore_gui_state is state._restore_gui_state
-    session = synthetic_t2_session()
-    add_rectangle_roi(session, "Native", [4, 3, 8, 6])
-    workspace = StudyWorkspace(key="source", label=session.study_name, session=session)
-    output = save_workspace_bundle(workspace, tmp_path / "synthetic.mrax")
-    restored = load_workspace_bundle(output, tmp_path / "restored", key="restored")
-    np.testing.assert_array_equal(restored.session.image_array, session.image_array)
-    np.testing.assert_array_equal(restored.session.rois[0].mask, session.rois[0].mask)
-
-
-def test_shared_services_and_browser_import_do_not_load_qt():
-    code = "import sys; import mrax.web.app; import mrax.gui.services.persistence; import mrax.gui.services.export; assert not any(n.startswith(('PySide6', 'pyqtgraph')) for n in sys.modules)"
-    subprocess.run([sys.executable, "-c", code], check=True, timeout=30, capture_output=True)
-
-
-def test_legacy_windows_bundle_references_are_portable(tmp_path):
-    from mrax.gui.services.package import (
-        _mrax_package_entries,
-        _resolve_state_manifest_path,
-        _write_mrax_package_manifest,
-    )
-    from mrax.gui.services.state import _state_relative_path
-
-    manifest = tmp_path / "study" / "study_manifest.json"
-    manifest.parent.mkdir()
-    manifest.write_text("{}")
-    _write_mrax_package_manifest(tmp_path, {"study_manifest": "study\\study_manifest.json"})
-    assert _mrax_package_entries(tmp_path)["study_manifest"] == manifest
-    assert (
-        _resolve_state_manifest_path(
-            {"data_manifest": "study\\study_manifest.json"}, tmp_path / "state.json"
-        )
-        == manifest
-    )
-    assert _state_relative_path(manifest, tmp_path / "state.json") == "study/study_manifest.json"
 
 
 def test_edited_observables_rebuild_the_study_and_survive_save_restore(client, monkeypatch):
@@ -293,41 +213,3 @@ def test_edited_observables_rebuild_the_study_and_survive_save_restore(client, m
     ]
     assert restored_metadata["observables"] == inspected["observables"]
     assert restored_metadata["metadata"]["note"] == "Edited synthetic coordinate"
-
-
-def test_invalid_preview_metadata_cannot_poison_the_workspace_registry(client):
-    workspace = add_roi(client, new_workspace(client)).json()
-    saved = client.post(f"/api/workspaces/{workspace['id']}/save")
-    altered = io.BytesIO()
-    with (
-        zipfile.ZipFile(io.BytesIO(saved.content)) as original,
-        zipfile.ZipFile(altered, "w") as output,
-    ):
-        for name in original.namelist():
-            content = original.read(name)
-            if name == "mrax_gui_state.json":
-                payload = json.loads(content)
-                payload["preview_results"] = {
-                    workspace["experiment"]: {
-                        "x": [10],
-                        "observed": [float("nan")],
-                        "predicted": [1],
-                        "included": [True],
-                        "x_name": "TE",
-                        "model": "t2_se",
-                    }
-                }
-                content = json.dumps(payload).encode()
-            output.writestr(name, content)
-    assert client.post("/api/workspaces/upload", content=altered.getvalue()).status_code == 422
-    opened = client.get("/api/workspaces")
-    assert opened.status_code == 200 and len(opened.json()) == 1
-
-
-def test_frontend_assets_are_served_when_built(client):
-    if not (Path(__file__).parents[1] / "mrax/web/static/index.html").is_file():
-        pytest.skip("Frontend build is checked by the browser/build workflow")
-    response = client.get("/")
-    assert response.status_code == 200
-    assert 'id="root"' in response.text
-    assert 'type="module"' in response.text

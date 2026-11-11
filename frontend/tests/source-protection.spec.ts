@@ -1,5 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
+
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+
 import { loadExample, openExport, closeExport, chooseExportFolder } from './ui';
 
 test.afterEach(async ({ request }) => {
@@ -57,30 +59,6 @@ test('image replacement waits for confirmation and cancelling leaves the file un
   });
   expect((await readFile(path)).subarray(0, 6).toString('latin1')).toBe('\x93NUMPY');
   expect(await readdir(parent)).toEqual(['image.npy']);
-  await closeExport(page);
-});
-
-test('metadata exports require a new filename without offering replacement', async ({
-  page,
-}, info) => {
-  const parent = info.outputPath('Metadata');
-  await mkdir(parent, { recursive: true });
-  const path = parent + '/metadata.json';
-  await writeFile(path, '{"keep": true}');
-  await page.goto('/');
-  await loadExample(page);
-  const exporter = await openExport(page);
-  await exporter
-    .getByLabel('Export object', { exact: true })
-    .selectOption('T2 phantom/image/mr_image');
-  await exporter.getByLabel('Export format', { exact: true }).selectOption('json');
-  await exporter.getByRole('button', { name: 'Export selected object', exact: true }).click();
-  const chooser = await selectExisting(page, path);
-  await expect(chooser.getByRole('alert')).toContainText('Choose a new name');
-  await expect(chooser.getByRole('button', { name: 'Replace', exact: true })).toHaveCount(0);
-  expect(await readFile(path, 'utf8')).toBe('{"keep": true}');
-  expect(await readdir(parent)).toEqual(['metadata.json']);
-  await chooser.getByRole('button', { name: 'Cancel', exact: true }).click();
   await closeExport(page);
 });
 

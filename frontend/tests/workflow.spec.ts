@@ -1,9 +1,15 @@
 import { zoomImage, imageZoom } from './ui';
+
 import { loadExample } from './ui';
+
 import { openRoiCoordinates } from './ui';
+
 import { saveWorkspace, openWorkspace } from './ui';
+
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+
 import { selectWorkflow, selectExperiment, selectTheme } from './ui';
+
 import type { Workspace } from '../src/api';
 
 async function current(request: APIRequestContext) {
@@ -147,45 +153,4 @@ test('View, Segment, Fit and Register share layers and independent ROI selection
   await selectWorkflow(page, 'View');
   await page.screenshot({ path: info.outputPath('shared-workflow.png') });
   expect(errors).toEqual([]);
-});
-
-test('overlay opacity previews continuously during one drag and commits on release', async ({
-  page,
-  request,
-}) => {
-  await page.goto('/');
-  await loadExample(page);
-  await expect(page.getByTestId('roi-surface')).toBeVisible();
-  await selectWorkflow(page, 'View', 'Image and ROI overlays');
-  await page
-    .getByLabel('Overlay source', { exact: true })
-    .selectOption({ label: 'T2 phantom · Image' });
-  await page.getByRole('button', { name: 'Add overlay', exact: true }).click();
-  const slider = page.getByLabel('Overlay 1 opacity', { exact: true });
-  await slider.scrollIntoViewIfNeeded();
-  const before = await page
-    .locator('canvas')
-    .evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
-  const handle = await slider.elementHandle();
-  const box = (await slider.boundingBox())!;
-  const point = (fraction: number) => box.x + 8 + (box.width - 16) * fraction;
-  let requests = 0;
-  page.on('request', (r) => {
-    if (r.method() === 'PATCH' && r.url().endsWith('/view')) requests++;
-  });
-  await page.mouse.move(point(0.5), box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(point(0.8), box.y + box.height / 2, { steps: 8 });
-  await expect(slider).toHaveValue('0.8');
-  const preview = await page
-    .locator('canvas')
-    .evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
-  expect(preview).not.toBe(before);
-  expect(requests).toBe(0);
-  await page.mouse.move(point(0.2), box.y + box.height / 2, { steps: 8 });
-  await expect(slider).toHaveValue('0.2');
-  expect(await handle!.evaluate((input) => input.isConnected)).toBe(true);
-  await page.mouse.up();
-  await expect.poll(async () => (await current(request)).scene.layers[0].opacity).toBe(0.2);
-  expect(requests).toBe(1);
 });

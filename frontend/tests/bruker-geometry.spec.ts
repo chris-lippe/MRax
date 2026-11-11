@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
+
 import { mkdir } from 'node:fs/promises';
+
 import { execFileSync } from 'node:child_process';
+
 import { chooseFilePath, clickDataControl, selectWorkflow } from './ui';
 
 test.afterEach(async ({ request }) => {

@@ -222,3 +222,16 @@ tmp/
 *.nii.gz
 *.csv
 *.mrax
+
+# Measurement arrays and vendor exports belong in data/ or tmp/.
+*.npy
+*.npz
+*.hdf5
+*.dat
+*.raw
+*.bin
+*.pickle
+*.[dD][cC][mM]
+*.[iI][mM][aA]
+*.[nN][iI][iI]
+*.[nN][iI][iI].[gG][zZ]

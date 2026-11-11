@@ -7,6 +7,8 @@ include MRax_icon.svg
 include pyrightconfig.json
 include requirements.txt
 include requirements-dev.txt
+include pytest.ini
+include tests/README.md
 recursive-include mrax *.py *.toml
 recursive-include mrax/reco/presets *.mrec
 recursive-include mrax/web/static *.html *.js *.css *.svg

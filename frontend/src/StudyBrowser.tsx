@@ -123,6 +123,9 @@ export function StudyBrowser({
           {workspaces.map((item) => {
             const selected = workspace?.id === item.id;
             const open = expanded[item.id] ?? true;
+            const experimentTypes = new Map(
+              item.experiment_catalog.map((entry) => [entry.name, entry.exp_type]),
+            );
             return (
               <div className="study-group" key={item.id}>
                 <div className="study-row" data-study-id={item.id}>
@@ -198,6 +201,12 @@ export function StudyBrowser({
                       <button
                         key={name}
                         type="button"
+                        aria-label={name}
+                        aria-description={
+                          experimentTypes.get(name)
+                            ? `Experiment type: ${experimentTypes.get(name)}`
+                            : undefined
+                        }
                         className={selected && workspace?.experiment === name ? 'selected' : ''}
                         aria-current={
                           selected && workspace?.experiment === name ? 'true' : undefined
@@ -208,7 +217,12 @@ export function StudyBrowser({
                         <svg className="study-symbol" viewBox="0 0 20 20" aria-hidden="true">
                           <path d="M4 3.5h12v13H4zM7 7h6M7 10h6M7 13h4" />
                         </svg>
-                        <span>{name}</span>
+                        <span>
+                          {name}
+                          {experimentTypes.get(name) && (
+                            <span className="experiment-type"> · {experimentTypes.get(name)}</span>
+                          )}
+                        </span>
                       </button>
                     ))}
                   </section>

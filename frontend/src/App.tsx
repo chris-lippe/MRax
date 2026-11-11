@@ -1221,6 +1221,11 @@ export function App() {
     />
   );
 
+  const experimentLabel = (name: string) => {
+    const type = workspace?.experiment_catalog.find((entry) => entry.name === name)?.exp_type;
+    return type ? `${name} · ${type}` : name;
+  };
+
   return (
     <div
       className={'app' + (inspector.dragging || browser.dragging ? ' resizing-controls' : '')}
@@ -1269,8 +1274,8 @@ export function App() {
                 {workspace
                   ? workspace.scene.comparison.enabled &&
                     !['metadata', 'signal'].includes(workflowTask)
-                    ? `${workspace.scene.comparison.mode === 'overlay' ? 'Overlay' : 'Split view'} · ${workspace.scene.comparison.left.experiment} / ${workspace.scene.comparison.right.experiment}`
-                    : `${workspace.experiment || 'Add an experiment'} · ${workspace.dimensions.slice_package ? `${workspace.dimensions.slice_package} packages · ` : ''}${workspace.frame_count / (workspace.dimensions.slice_package || 1)} frames · ${workspace.slice_count} ${workspace.slice_count === 1 ? 'slice' : 'slices'}`
+                    ? `${workspace.scene.comparison.mode === 'overlay' ? 'Overlay' : 'Split view'} · ${experimentLabel(workspace.scene.comparison.left.experiment)} / ${experimentLabel(workspace.scene.comparison.right.experiment)}`
+                    : `${experimentLabel(workspace.experiment || 'Add an experiment')} · ${workspace.dimensions.slice_package ? `${workspace.dimensions.slice_package} packages · ` : ''}${workspace.frame_count / (workspace.dimensions.slice_package || 1)} frames · ${workspace.slice_count} ${workspace.slice_count === 1 ? 'slice' : 'slices'}`
                   : 'Open a workspace or import image data.'}
               </p>
             </div>

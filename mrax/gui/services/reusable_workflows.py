@@ -329,9 +329,30 @@ def _validate_target(workspace, document, bindings):
                     not isinstance(axes, list)
                     or not 1 <= len(axes) <= 3
                     or len(set(axes)) != len(axes)
-                    or any(a not in session.experiment_dims for a in axes)
+                    or any(a not in session.experiment_dims or a == "slice_package" for a in axes)
                 ):
                     raise ValueError("Filter axes are incompatible with this experiment")
+                if method.get("axis_count") is not None and len(axes) != method["axis_count"]:
+                    raise ValueError(
+                        f"{method['label']} needs {method['axis_count']} filter dimensions"
+                    )
+                if "scope" in options:
+                    from .processing_scope import freeze_scope, region
+
+                    context = clone_workspace(workspace, readonly_arrays=True)
+                    dims = context.session.experiment_dims
+                    if str(options.get("input", "image")).startswith("map:"):
+                        dims = {
+                            name: size
+                            for name, size in dims.items()
+                            if name in context.session.roi_dim_names
+                        }
+                    frozen = freeze_scope(context.session, copy.deepcopy(options), dims)
+                    if "slice_package" in frozen["indices"]:
+                        context.session.set_active_index(
+                            "slice_package", frozen["indices"]["slice_package"]
+                        )
+                    region(context.session, frozen, dims, context.session.image_geometry())
             if options.get("axis") and options["axis"] not in session.experiment_dims:
                 raise ValueError("The acquisition axis is unavailable")
             source = options.get("input", "image")

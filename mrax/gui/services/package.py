@@ -1,4 +1,4 @@
-"""Shared package helpers; no Qt imports or browser dependencies."""
+"""Workspace package manifests and safe entry resolution."""
 
 from __future__ import annotations
 

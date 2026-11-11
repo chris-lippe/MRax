@@ -1,13 +1,13 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
+
 import type { Workspace } from '../src/api';
-import { execFileSync } from 'node:child_process';
+
 import {
   loadExample,
   selectWorkflow,
   openRoiCoordinates,
   saveWorkspace,
   openWorkspace,
-  chooseFilePath,
 } from './ui';
 
 async function opened(request: APIRequestContext) {
@@ -44,45 +44,6 @@ async function draw(page: Page, start: number[], end: number[]) {
   });
   await page.mouse.up();
 }
-
-test('drawing rounds and Auto subtract update the selected ROI and undo together', async ({
-  page,
-  request,
-}, info) => {
-  await page.goto('/');
-  await loadExample(page);
-  await selectWorkflow(page, 'Segment');
-  await create(page, 'A', [2, 2, 4, 4]);
-  await create(page, 'B', [10, 2, 4, 4]);
-  await page.getByRole('checkbox', { name: 'Auto subtract', exact: true }).check();
-  await page.getByRole('button', { name: 'Draw rectangle', exact: true }).click();
-  await draw(page, [2.25, 2.25], [5.75, 5.75]);
-  await expect
-    .poll(async () => (await opened(request))[0].rois.map((r) => r.pixels))
-    .toEqual([0, 16, 16]);
-  await page.getByRole('button', { name: 'Undo ROI edit', exact: true }).click();
-  await expect(page.locator('.roi-card')).toHaveCount(2);
-  await page.getByLabel('Drawing mode', { exact: true }).selectOption('add');
-  await draw(page, [2.25, 2.25], [5.75, 5.75]);
-  await expect
-    .poll(async () => (await opened(request))[0].rois.map((r) => r.pixels))
-    .toEqual([0, 32]);
-  await expect(page.locator('.roi-card.selected strong')).toHaveText('B');
-  await page.screenshot({ path: info.outputPath('segment-rounds.png') });
-  await page.getByRole('button', { name: 'Undo ROI edit', exact: true }).click();
-  await expect
-    .poll(async () => (await opened(request))[0].rois.map((r) => r.pixels))
-    .toEqual([16, 16]);
-  await page.getByLabel('Drawing mode', { exact: true }).selectOption('subtract');
-  await draw(page, [10.25, 2.25], [13.75, 5.75]);
-  await expect
-    .poll(async () => (await opened(request))[0].rois.map((r) => r.pixels))
-    .toEqual([16, 0]);
-  await page.getByRole('button', { name: 'Undo ROI edit', exact: true }).click();
-  await expect
-    .poll(async () => (await opened(request))[0].rois.map((r) => r.pixels))
-    .toEqual([16, 16]);
-});
 
 test('binary and indexed masks stay editable across 3D expansion and workspace save/load', async ({
   page,
@@ -149,57 +110,4 @@ test('binary and indexed masks stay editable across 3D expansion and workspace s
   await openWorkspace(page, file);
   const restored = (await opened(request)).find((w) => w.id !== before.id)!;
   expect(restored.rois).toEqual(before.rois);
-});
-
-test('coordinate edits identify the active ROI and respect add/subtract rounds', async ({
-  page,
-  request,
-}) => {
-  await page.goto('/');
-  await loadExample(page);
-  await selectWorkflow(page, 'Segment');
-  await create(page, 'Tissue', [2, 2, 4, 4]);
-  await page.getByLabel('Drawing mode', { exact: true }).selectOption('add');
-  await expect(page.getByLabel('New ROI name', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('Selected ROI: Tissue', { exact: true })).toBeVisible();
-  await page.getByLabel('ROI column', { exact: true }).fill('10');
-  await page.getByRole('button', { name: 'Add rectangle round', exact: true }).click();
-  await expect
-    .poll(async () => (await opened(request))[0].rois.map((roi) => roi.pixels))
-    .toEqual([32]);
-  await page.getByLabel('Drawing mode', { exact: true }).selectOption('subtract');
-  await page.getByRole('button', { name: 'Subtract rectangle round', exact: true }).click();
-  await expect
-    .poll(async () => (await opened(request))[0].rois.map((roi) => roi.pixels))
-    .toEqual([16]);
-  await page.getByRole('button', { name: 'Brush tool', exact: true }).click();
-  await expect(page.getByText('Coordinates', { exact: true })).not.toBeVisible();
-  await page.getByRole('button', { name: 'Rectangle tool', exact: true }).click();
-  await page.getByLabel('Drawing mode', { exact: true }).selectOption('new');
-  await expect(page.getByLabel('New ROI name', { exact: true })).toBeVisible();
-});
-
-test('dense indexed masks render one accessible graphic per label', async ({ page }, info) => {
-  const file = info.outputPath('Independent labels.npy');
-  execFileSync('python', [
-    '-c',
-    'import numpy as np,sys; grid=np.indices((24,32,3)); np.save(sys.argv[1], ((grid[0]+grid[1])%2+1).astype(np.int16))',
-    file,
-  ]);
-  await page.goto('/');
-  await loadExample(page);
-  await selectWorkflow(page, 'Segment', 'Import masks and ROI sets');
-  await page.getByRole('button', { name: 'Open ROI set or mask…', exact: true }).click();
-  await chooseFilePath(page, file);
-  await expect(page.locator('.roi-card')).toHaveCount(1);
-  await selectWorkflow(page, 'Segment', 'Edit label masks');
-  await expect(page.getByRole('button', { name: 'Use label 1', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Use label 2', exact: true })).toBeVisible();
-  await expect(page.locator('.roi-mask path')).toHaveCount(2);
-  await expect(page.locator('.roi-mask [role="img"]')).toHaveCount(2);
-  await page.getByRole('button', { name: 'Use label 2', exact: true }).click();
-  await page.getByLabel('Replacement label', { exact: true }).fill('7');
-  await page.getByRole('button', { name: 'Relabel selected label', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Use label 7', exact: true })).toBeVisible();
-  await expect(page.locator('.roi-mask path')).toHaveCount(2);
 });

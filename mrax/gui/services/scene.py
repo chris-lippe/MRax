@@ -53,6 +53,7 @@ def experiment_catalog(workspace, names=None):
         result.append(
             {
                 "name": name,
+                "exp_type": session.current_experiment.get("exp_type") or None,
                 "frames": session.frame_count,
                 "spatial_dimensions": {
                     dim: session.experiment_dims[dim] for dim in session.spatial_dim_names

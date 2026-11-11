@@ -27,9 +27,12 @@ Run these checks from the repository root before opening a pull request:
    python -m sphinx -W --keep-going -E -b html docs docs/_build/html
    git diff --check
 
-For documentation-only changes, run the Sphinx build and ``git diff --check``. For code
-changes, run the test suite. Report each check's outcome and any environment
-requirements in the pull request.
+For documentation-only changes, run the Sphinx build and ``git diff --check``.
+For code changes, run the affected feature tests; run the CPU regression suite
+before a release or when changes cross feature boundaries. Extend an existing
+workflow for a distinct public behavior rather than preserving each development
+step as a separate test. See ``tests/README.md`` for the regression scope.
+Report each check's outcome and environment requirements in the pull request.
 
 Docs changes:
 
@@ -60,7 +63,9 @@ its GUI:
    npm --prefix frontend run build
    mrax-gui
 
-Run browser tests with ``npm --prefix frontend test``.
+Run the Chromium workflows with ``npm --prefix frontend test``. A single complete
+workflow is available through ``npm --prefix frontend run test:smoke``; use
+``test:cross-browser`` for the Firefox/WebKit smoke checks.
 
 Documentation build
 -------------------

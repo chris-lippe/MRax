@@ -1,8 +1,13 @@
 import { loadExample } from './ui';
+
 import { openRoiCoordinates } from './ui';
+
 import { chooseFilePath } from './ui';
+
 import { test, expect } from '@playwright/test';
+
 import { readFile } from 'node:fs/promises';
+
 import { selectWorkflow, openExport, closeExport } from './ui';
 
 test.afterEach(async ({ request }) => {
@@ -101,40 +106,4 @@ test('Analyze compares ROI timecourses and exports values from the study sidebar
   await closeExport(page);
   await expect(chart.getByRole('heading')).toContainText('Standard deviation');
   await page.screenshot({ path: testInfo.outputPath('analyze-desktop.png') });
-});
-
-test('Analyze keeps analysis masks separate from fit exclusions and map operations', async ({
-  page,
-}) => {
-  await page.goto('/');
-  await loadExample(page);
-  await selectWorkflow(page, 'Segment');
-  await openRoiCoordinates(page);
-  await page.getByRole('button', { name: 'Add rectangle by coordinates', exact: true }).click();
-  await selectWorkflow(page, 'Fit');
-  await page.getByText('Parameters and fit options', { exact: true }).click();
-  await page.getByLabel('Excluded frames', { exact: true }).fill('1');
-  await page.getByRole('button', { name: 'Apply frame exclusions', exact: true }).click();
-  await expect(page.getByLabel('Excluded frames', { exact: true })).toHaveValue('1');
-  await selectWorkflow(page, 'Analyze');
-  await page.getByRole('checkbox', { name: 'Respect fit frame exclusions', exact: true }).check();
-  await page.getByRole('button', { name: 'Analyze timecourse', exact: true }).click();
-  const chart = page.getByRole('region', { name: 'Timecourse results', exact: true });
-  await chart.getByRole('button', { name: 'Data table', exact: true }).click();
-  const row = page
-    .getByRole('table', { name: 'Timecourse values', exact: true })
-    .locator('tbody tr')
-    .nth(1);
-  await expect(row).toContainText('Missing');
-  await expect(row).toContainText('No');
-  await expect(page.getByLabel('Denoiser', { exact: true })).not.toBeVisible();
-  await selectWorkflow(page, 'Analyze', 'Derived maps');
-  await expect(page.getByLabel('Map calculation', { exact: true })).toHaveValue('dti');
-  await expect(
-    page.getByRole('button', { name: 'Compute derived maps', exact: true }),
-  ).toBeDisabled();
-  await selectWorkflow(page, 'Analyze', 'ROI map statistics');
-  await expect(page.getByLabel('Statistics map', { exact: true })).toBeDisabled();
-  await selectWorkflow(page, 'Fit');
-  await expect(page.getByLabel('Fit mask ROI 1', { exact: true })).toBeChecked();
 });

@@ -38,10 +38,28 @@ MEASUREMENT_SUFFIXES = {
     ".dat",
     ".pkl",
     ".pickle",
+    ".raw",
+    ".bin",
+    ".zip",
+    ".7z",
 }
 RETIRED_MODULES = {"mrax/gui/app.py", "mrax/gui/_deps.py", "mrax/gui/__main__.py"}
+RETIRED_PACKAGES = {
+    "PyQt4",
+    "PyQt5",
+    "PyQt6",
+    "PySide",
+    "PySide2",
+    "PySide6",
+    "qtpy",
+    "superqt",
+    "pyqtgraph",
+    "shiboken2",
+    "shiboken6",
+}
 SOURCE_FILES = {
     "pyproject.toml",
+    "pytest.ini",
     "README.md",
     "MANIFEST.in",
     "MRax_logo.svg",
@@ -61,6 +79,7 @@ SOURCE_FILES = {
     "frontend/scripts/export_schema.py",
     "tests/qualify_distribution.py",
     "tests/qualify_browser_install.py",
+    "tests/README.md",
 }
 
 
@@ -107,6 +126,17 @@ def inspect_artifact(path, expected_version):
                 raise ValueError("Measurement data or development artifacts are present")
             if name in RETIRED_MODULES:
                 raise ValueError("Retired GUI implementation is present")
+            if name.startswith("mrax/") and item.suffix == ".py":
+                for node in ast.walk(ast.parse(read(full).decode("utf-8"))):
+                    imports = (
+                        [alias.name for alias in node.names]
+                        if isinstance(node, ast.Import)
+                        else [node.module or ""]
+                        if isinstance(node, ast.ImportFrom)
+                        else []
+                    )
+                    if any(module.split(".")[0] in RETIRED_PACKAGES for module in imports):
+                        raise ValueError("A retired GUI import is present")
             names.add(name)
         metadata_names = (
             [name for name in members if name.endswith(".dist-info/METADATA")]
@@ -119,7 +149,7 @@ def inspect_artifact(path, expected_version):
         if (metadata["Name"] or "").casefold() != "mrax" or metadata["Version"] != expected_version:
             raise ValueError("Distribution identity does not match the intended release")
         if any(
-            value.casefold().startswith(("pyside", "pyqt", "qtpy", "superqt"))
+            value.casefold().startswith(("pyside", "pyqt", "qtpy", "superqt", "shiboken"))
             for value in metadata.get_all("Requires-Dist", [])
         ):
             raise ValueError("A retired native-widget dependency is present")

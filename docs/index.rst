@@ -6,7 +6,7 @@ MRax
    <section class="mrax-hero">
      <div class="mrax-hero-inner">
        <div class="mrax-hero-mark">
-          <img src="_static/MRax_logo.svg" alt="MRax logo">
+          <img class="dark-light" src="_static/MRax_logo.svg" alt="MRax logo">
        </div>
        <div class="mrax-hero-content">
          <p class="mrax-hero-title">A Python library for quantitative MRI research.</p>
@@ -74,8 +74,6 @@ Start Here
    overview
    guides
    models
-   gui
-   workflows
    api
    notebooks
    references

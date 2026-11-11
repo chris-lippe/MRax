@@ -572,10 +572,10 @@ def register_routes(app, get_record, check_revision, add_record):
             )
 
     @app.get("/api/workspaces/{key}/processing", response_model=ProcessingCatalog)
-    def processing(key: str):
+    def processing(key: str, input_source: str = "image", package: int | None = None):
         record = get_record(key)
         with record.lock:
-            return processing_catalog(record.workspace)
+            return processing_catalog(record.workspace, input_source, package)
 
     @app.get("/api/workspaces/{key}/reconstruction")
     def reconstruction(key: str):

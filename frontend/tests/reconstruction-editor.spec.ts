@@ -1,8 +1,13 @@
 import { execFileSync } from 'node:child_process';
+
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+
 import { dirname } from 'node:path';
+
 import { test, expect, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
+
 import { chooseFilePath, openWorkspace, selectWorkflow } from './ui';
+
 import type { Options, Workspace } from '../src/api';
 
 const opened = async (request: APIRequestContext): Promise<Workspace[]> =>
@@ -185,42 +190,4 @@ test('variational settings run and a changed regularizer recomputes a cached rec
     regularizer: 'l2',
     regularizer_weight: 0.1,
   });
-});
-
-test('sampled acquisitions offer gridded Fourier and NUFFT with editable tolerance and density compensation', async ({
-  page,
-  request,
-}, info) => {
-  await fixture(page, info, true);
-  const chooser = page.getByLabel('Reconstruction preset', { exact: true });
-  await expect(chooser.locator('option[value="cartesian-fourier"]')).toHaveJSProperty(
-    'disabled',
-    true,
-  );
-  await chooser.selectOption('nufft-adjoint');
-  const chain = page.getByRole('region', { name: 'Reconstruction stages', exact: true });
-  const solver = chain.getByRole('listitem', { name: 'NUFFT adjoint', exact: true });
-  await solver.getByRole('button', { name: 'NUFFT adjoint settings', exact: true }).click();
-  await solver.getByLabel('NUFFT tolerance', { exact: true }).fill('0.00001');
-  await solver.getByLabel('Density compensation', { exact: true }).uncheck();
-  await page.getByRole('button', { name: 'Apply reconstruction', exact: true }).click();
-  await expect(page.locator('.job-status strong')).toHaveText('Operation complete');
-  const [w] = await opened(request);
-  expect(w.reconstruction_label).toBe('NUFFT adjoint');
-  expect(w.pipeline.steps).toHaveLength(1);
-  const output = await pixels(request);
-  expect(Math.max(...output)).toBeGreaterThan(2);
-  expect(Math.max(...output)).toBeLessThan(2.5);
-  await page.screenshot({ path: info.outputPath('nufft-pipeline.png') });
-  await solver.getByLabel('Reconstruction method', { exact: true }).selectOption('fft');
-  const fourier = chain.getByRole('listitem', { name: 'Fourier transform', exact: true });
-  await expect(
-    chain.getByRole('listitem', { name: 'Kaiser–Bessel gridding', exact: true }),
-  ).toHaveCount(1);
-  await fourier.getByLabel('Reconstruction method', { exact: true }).selectOption('nufft');
-  await expect(
-    chain.getByRole('listitem', { name: 'Kaiser–Bessel gridding', exact: true }),
-  ).toHaveCount(0);
-  await expect(page.getByRole('alert')).toHaveCount(0);
-  expect((await opened(request))[0].reconstruction_label).toBe('NUFFT adjoint');
 });

@@ -129,7 +129,13 @@ export function Pipeline({
       ? ownRun
       : null;
   const activity = matchingRun?.pipeline;
+  const updatingWorkspace =
+    activePipelineJob(job) &&
+    job?.workspace_id === w.id &&
+    (!job.pipeline || job.pipeline.experiment === w.experiment);
   const locked =
+    busy ||
+    updatingWorkspace ||
     submitting ||
     awaitingCommit ||
     Boolean(

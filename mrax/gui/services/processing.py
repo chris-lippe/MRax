@@ -332,8 +332,9 @@ def processing_methods(session):
     return methods
 
 
-def processing_catalog(workspace):
+def processing_catalog(workspace, input_source="image", package=None):
     from .pipeline import pipeline_info
+    from .processing_scope import axis_info
 
     session = workspace.session
     if not session.is_loaded:
@@ -357,13 +358,16 @@ def processing_catalog(workspace):
     sources.extend(
         {"id": "map:" + name, "label": "Map: " + name}
         for name in session.map_names
-        if session.map_array(name).shape == session.spatial_shape
+        if session.map_array(name).shape == session.roi_shape
     )
+    if input_source not in {source["id"] for source in sources}:
+        input_source = "image"
     return {
         "methods": processing_methods(session),
         "sources": sources,
         "axes": [name for name in session.experiment_dims if name != "slice_package"],
         "spatial_axes": session.spatial_dim_names,
+        "axis_info": axis_info(workspace, input_source, package),
         "series_axes": [
             name
             for name in session.experiment_dims
@@ -775,6 +779,7 @@ def _dti(workspace, options, progress):
 
 def apply_processing(workspace, options, progress):
     from .noise_estimation import estimate_input, noise_mask, summarize
+    from .processing_scope import merge_component, region
 
     session = workspace.session
     options = dict(options)
@@ -785,6 +790,10 @@ def apply_processing(workspace, options, progress):
     )
     if method is None or method["unavailable"]:
         raise ValueError(method["unavailable"] if method else "Choose a processing method")
+    if method["id"] not in FILTERS and {"scope", "indices", "plane_dims"} & options.keys():
+        raise ValueError(
+            "Image/package scopes apply to denoising, not time-series or map calculations"
+        )
     parameters = _settings(method, options.get("parameters", {}))
     if method["id"] == "dti":
         return _dti(workspace, options, progress)
@@ -792,7 +801,10 @@ def apply_processing(workspace, options, progress):
     if component not in {"auto", "magnitude", "phase", "real", "imag"}:
         raise ValueError("Choose a supported input component")
     source_name = session.selected_experiment
-    context = _source(workspace, str(options.get("input", "view")), component)
+    partial = method["id"] in FILTERS and options.get("scope") in {"image", "package"}
+    context = _source(
+        workspace, str(options.get("input", "view")), "auto" if partial else component
+    )
     data, dims = context[:2]
     measured = context[5].measured_mask() if context[5] is not None else None
     if measured is not None:
@@ -830,8 +842,17 @@ def apply_processing(workspace, options, progress):
                 + " filter axes"
             )
         options["axes"] = list(axes)
+        selection = region(session, options, dims, context[5])
+        selected = data[selection]
+        work_data = (
+            scalar_component(selected, component) if partial and component != "auto" else selected
+        )
+        work_measured = None if measured is None else measured[selection]
+        work_dims = dict(zip(dims, work_data.shape))
         if not np.all(
-            np.isfinite(data) | ~measured if measured is not None else np.isfinite(data)
+            np.isfinite(work_data) | ~work_measured
+            if work_measured is not None
+            else np.isfinite(work_data)
         ) and not (key == "gaussian" and parameters.get("preserve_nan")):
             raise ValueError(
                 "This method needs finite input; use NaN-aware Gaussian for missing samples"
@@ -840,19 +861,27 @@ def apply_processing(workspace, options, progress):
         if key in {"bm3d", "bm4d"} and parameters["sigma"] is None:
             estimation_mask = noise_mask(workspace, options, dims, data.shape)
             if estimation_mask is not None:
-                estimated_noise = estimate_input(data, dims, axes, parameters, estimation_mask)
-        result = _filter(
-            data,
+                estimated_noise = estimate_input(
+                    work_data, work_dims, axes, parameters, estimation_mask[selection]
+                )
+        filtered = _filter(
+            work_data,
             [list(dims).index(name) for name in axes],
             key,
             parameters,
             progress,
             reports=estimates,
             roi_estimate=estimated_noise,
-            measured=measured,
+            measured=work_measured,
         )
+        if partial:
+            filtered = merge_component(selected, filtered, component, parameters)
+            result = np.array(data, dtype=np.result_type(data.dtype, filtered.dtype), copy=True)
+            result[selection] = filtered
+        else:
+            result = filtered
         if key in {"bm3d", "bm4d"} and parameters["sigma"] is None and estimated_noise is None:
-            count = int(np.prod([size for name, size in dims.items() if name not in axes]))
+            count = int(np.prod([size for name, size in work_dims.items() if name not in axes]))
             estimated_noise = summarize(estimates, blocks=count)
     else:
         if np.iscomplexobj(data):

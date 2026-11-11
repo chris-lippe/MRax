@@ -194,6 +194,9 @@ def validate_operations(document):
             "roi_name",
             "reference_experiment",
             "reference_frame",
+            "scope",
+            "indices",
+            "plane_dims",
         },
         "reconstruct": {"component", "pipeline"},
         "register": {
@@ -276,6 +279,36 @@ def validate_operations(document):
                 raise ValueError("Filter axes must be a list of dimension names")
             if settings.get("axis") is not None and not isinstance(settings["axis"], str):
                 raise ValueError("The acquisition axis must be a dimension name")
+            if "scope" in settings and (
+                not isinstance(settings["scope"], str)
+                or settings["scope"] not in {"image", "package", "dataset"}
+            ):
+                raise ValueError("Choose image, package or dataset denoising scope")
+            if {"scope", "indices", "plane_dims"} & settings.keys():
+                from mrax.gui.services.processing import FILTERS
+
+                if settings["method"] not in FILTERS:
+                    raise ValueError("Denoising scopes are not time-series settings")
+                if "scope" not in settings:
+                    raise ValueError("Denoising target coordinates require a scope")
+            if "indices" in settings and (
+                not isinstance(settings["indices"], dict)
+                or any(
+                    not isinstance(name, str) or type(index) is not int or index < 0
+                    for name, index in settings["indices"].items()
+                )
+            ):
+                raise ValueError("Denoising indices must name non-negative integer coordinates")
+            if "plane_dims" in settings and (
+                not isinstance(settings["plane_dims"], list)
+                or len(settings["plane_dims"]) != 2
+                or any(
+                    not isinstance(name, str) or name not in {"x", "y", "z"}
+                    for name in settings["plane_dims"]
+                )
+                or len(set(settings["plane_dims"])) != 2
+            ):
+                raise ValueError("Viewed-image denoising requires two spatial dimensions")
         if step.operation == "reconstruct" and (
             not isinstance(settings.get("component"), str)
             or settings.get("component")

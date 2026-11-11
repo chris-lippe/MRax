@@ -115,6 +115,7 @@ class SceneInfo(BaseModel):
 class ExperimentInfo(BaseModel):
     reconstruction_label: str = "Reconstruction"
     name: str
+    exp_type: str | None = None
     frames: int
     maps: list[str]
     has_reconstruction: bool
@@ -457,11 +458,19 @@ class ProcessingMethod(BaseModel):
     unavailable: str | None
 
 
+class ProcessingAxisInfo(BaseModel):
+    name: str
+    label: str
+    size: int
+    spatial: bool
+
+
 class ProcessingCatalog(BaseModel):
     methods: list[ProcessingMethod]
     sources: list[dict[str, str]]
     axes: list[str]
     spatial_axes: list[str]
+    axis_info: list[ProcessingAxisInfo] = []
     series_axes: list[str]
     history: list[dict[str, Any]]
 

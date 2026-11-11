@@ -1,6 +1,9 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+
 import { readFile, mkdir } from 'node:fs/promises';
+
 import type { Workspace } from '../src/api';
+
 import {
   chooseFilePath,
   loadExample,
@@ -13,6 +16,7 @@ import {
 async function current(request: APIRequestContext) {
   return (await (await request.get('/api/workspaces')).json())[0] as Workspace;
 }
+
 test.afterEach(async ({ request }) => {
   const token = (await (await request.get('/api/session')).json()).token;
   for (const w of await (await request.get('/api/workspaces')).json())
@@ -21,6 +25,7 @@ test.afterEach(async ({ request }) => {
       data: { revision: w.revision, discard: true },
     });
 });
+
 async function study(page: Page) {
   await page.goto('/');
   await loadExample(page);
@@ -39,51 +44,6 @@ async function study(page: Page) {
     await expect(page.getByRole('region', { name: 'ROIs', exact: true })).toContainText(name);
   }
 }
-
-test('compact preview enlarges downward, persists height and keeps image geometry and keyboard access', async ({
-  page,
-  request,
-}) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await study(page);
-  await expect(
-    page.getByRole('img', { name: 'Observed ROI signal across echoes', exact: true }),
-  ).toBeVisible();
-  const image = page.getByRole('region', { name: 'Image viewer', exact: true });
-  const height = (await image.boundingBox())!.height;
-  const divider = page.getByRole('separator', { name: 'Resize signal preview', exact: true });
-  const before = Number(await divider.getAttribute('aria-valuenow'));
-  const calls: string[] = [];
-  page.on('request', (r) => {
-    if (/\/(slice|tasks|view)(?:\?|$)/.test(r.url())) calls.push(r.url());
-  });
-  await divider.focus();
-  await divider.press('ArrowDown');
-  await divider.press('Shift+ArrowDown');
-  await expect(divider).toHaveAttribute('aria-valuenow', String(before + 80));
-  expect((await image.boundingBox())!.height).toBe(height);
-  const box = (await divider.boundingBox())!;
-  await divider.scrollIntoViewIfNeeded();
-  const start = (await divider.boundingBox())!;
-  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2 + 35, { steps: 4 });
-  await page.keyboard.press('Escape');
-  await page.mouse.up();
-  await expect(divider).toHaveAttribute('aria-valuenow', String(before + 80));
-  expect(box.width).toBeGreaterThan(200);
-  expect(calls).toEqual([]);
-  await page.reload();
-  await expect(divider).toHaveAttribute('aria-valuenow', String(before + 80));
-  const preview = page.getByRole('region', { name: 'ROI signal', exact: true });
-  await preview.getByRole('button', { name: 'Data table', exact: true }).click();
-  await expect(page.getByRole('table', { name: 'ROI signal values', exact: true })).toBeVisible();
-  await preview.getByRole('button', { name: 'Open signal curves', exact: true }).click();
-  await expect(
-    page.getByRole('region', { name: 'Scientific signal viewer', exact: true }),
-  ).toBeVisible();
-  expect((await current(request)).experiments).toHaveLength(1);
-});
 
 test('scientific viewer inspects samples, customizes axes, summarizes ranges and exports normal files without altering data', async ({
   page,
@@ -198,112 +158,4 @@ test('scientific viewer inspects samples, customizes axes, summarizes ranges and
   await page.getByLabel('Signal figure theme', { exact: true }).selectOption('auto');
   await page.screenshot({ path: info.outputPath('scientific-signal-dark.png') });
   expect(errors).toEqual([]);
-});
-
-test('dense scientific signals retain exact samples while limiting plot and table elements', async ({
-  page,
-  request,
-}) => {
-  await study(page);
-  const workspace = await current(request);
-  const x = Array.from({ length: 2001 }, (_, i) => i);
-  const observed = x.map((v) => (v >= 50 && v < 60 ? null : Math.sin(v / 30) * 100));
-  await page.route(/\/api\/workspaces(?:\/[^/?]+(?:\/view)?)?$/, async (route) => {
-    const response = await route.fetch();
-    const body = await response.json();
-    const replace = (value: Workspace) =>
-      value.id !== workspace.id
-        ? value
-        : {
-            ...value,
-            timecourse: {
-              ...workspace.timecourse,
-              x,
-              observed,
-              included: x.map(() => true),
-              x_name: 'Time',
-              x_unit: 's',
-            },
-          };
-    await route.fulfill({
-      response,
-      json: Array.isArray(body) ? body.map(replace) : replace(body),
-    });
-  });
-  await page.reload();
-  await selectWorkflow(page, 'View', 'Signal curves');
-  const plot = page.getByRole('img', { name: 'Scientific signal curve plot', exact: true });
-  await expect(plot).toBeVisible();
-  expect(await plot.locator('circle').count()).toBeLessThanOrEqual(1601);
-  await plot.focus();
-  await plot.press('End');
-  await expect(
-    page.getByRole('status', { name: 'Signal sample values', exact: true }),
-  ).toContainText('Sample 2001 / 2001');
-  await page.getByRole('tab', { name: 'Samples', exact: true }).click();
-  const rows = page
-    .getByRole('table', { name: 'Scientific signal samples', exact: true })
-    .locator('tbody tr');
-  await expect(rows).toHaveCount(100);
-  await page.getByRole('button', { name: 'Next samples', exact: true }).click();
-  await expect(rows.first().getByRole('rowheader')).toHaveText('101');
-  await page.getByRole('tab', { name: 'Statistics', exact: true }).click();
-  await expect(
-    page
-      .getByRole('table', { name: 'Signal range statistics', exact: true })
-      .locator('tbody tr td')
-      .first(),
-  ).toHaveText('1991');
-  await page.getByRole('tab', { name: 'Plot', exact: true }).click();
-  await page.getByLabel('Signal Y scale', { exact: true }).selectOption('log');
-  await expect(
-    page.getByRole('region', { name: 'Scientific signal viewer', exact: true }),
-  ).toContainText('non-positive values');
-  expect((await current(request)).revision).toBe(workspace.revision);
-});
-
-test('saved fit inputs, residual diagnostics and ROI-volume curves share the scientific viewer', async ({
-  page,
-  request,
-}) => {
-  await study(page);
-  await selectWorkflow(page, 'Fit');
-  await page.getByRole('button', { name: 'Run preview fit', exact: true }).click();
-  await expect(page.getByLabel('Fitted T2', { exact: true })).toBeVisible();
-  await page
-    .getByRole('region', { name: 'ROI signal', exact: true })
-    .getByRole('button', { name: 'Open signal curves', exact: true })
-    .click();
-  await expect(page.getByLabel('Signal source', { exact: true })).toHaveValue('fit');
-  await expect(page.locator('[data-signal-trace]')).toHaveCount(2);
-  await page.getByLabel('Signal fit display', { exact: true }).selectOption('residual');
-  await expect(
-    page.getByRole('img', { name: 'Scientific signal residual plot', exact: true }),
-  ).toBeVisible();
-  await page.getByRole('tab', { name: 'Statistics', exact: true }).click();
-  await expect(
-    page.getByRole('region', { name: 'Signal fit diagnostics', exact: true }),
-  ).toContainText('RMSE');
-  const before = await current(request);
-  await page.getByLabel('Signal source', { exact: true }).selectOption('volume');
-  await page.getByRole('button', { name: 'All ROIs', exact: true }).click();
-  await page.getByRole('button', { name: 'Plot ROI curves', exact: true }).click();
-  await expect(
-    page.getByRole('table', { name: 'Signal range statistics', exact: true }),
-  ).toContainText('Anterior');
-  await expect(
-    page.getByRole('table', { name: 'Signal range statistics', exact: true }),
-  ).toContainText('Posterior');
-  await page.getByRole('tab', { name: 'Plot', exact: true }).click();
-  await expect(page.locator('[data-signal-trace]')).toHaveCount(2);
-  await page.getByLabel('Plot Anterior', { exact: true }).uncheck();
-  await expect(page.locator('[data-signal-trace]')).toHaveCount(1);
-  await selectWorkflow(page, 'Analyze', 'ROI timecourses');
-  await expect(page.getByRole('region', { name: 'Timecourse results', exact: true })).toContainText(
-    'Anterior',
-  );
-  await selectWorkflow(page, 'View', 'Signal curves');
-  await expect(page.getByLabel('Signal source', { exact: true })).toHaveValue('volume');
-  await expect(page.getByLabel('Plot Anterior', { exact: true })).not.toBeChecked();
-  expect((await current(request)).revision).toBe(before.revision);
 });

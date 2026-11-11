@@ -1033,6 +1033,8 @@ export interface components {
         };
         /** ExperimentInfo */
         ExperimentInfo: {
+            /** Exp Type */
+            exp_type?: string | null;
             /** Frames */
             frames: number;
             /** Has Reconstruction */
@@ -1454,10 +1456,26 @@ export interface components {
             /** X Unit */
             x_unit?: string | null;
         };
+        /** ProcessingAxisInfo */
+        ProcessingAxisInfo: {
+            /** Label */
+            label: string;
+            /** Name */
+            name: string;
+            /** Size */
+            size: number;
+            /** Spatial */
+            spatial: boolean;
+        };
         /** ProcessingCatalog */
         ProcessingCatalog: {
             /** Axes */
             axes: string[];
+            /**
+             * Axis Info
+             * @default []
+             */
+            axis_info: components["schemas"]["ProcessingAxisInfo"][];
             /** History */
             history: {
                 [key: string]: unknown;
@@ -3341,7 +3359,10 @@ export interface operations {
     };
     processing_api_workspaces__key__processing_get: {
         parameters: {
-            query?: never;
+            query?: {
+                input_source?: string;
+                package?: number | null;
+            };
             header?: never;
             path: {
                 key: string;

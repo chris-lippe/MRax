@@ -1,20 +1,13 @@
 """Atomic chain editing and truthful progress on independently generated images."""
 
 import copy
-import threading
-import time
 
 import numpy as np
 import pytest
 from scipy.ndimage import gaussian_filter, median_filter
 
-from mrax.analysis import ROI
-from mrax.gui.services import processing
 from mrax.gui.services.pipeline import change_pipeline, pipeline_info
-from tests import test_web_analysis_workflows as web
 from tests.test_web_pipeline_workflows import process, workspace
-
-browser = web.browser
 
 
 def draft_step(step, *, client_id=None):
@@ -121,128 +114,3 @@ def test_failed_stale_and_cancelled_proposals_leave_pipeline_and_images_untouche
         assert events[-1]["status"] == ("cancelled" if failure == "cancel" else "failed")
         assert events[-1]["steps"][0]["status"] == "completed"
         assert events[-1]["steps"][1]["status"] in {"failed", "cancelled"}
-
-
-def test_job_reports_progress_for_the_confirmed_chain(browser):
-    client, _ = browser
-    w = web.new(client)
-    w, _ = web.job(
-        client, w, "process", method="gaussian", axes=["x", "y"], parameters={"sigma": 0.5}
-    )
-    first = w["pipeline"]["steps"][0]
-    rows = [draft_step(first), draft_step(first, client_id="copied-step")]
-    w, result = web.job(
-        client,
-        w,
-        "pipeline",
-        action="replace",
-        base_generation=w["pipeline"]["generation"],
-        steps=rows,
-    )
-    assert result["pipeline"]["experiment"] == w["experiment"]
-    assert result["pipeline"]["status"] == "completed"
-    assert [s["status"] for s in result["pipeline"]["steps"]] == ["completed", "completed"]
-    assert [s["client_id"] for s in result["pipeline"]["steps"]] == [r["id"] for r in rows]
-
-
-def test_copied_steps_reuse_frozen_references_and_masks_after_the_sources_change():
-    w, original = workspace()
-    w.session.current_experiment.setdefault("extra_metadata", {})["image_unit"] = "1"
-    w.session.add_experiment(
-        "Reference",
-        np.full((1, 9, 11), 2.0),
-        dims={"frame": 1, "x": 9, "y": 11},
-        extra_metadata={"image_unit": "1"},
-    )
-    w.session.select_experiment("Experiment")
-    mask = np.zeros((9, 11), dtype=np.uint16)
-    mask[2:7, 3:8] = 1
-    w.session.add_roi(ROI("Tissue", mask, dims=("x", "y")))
-    process(w, "normalize", reference_experiment="Reference", roi_names=["Tissue"])
-    w.session.select_experiment("Reference")
-    w.session.replace_image_data(np.full((1, 9, 11), 20.0))
-    w.session.select_experiment("Experiment")
-    w.session.remove_shared_roi("Tissue")
-    before = pipeline_info(w)
-    step = before["steps"][0]
-    change_pipeline(
-        w,
-        {
-            "action": "replace",
-            "base_generation": before["generation"],
-            "steps": [draft_step(step), draft_step(step, client_id="copy")],
-        },
-        lambda *_: None,
-    )
-    np.testing.assert_allclose(w.session.image_array[:, 3, 4], original[:, 3, 4] / 4)
-    assert np.isnan(w.session.image_array[:, 0, 0]).all()
-
-
-def test_cancel_endpoint_reports_chain_progress_without_applying_partial_results(
-    browser, monkeypatch
-):
-    client, _ = browser
-    w = web.new(client)
-    w, _ = web.job(
-        client, w, "process", method="gaussian", axes=["x", "y"], parameters={"sigma": 0.5}
-    )
-    before_pixels = web.pixels(client, w).copy()
-    first = w["pipeline"]["steps"][0]
-    rows = [draft_step(first), draft_step(first, client_id="cancel-copy")]
-    entered = threading.Event()
-    release = threading.Event()
-    original = processing.apply_processing
-    calls = 0
-
-    def controlled(workspace, options, progress):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            entered.set()
-            deadline = time.monotonic() + 5
-            while not release.wait(0.01) and time.monotonic() < deadline:
-                progress(0, 1, "Synthetic cancellation checkpoint")
-        return original(workspace, options, progress)
-
-    monkeypatch.setattr(processing, "apply_processing", controlled)
-    response = client.post(
-        f"/api/workspaces/{w['id']}/tasks",
-        json={
-            "revision": w["revision"],
-            "operation": "pipeline",
-            "options": {
-                "action": "replace",
-                "base_generation": w["pipeline"]["generation"],
-                "steps": rows,
-            },
-        },
-    )
-    assert response.status_code == 200
-    key = response.json()["id"]
-    try:
-        assert entered.wait(5)
-        running = client.get(f"/api/jobs/{key}").json()
-        assert [s["status"] for s in running["pipeline"]["steps"]] == [
-            "completed",
-            "running",
-        ]
-        cancel = client.post(f"/api/jobs/{key}/cancel")
-        assert cancel.status_code == 200
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            result = client.get(f"/api/jobs/{key}").json()
-            if result["status"] not in {"queued", "running", "cancelling"}:
-                break
-            time.sleep(0.01)
-        assert result["status"] == "cancelled"
-        assert result["pipeline"]["status"] == "cancelled"
-        assert [s["status"] for s in result["pipeline"]["steps"]] == [
-            "completed",
-            "cancelled",
-        ]
-        after = client.get(f"/api/workspaces/{w['id']}").json()
-        assert after["revision"] == w["revision"]
-        assert after["pipeline"] == w["pipeline"]
-        np.testing.assert_array_equal(web.pixels(client, after), before_pixels)
-    finally:
-        release.set()

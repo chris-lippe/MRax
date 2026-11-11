@@ -27,7 +27,7 @@ def qualify(device):
     installed = Path(mrax.__file__).resolve()
     assert "site-packages" in installed.parts, "Run this check against an installed wheel"
     assert importlib.util.find_spec("mrax.gui.app") is None
-    retired = ("pyside", "pyqt", "qtpy", "superqt")
+    retired = ("pyside", "pyqt", "qtpy", "superqt", "shiboken")
     assert not any(
         requirement.lower().startswith(retired)
         for requirement in importlib.metadata.requires("mrax") or []
