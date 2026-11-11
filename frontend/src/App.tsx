@@ -1270,7 +1270,7 @@ export function App() {
                   ? workspace.scene.comparison.enabled &&
                     !['metadata', 'signal'].includes(workflowTask)
                     ? `${workspace.scene.comparison.mode === 'overlay' ? 'Overlay' : 'Split view'} · ${workspace.scene.comparison.left.experiment} / ${workspace.scene.comparison.right.experiment}`
-                    : `${workspace.experiment || 'Add an experiment'} · ${workspace.frame_count} frames · ${workspace.slice_count} slices`
+                    : `${workspace.experiment || 'Add an experiment'} · ${workspace.dimensions.slice_package ? `${workspace.dimensions.slice_package} packages · ` : ''}${workspace.frame_count / (workspace.dimensions.slice_package || 1)} frames · ${workspace.slice_count} ${workspace.slice_count === 1 ? 'slice' : 'slices'}`
                   : 'Open a workspace or import image data.'}
               </p>
             </div>
@@ -1423,6 +1423,31 @@ export function App() {
                           : key === workspace.slice_dim
                             ? 'Slice'
                             : String(control.label ?? key);
+                      if (key === 'slice_package') {
+                        const choices = (control.choices ?? []) as {
+                          value: number;
+                          label: string;
+                        }[];
+                        return (
+                          <label key={key}>
+                            Slice package
+                            <select
+                              aria-label="Slice package"
+                              value={value}
+                              disabled={taskBusy}
+                              onChange={(event) =>
+                                void navigateIndex(key, Number(event.target.value))
+                              }
+                            >
+                              {choices.map((choice) => (
+                                <option key={choice.value} value={choice.value}>
+                                  {choice.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        );
+                      }
                       return (
                         <label key={key}>
                           {name}{' '}

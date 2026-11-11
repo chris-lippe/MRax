@@ -416,10 +416,17 @@ def _roi_nifti_reference(session: GuiSession, metadata: Mapping[str, Any] | None
     except (TypeError, ValueError):
         frame_index = 0
     affine = _experiment_nifti_affine(session, reference_experiment, frame_index=frame_index)
+    entry = (session.data or {}).get("experiments", {}).get(reference_experiment, {})
+    extra = entry.get("extra_metadata") or {}
+    source = entry.get("pipeline_source_grid") or extra.get("pipeline_source_grid") or {}
+    geometry = (
+        source.get("geometry") or entry.get("spatial_geometry") or extra.get("spatial_geometry")
+    )
     return {
         "experiment": reference_experiment or None,
         "selection": "mask metadata" if declared_experiment else "active experiment",
         "frame_index": max(0, frame_index),
         "affine": np.eye(4, dtype=float) if affine is None else affine,
+        "geometry": geometry,
         "identity_fallback": affine is None,
     }

@@ -175,7 +175,7 @@ def test_slice_and_echo_groups_use_pixel_coordinates_and_measured_slice_position
 
 
 @pytest.mark.parametrize("echo_first", [True, False])
-def test_multiple_packages_import_as_separate_spatial_stacks_and_reconstruct_without_transpose(
+def test_multiple_packages_import_on_one_axis_and_reconstruct_without_transpose(
     tmp_path, echo_first
 ):
     scan, _, _, _, _, _ = _scan(tmp_path, counts=(3, 2, 1), echo_first=echo_first)
@@ -184,22 +184,22 @@ def test_multiple_packages_import_as_separate_spatial_stacks_and_reconstruct_wit
         for path in scan.rglob("*")
         if path.is_file()
     }
-    with pytest.raises(ValueError, match="multiple slice packages"):
-        import_bruker_experiment(scan, load_raw_kspace=False)
     study, metadata = import_bruker_study(tmp_path, field_strength_mhz=100, load_raw_kspace=True)
-    assert len(study.datasets) == 3
-    assert [metadata["experiments"][name]["native_image_plane"] for name in study.names] == [
+    assert study.names == ["1"]
+    assert [
+        package["native_image_plane"] for package in metadata["experiments"]["1"]["slice_packages"]
+    ] == [
         "axial",
         "coronal",
         "sagittal",
     ]
-    for package, (name, experiment, _, dataset) in enumerate(study.iter_entries()):
-        assert metadata["experiments"][name]["slice_package"] == package
+    for _name, experiment, _, dataset in study.iter_entries():
+        assert experiment.dims["slice_package"] == 3
         assert dataset.acquisition.geometry == dataset.spatial_geometry
         result = reconstruct_acquisition(dataset.acquisition)
         expected = np.asarray(dataset.data).reshape(result.image.shape)
         np.testing.assert_allclose(result.image, expected, rtol=2e-5, atol=2e-4)
-        assert experiment.spatial_shape == ((7, 5, (3, 2, 1)[package]) if package < 2 else (7, 5))
+        assert experiment.spatial_shape == (7, 5, 3)
     assert all(
         hashlib.sha256(path.read_bytes()).digest() == digest for path, digest in hashes.items()
     )
@@ -213,9 +213,10 @@ def test_gui_preserves_package_geometry_through_lazy_raw_loading(tmp_path):
     _scan(tmp_path, counts=(3, 2, 1))
     session = GuiSession()
     session.import_bruker_study(tmp_path, field_strength_mhz=100)
-    assert len(session.experiment_names) == 3
-    for name, plane in zip(session.experiment_names, ("axial", "coronal", "sagittal"), strict=True):
-        session.select_experiment(name)
+    assert session.experiment_names == ["1"]
+    for package, plane in enumerate(("axial", "coronal", "sagittal")):
+        name = "1"
+        session.set_active_index("slice_package", package)
         original = np.asarray(session.current_experiment["mr_image"]).copy()
         assert session.native_image_plane == plane
         assert session.image_plane_dims == ("y", "x")
@@ -229,7 +230,7 @@ def test_gui_preserves_package_geometry_through_lazy_raw_loading(tmp_path):
             for axis in ("x", "y", "z")
             if axis in session.experiment_dims
         )
-        volume = original.reshape((-1,) + spatial)[0]
+        volume = original[package].reshape((-1,) + spatial)[0]
         np.testing.assert_array_equal(
             session.frame_image(), volume[..., 0].T if len(spatial) == 3 else volume.T
         )
@@ -279,11 +280,11 @@ def test_rectangular_storage_transposition_matches_the_raw_reconstruction(tmp_pa
 def test_exported_package_pixels_keep_their_patient_coordinates(tmp_path):
     nib = pytest.importorskip("nibabel")
     counts = (3, 2, 1)
-    _, _, _, positions, matrices, _ = _scan(tmp_path / "input", counts=counts)
-    study, _ = import_bruker_study(
-        tmp_path / "input", field_strength_mhz=100, load_raw_kspace=False
-    )
-    for package, (_, experiment, _, dataset) in enumerate(study.iter_entries()):
+    scan, _, _, positions, matrices, _ = _scan(tmp_path / "input", counts=counts)
+    for package in range(3):
+        experiment, dataset, _, _ = import_bruker_experiment(
+            scan, slice_package=package, load_raw_kspace=False
+        )
         paths = export_image_files(
             tmp_path / f"package-{package}.nii.gz",
             dataset.data,

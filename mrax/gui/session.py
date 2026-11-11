@@ -880,6 +880,95 @@ class GuiSession:
         return {str(key): int(value) for key, value in dims.items()}
 
     @property
+    def slice_packages(self) -> list[dict]:
+        return list(
+            (self.current_experiment.get("extra_metadata") or {}).get("slice_packages") or []
+        )
+
+    def _package_for_experiment(self, name=None):
+        name = name or self.selected_experiment
+        entry = (self.data or {}).get("experiments", {}).get(name, {})
+        packages = (entry.get("extra_metadata") or {}).get("slice_packages") or []
+        if not packages:
+            return None
+        state = self.view_states.get(name)
+        indices = (
+            self.active_indices
+            if name == self.selected_experiment
+            else (state.active_indices if state else {})
+        )
+        return packages[min(max(0, int(indices.get("slice_package", 0))), len(packages) - 1)]
+
+    def image_geometry(self, name=None) -> SpatialGeometry:
+        name = name or self.selected_experiment
+        package = self._package_for_experiment(name)
+        entry = (self.data or {}).get("experiments", {}).get(name, {})
+        dims = (self.summary_by_name.get(name) or {}).get("dims") or {}
+        geometry = _spatial_geometry_from_experiment_data(entry, dims=dims)
+        if package:
+            state = self.view_states.get(name)
+            indices = (
+                self.active_indices
+                if name == self.selected_experiment
+                else (state.active_indices if state else {})
+            )
+            frame_dims = geometry.frame_dims or tuple(
+                (dim, dims[dim]) for dim in non_spatial_names(dims)
+            )
+            frame = int(
+                np.ravel_multi_index(
+                    tuple(min(indices.get(dim, 0), size - 1) for dim, size in frame_dims),
+                    tuple(size for _, size in frame_dims),
+                )
+            )
+            if geometry.has_orientation:
+                return geometry.for_frame(frame)
+            return SpatialGeometry.from_metadata(package["spatial_geometry"])
+        return geometry
+
+    @property
+    def view_dimensions(self) -> dict[str, int]:
+        dims = self.experiment_dims
+        package = self._package_for_experiment()
+        if package and "z" in dims:
+            dims["z"] = int(self.image_geometry().spatial_shape[-1])
+        return dims
+
+    @property
+    def roi_dim_names(self) -> list[str]:
+        return (
+            ["slice_package"] if "slice_package" in self.experiment_dims else []
+        ) + self.spatial_dim_names
+
+    @property
+    def roi_shape(self) -> tuple[int, ...]:
+        return tuple(self.experiment_dims[name] for name in self.roi_dim_names)
+
+    def imported_roi(self, roi: ROI) -> ROI:
+        """Place a native mask in the selected package without altering its file."""
+        mask = np.asarray(roi.mask)
+        if self._package_for_experiment() and mask.shape != self.roi_shape:
+            shape = tuple(self.view_dimensions[name] for name in self.spatial_dim_names)
+            if mask.shape == shape[:2] and shape[-1] == 1:
+                mask = mask[..., None]
+            if mask.shape != shape:
+                raise ValueError("ROI dimensions do not match the selected slice package")
+            complete = np.zeros(self.roi_shape, dtype=mask.dtype)
+            index = self.active_indices.get("slice_package", 0)
+            complete[(index,) + tuple(slice(0, size) for size in shape)] = mask
+            mask = complete
+        if mask.shape != self.roi_shape:
+            raise ValueError("ROI dimensions do not match the native grid")
+        return ROI(roi.name, mask, dims=tuple(self.roi_dim_names), metadata=roi.metadata)
+
+    def _crop_display_image(self, image):
+        for axis, name in enumerate(self.image_plane_dims):
+            count = self.view_dimensions.get(name, image.shape[axis])
+            if image.shape[axis] > count:
+                image = np.take(image, np.arange(count), axis=axis)
+        return image
+
+    @property
     def spatial_dim_names(self) -> list[str]:
         dims = self.experiment_dims
         return spatial_names(dims) if dims else ["x", "y"]
@@ -931,7 +1020,9 @@ class GuiSession:
             original = np.asarray(self.original_image_array)
         except Exception:
             return True
-        return tuple(current.shape) == tuple(original.shape) and np.array_equal(current, original)
+        return tuple(current.shape) == tuple(original.shape) and np.array_equal(
+            current, original, equal_nan=True
+        )
 
     @property
     def processed_arrays(self) -> Mapping[str, Any]:
@@ -1269,7 +1360,53 @@ class GuiSession:
         self._slice_cache.clear()
         return changed
 
-    def dimension_controls(self, kind: str = "image") -> list[dict[str, int | str]]:
+    def dimension_controls(self, kind: str = "image") -> list[dict[str, Any]]:
+        package = self._package_for_experiment()
+        if (
+            package
+            and kind.replace("_", "") == "kspace"
+            and self.current_experiment.get("acquisition") is not None
+        ):
+            controls = [
+                {"key": name, "label": name, "axis": axis, "size": self.experiment_dims[name]}
+                for axis, name in enumerate(self.non_spatial_dim_names)
+            ]
+            controls += [{"key": "z", "label": "z", "axis": 0, "size": self.view_dimensions["z"]}]
+            if self.reconstruction_coil_count > 1:
+                controls.append(
+                    {
+                        "key": "coil",
+                        "label": "coil",
+                        "axis": 1,
+                        "size": self.reconstruction_coil_count,
+                    }
+                )
+        else:
+            controls = self._dimension_controls(kind)
+        if package:
+            for control in controls:
+                if control["key"] == "slice_package":
+                    control["label"] = "Slice package"
+                    control["choices"] = [
+                        {
+                            "value": index,
+                            "label": f"Package {index + 1} · {item['native_image_plane'].capitalize()} · {item['slice_count']} {'slice' if item['slice_count'] == 1 else 'slices'}",
+                        }
+                        for index, item in enumerate(self.slice_packages)
+                    ]
+                elif control["key"] == "z":
+                    control["size"] = self.view_dimensions.get("z", 1)
+        return controls
+
+    def _dimension_controls(self, kind: str = "image") -> list[dict[str, Any]]:
+        if self._package_for_experiment() and kind in {
+            "mrax_reconstruction",
+            "vendor_vs_mrax",
+            "vendor_mrax_diff",
+        }:
+            return _axis_controls_for_image(
+                self.image_array, self.experiment_dims, plane_dims=self.image_plane_dims
+            )
         """Return named controls for axes outside the displayed 2D plane."""
 
         if not self.is_loaded:
@@ -1327,15 +1464,36 @@ class GuiSession:
         dims = self.image_plane_dims
         if not self.is_loaded:
             return dims
-        geometry = _spatial_geometry_from_experiment_data(
-            self.current_experiment, dims=self.experiment_dims,
-        )
+        geometry = self.image_geometry()
         labels = geometry.axis_anatomical_labels
         spatial_dims = tuple(spatial_names(self.experiment_dims))
-        if labels is None or len(labels) != len(spatial_dims):
+        if labels is None or len(labels) != len(spatial_dims) or not geometry.has_orientation:
             return dims
         anatomical = dict(zip(spatial_dims, labels))
         return tuple(anatomical.get(dim, dim) for dim in dims)
+
+    @property
+    def image_plane_axis_directions(self) -> tuple[int, int]:
+        """Screen directions of increasing anatomical coordinates (row, column).
+
+        With no orientation affine, the labels refer to array indices, which
+        increase downwards and to the right. Image arrays are never flipped.
+        """
+        if not self.is_loaded:
+            return (1, 1)
+        geometry = self.image_geometry()
+        affine = geometry.affine_for_frame(self.active_frame)
+        spatial_dims = tuple(spatial_names(self.experiment_dims))
+        if affine is None or geometry.axis_anatomical_labels is None:
+            return (1, 1)
+        directions = []
+        for dim, label in zip(self.image_plane_dims, self.image_plane_axis_labels):
+            if dim not in spatial_dims or label not in ("x", "y", "z"):
+                directions.append(1)
+                continue
+            column = len(spatial_dims) - 1 - spatial_dims.index(dim)
+            directions.append(-1 if affine["xyz".index(label), column] < 0 else 1)
+        return directions[0], directions[1]
 
     def _image_plane_dims_for_experiment(
         self, name: str | None = None,
@@ -1351,7 +1509,7 @@ class GuiSession:
         spatial_dims = tuple(spatial_names(dims))
         if spatial_dims not in {("x", "y"), ("x", "y", "z")}:
             return dict(IMAGE_PLANE_DIMS)
-        geometry = _spatial_geometry_from_experiment_data(exp_data, dims=dims)
+        geometry = self.image_geometry(exp_name)
         labels = geometry.axis_anatomical_labels
         extra = exp_data.get("extra_metadata")
         if labels is None:
@@ -1379,6 +1537,14 @@ class GuiSession:
 
     def native_image_plane_for_experiment(self, name: str | None = None) -> str:
         exp_name = name or self.selected_experiment
+        package = self._package_for_experiment(exp_name)
+        if package:
+            labels = self.image_geometry(exp_name).axis_anatomical_labels
+            return (
+                {"x": "sagittal", "y": "coronal", "z": "axial"}[labels[2]]
+                if labels
+                else str(package["native_image_plane"])
+            )
         if self.data and "z" not in dict(self.summary_by_name.get(exp_name or "", {}).get("dims") or {}):
             entry = self.data.get("experiments", {}).get(exp_name or "", {})
             extra = entry.get("extra_metadata")
@@ -1412,10 +1578,7 @@ class GuiSession:
 
         if not self.is_loaded:
             return (1.0, 1.0)
-        geometry = _spatial_geometry_from_experiment_data(
-            self.current_experiment,
-            dims=self.experiment_dims,
-        )
+        geometry = self.image_geometry()
         spatial_dims = tuple(spatial_names(self.experiment_dims))
         if geometry.voxel_sizes is None or len(geometry.voxel_sizes) < len(spatial_dims):
             return (1.0, 1.0)
@@ -1431,6 +1594,8 @@ class GuiSession:
     def supports_image_planes(self, kind: str = "image") -> bool:
         kind = kind.lower().replace("-", "_").replace(" ", "_")
         if self.is_non_imaging or kind == "k_space":
+            return False
+        if self._package_for_experiment() and self.view_dimensions.get("z", 1) == 1:
             return False
         if not {"x", "y", "z"}.issubset(self.experiment_dims):
             return False
@@ -1490,7 +1655,7 @@ class GuiSession:
             else:
                 self.set_active_frame(value)
                 return
-        size = self.experiment_dims.get(key)
+        size = self.view_dimensions.get(key)
         for kind in ("image", "k_space", "map"):
             for control in self.dimension_controls(kind):
                 if control["key"] == key:
@@ -1501,7 +1666,13 @@ class GuiSession:
         value = max(0, int(value))
         if size is not None:
             value = min(value, max(0, size - 1))
+        previous_package = self.active_indices.get("slice_package", 0)
         self.active_indices[key] = value
+        if key == "slice_package":
+            if value != previous_package:
+                self.active_image_plane = self.native_image_plane
+            self.active_z = min(self.active_z, self.view_dimensions.get("z", 1) - 1)
+            self.active_indices["z"] = self.active_z
         if key in self.non_spatial_dim_names:
             names = self.non_spatial_dim_names
             shape = tuple(self.experiment_dims[name] for name in names)
@@ -1518,6 +1689,7 @@ class GuiSession:
 
     def set_active_frame(self, value: int) -> None:
         """Select a flattened acquisition frame and its named dimension indices."""
+        previous_package = self.active_indices.get("slice_package", 0)
         self.active_frame = self._bounded_frame(value)
         names = self.non_spatial_dim_names
         if names and self.experiment_dims:
@@ -1525,6 +1697,10 @@ class GuiSession:
             self.active_indices.update(
                 zip(names, (int(v) for v in np.unravel_index(self.active_frame, shape)))
             )
+        if self.active_indices.get("slice_package", 0) != previous_package:
+            self.active_image_plane = self.native_image_plane
+            self.active_z = min(self.active_z, self.view_dimensions.get("z", 1) - 1)
+            self.active_indices["z"] = self.active_z
         if names[:1] == ["t"] and self.experiment_dims:
             self.active_indices["frame"] = self.active_indices.get("t", 0)
         elif "frame" not in names or not self.experiment_dims:
@@ -1572,7 +1748,7 @@ class GuiSession:
                 kind="image",
                 plane_dims=self.image_plane_dims,
             )
-        return self._slice_cache[key]
+        return self._crop_display_image(self._slice_cache[key])
 
     def non_imaging_vector(self, frame: int | None = None, *, original: bool = False) -> np.ndarray:
         arr = np.asarray(self.original_image_array if original else self.image_array)
@@ -1634,7 +1810,7 @@ class GuiSession:
                 kind="image",
                 plane_dims=self.image_plane_dims,
             )
-        return self._slice_cache[key]
+        return self._crop_display_image(self._slice_cache[key])
 
     def kspace_image(
         self,
@@ -1648,6 +1824,20 @@ class GuiSession:
         frame_idx = self._bounded_frame(frame)
         z_idx = self.active_z if z is None else max(0, int(z))
         mode_name = mode or self.active_kspace_mode
+        acquisition = self.current_experiment.get("acquisition")
+        if (
+            acquisition is not None
+            and acquisition.recipe.output_slice_counts
+            and acquisition.kind == "cartesian"
+        ):
+            selected = acquisition.select_frames(np.asarray([frame_idx]))
+            count = acquisition.recipe.output_slice_counts[frame_idx]
+            coil = min(int(self.active_indices.get("coil", 0)), acquisition.coil_count - 1)
+            return transform_kspace(
+                selected.samples[min(z_idx, count - 1), coil],
+                mode_name,
+                center=self.active_kspace_centering,
+            )
         indices = dict(self.active_indices)
         indices["frame"] = frame_idx
         indices["z"] = z_idx
@@ -1685,7 +1875,7 @@ class GuiSession:
                 kind="map",
                 plane_dims=self.image_plane_dims,
             )
-        return self._slice_cache[key]
+        return self._crop_display_image(self._slice_cache[key])
 
     def add_roi(self, roi: ROI) -> None:
         roi = self._roi_with_inferred_dims(roi)
@@ -1770,12 +1960,14 @@ class GuiSession:
                 ]
 
     def apply_rois_to_all_experiments(self) -> None:
-        source_dims = tuple(self.spatial_dim_names)
-        source_shape = tuple(self.spatial_shape)
+        source_dims = tuple(self.roi_dim_names)
+        source_shape = tuple(self.roi_shape)
         source_geometry = self.build_dataset().spatial_geometry
         for name in self.experiment_names:
             dims = dict(self.summary_by_name.get(name, {}).get("dims") or {})
-            target_dims = tuple(spatial_names(dims))
+            target_dims = tuple(
+                (["slice_package"] if "slice_package" in dims else []) + spatial_names(dims)
+            )
             target_shape = tuple(int(dims[dim]) for dim in target_dims)
             if source_dims != target_dims or source_shape != target_shape:
                 raise ValueError("Native grids differ; register experiments before sharing ROIs")
@@ -3167,6 +3359,18 @@ def _display_slice(
     plane_dims: Sequence[str] = ("x", "y"),
 ) -> np.ndarray:
     arr = _array_source(array)
+    if dims and "slice_package" in dims and kind != "kspace":
+        spatial = {name: dims[name] for name in spatial_names(dims)}
+        shape = tuple(spatial.values())
+        if tuple(arr.shape) == shape:
+            dims = spatial
+        elif arr.shape[-len(shape) :] == shape and arr.ndim == len(shape) + 1:
+            if kind == "map" and arr.shape[0] == dims["slice_package"]:
+                dims = {"slice_package": dims["slice_package"], **spatial}
+            elif kind == "image" and arr.shape[0] == frame_count_from_dims(dims):
+                arr = arr.reshape(tuple(dims.values()))
+            elif kind == "image" and arr.shape[0] == 1:
+                dims = {"frame": 1, **spatial}
     if arr.ndim == 0:
         return np.asarray(arr).reshape((1, 1))
     if arr.ndim == 1:
@@ -3270,6 +3474,10 @@ def _axis_controls_for_map(
     plane_dims: Sequence[str] = ("x", "y"),
 ) -> list[dict[str, int | str]]:
     arr = _array_source(arr)
+    if dims and "slice_package" in dims:
+        spatial = {name: dims[name] for name in spatial_names(dims)}
+        if arr.shape == (dims["slice_package"],) + tuple(spatial.values()):
+            dims = {"slice_package": dims["slice_package"], **spatial}
     if arr.ndim <= 2:
         return []
     controls: list[dict[str, int | str]] = []

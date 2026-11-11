@@ -125,6 +125,8 @@ type ComparisonPlane = {
   shape: [number, number];
   spacing: [number, number];
   plane_dims: [string, string];
+  plane_axis_labels?: [string, string];
+  plane_axis_directions?: [number, number];
   range: [number, number];
   frame: number;
   unit: string;

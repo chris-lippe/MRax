@@ -73,7 +73,7 @@ test('image sliders clear pointer focus and keep keyboard access with stronger f
   await settings.getByRole('tab', { name: 'Accessibility', exact: true }).click();
   await settings.getByRole('checkbox', { name: 'Stronger keyboard focus', exact: true }).check();
   await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
-  for (const label of ['Brightness', 'Display contrast', 'Echo', 'Slice']) {
+  for (const label of ['Lower display bound', 'Upper display bound', 'Echo', 'Slice']) {
     const control = page.getByRole('slider', { name: label, exact: true });
     await control.scrollIntoViewIfNeeded();
     await control.focus();
@@ -81,9 +81,16 @@ test('image sliders clear pointer focus and keep keyboard access with stronger f
     await expect.poll(() => outline(control)).toBe('solid');
     const before = await control.inputValue();
     const box = (await control.boundingBox())!;
-    await page.mouse.move(box.x + box.width * 0.7, box.y + box.height / 2);
+    const min = Number(await control.getAttribute('min'));
+    const max = Number(await control.getAttribute('max'));
+    const fraction = (Number(await control.inputValue()) - min) / (max - min);
+    await page.mouse.move(box.x + 5 + (box.width - 10) * fraction, box.y + box.height / 2);
     await page.mouse.down();
-    await page.mouse.move(box.x + box.width * 0.85, box.y + box.height / 2, { steps: 4 });
+    await page.mouse.move(
+      box.x + box.width * (label === 'Upper display bound' ? 0.75 : 0.25),
+      box.y + box.height / 2,
+      { steps: 4 },
+    );
     await page.mouse.up();
     await expect(control).toBeFocused();
     await expect.poll(() => outline(control)).toBe('none');

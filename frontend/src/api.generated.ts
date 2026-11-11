@@ -1502,6 +1502,8 @@ export interface components {
              * @enum {string}
              */
             axes: "filter" | "series" | "none";
+            /** Axis Count */
+            axis_count?: (2 | 3) | null;
             /** Fields */
             fields: components["schemas"]["ProcessingField"][];
             /** Group */
@@ -1887,6 +1889,11 @@ export interface components {
             /** Active Map */
             active_map?: string | null;
             /**
+             * Can Change Plane
+             * @default false
+             */
+            can_change_plane: boolean;
+            /**
              * Can Load Raw
              * @default false
              */
@@ -2045,6 +2052,11 @@ export interface components {
              * @default axial
              */
             plane: string;
+            /**
+             * Plane Axis Directions
+             * @default []
+             */
+            plane_axis_directions: (-1 | 1)[];
             /**
              * Plane Axis Labels
              * @default []

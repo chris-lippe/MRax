@@ -88,7 +88,17 @@ test('View, Segment, Fit and Register share layers and independent ROI selection
   await selectWorkflow(page, 'View', 'Image display');
   await zoomImage(page, 2);
   const initialZoom = await imageZoom(page);
-  await page.getByLabel('Display contrast', { exact: true }).fill('1.3');
+  const intensity = page.getByLabel('Minimum display value', { exact: true });
+  const maximum = Number(
+    await page.getByLabel('Maximum display value', { exact: true }).inputValue(),
+  );
+  await intensity.fill(
+    String(
+      Number(await intensity.inputValue()) + (maximum - Number(await intensity.inputValue())) * 0.2,
+    ),
+  );
+  await intensity.press('Enter');
+  const savedIntensity = await intensity.inputValue();
 
   await selectExperiment(page, 'Motion shifted');
   await selectWorkflow(page, 'Register');
@@ -121,7 +131,7 @@ test('View, Segment, Fit and Register share layers and independent ROI selection
   await selectWorkflow(page, 'Fit');
   await selectWorkflow(page, 'View', 'Image display');
   await expect.poll(() => imageZoom(page)).toBe(initialZoom);
-  await expect(page.getByLabel('Display contrast', { exact: true })).toHaveValue('1.3');
+  await expect(intensity).toHaveValue(savedIntensity);
   await selectWorkflow(page, 'View', 'Image and ROI overlays');
   await expect(page.getByLabel('Show Anterior', { exact: true })).not.toBeChecked();
   await expect(page.getByRole('region', { name: 'Overlay 1', exact: true })).toContainText(

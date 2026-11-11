@@ -13,6 +13,11 @@ def native_mask_preview(session, name, axes=None, slice_index=0):
         raise ValueError("Choose an existing ROI")
     mask = np.asarray(roi.mask)
     dims = tuple(roi.dims or session.spatial_dim_names)
+    if "slice_package" in dims:
+        axis = dims.index("slice_package")
+        mask = np.take(mask, session.active_indices.get("slice_package", 0), axis=axis)
+        dims = tuple(dim for dim in dims if dim != "slice_package")
+        mask = mask[tuple(slice(0, session.view_dimensions[dim]) for dim in dims)]
     if mask.ndim not in {2, 3} or len(dims) != mask.ndim:
         raise ValueError("A mask preview requires two or three named spatial dimensions")
     plane_dims = tuple(axes.split(",")) if axes else dims[:2]

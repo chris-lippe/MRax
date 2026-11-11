@@ -144,8 +144,8 @@ def _compose_rois(workspace, options):
         raise ValueError("A source ROI no longer exists")
     sources = [lookup[key] for key in names]
     if any(
-        tuple(r.mask.shape) != tuple(session.spatial_shape)
-        or tuple(r.dims or session.spatial_dim_names) != tuple(session.spatial_dim_names)
+        tuple(r.mask.shape) != tuple(session.roi_shape)
+        or tuple(r.dims or session.roi_dim_names) != tuple(session.roi_dim_names)
         for r in sources
     ):
         raise ValueError("Source ROIs must use the same native grid")
@@ -155,7 +155,7 @@ def _compose_rois(workspace, options):
         raise ValueError("Choose a binary or indexed mask and a valid overlap rule")
     if len(sources) > 65535:
         raise ValueError("An indexed mask supports at most 65535 labels")
-    mask = np.zeros(session.spatial_shape, dtype=np.uint16)
+    mask = np.zeros(session.roi_shape, dtype=np.uint16)
     for index, source in enumerate(sources, 1):
         covered = np.asarray(source.mask) != 0
         if mode == "indexed":
@@ -170,15 +170,15 @@ def _compose_rois(workspace, options):
     if mode == "indexed":
         metadata["label_names"] = {str(i): r.name for i, r in enumerate(sources, 1)}
     remember_rois(workspace)
-    session.add_roi(ROI(name, mask, dims=tuple(session.spatial_dim_names), metadata=metadata))
+    session.add_roi(ROI(name, mask, dims=tuple(session.roi_dim_names), metadata=metadata))
     session.fit_settings.selected_roi = name
 
 
 def _embed(session, plane):
     return embed_mask_slice(
         plane,
-        spatial_shape=session.spatial_shape,
-        spatial_dims=session.spatial_dim_names,
+        spatial_shape=session.roi_shape,
+        spatial_dims=session.roi_dim_names,
         indices=session.active_indices,
         plane_dims=session.image_plane_dims,
     )
@@ -262,8 +262,8 @@ def _native_roi_command(workspace, action, options, image=None):
         session.add_roi(
             ROI(
                 name,
-                np.zeros(session.spatial_shape, dtype=np.uint16),
-                dims=tuple(session.spatial_dim_names),
+                np.zeros(session.roi_shape, dtype=np.uint16),
+                dims=tuple(session.roi_dim_names),
                 metadata={"kind": "mask", "consolidated": True},
             )
         )
@@ -281,7 +281,7 @@ def _native_roi_command(workspace, action, options, image=None):
             raise ValueError("Only an unconsolidated geometric ROI can be reshaped")
         mode = str(options.get("mode", "add"))
         if action == "draw":
-            if roi is None or tuple(roi.mask.shape) != tuple(session.spatial_shape):
+            if roi is None or tuple(roi.mask.shape) != tuple(session.roi_shape):
                 raise ValueError("Select an ROI on the current native grid")
             if mode not in {"add", "subtract"}:
                 raise ValueError("Choose an add or subtract drawing round")
@@ -305,9 +305,7 @@ def _native_roi_command(workspace, action, options, image=None):
         if roi is not None:
             _commit(session, roi, mask, metadata)
         else:
-            session.add_roi(
-                ROI(name, mask, dims=tuple(session.spatial_dim_names), metadata=metadata)
-            )
+            session.add_roi(ROI(name, mask, dims=tuple(session.roi_dim_names), metadata=metadata))
         session.fit_settings.selected_roi = name
         if options.get("auto_subtract") and not (action == "draw" and mode == "subtract"):
             _subtract_from_others(session, name, covered)
@@ -332,7 +330,7 @@ def _native_roi_command(workspace, action, options, image=None):
         for key in ("bounds", "points", "angle", "sides"):
             converted.metadata.pop(key, None)
         return
-    if tuple(np.shape(roi.mask)) != tuple(session.spatial_shape):
+    if tuple(np.shape(roi.mask)) != tuple(session.roi_shape):
         raise ValueError("This ROI belongs to a different native grid")
     if action == "brush":
         points = np.asarray(options.get("points", []), dtype=float)
@@ -383,6 +381,22 @@ def _native_roi_command(workspace, action, options, image=None):
         elif action == "remove":
             session.remove_shared_roi(name)
         return
+    package_roi = None
+    if "slice_package" in roi.dims and action in {
+        "shift",
+        "delete_slice",
+        "copy_slice",
+        "interpolate",
+        "grow",
+    }:
+        package_roi = roi
+        package_mask = np.asarray(roi.mask).copy()
+        package_index = int(session.active_indices.get("slice_package", 0))
+        native = package_mask[package_index]
+        native = native[
+            tuple(slice(0, session.view_dimensions[dim]) for dim in session.spatial_dim_names)
+        ]
+        roi = ROI(roi.name, native, dims=tuple(session.spatial_dim_names), metadata=roi.metadata)
     mask = np.asarray(roi.mask).copy()
     metadata = {"kind": "mask", "consolidated": True}
     if action in {"combine", "subtract"}:
@@ -471,6 +485,15 @@ def _native_roi_command(workspace, action, options, image=None):
     else:
         raise ValueError("Unknown ROI action")
     remember_rois(workspace)
+    if package_roi is not None:
+        package_mask[package_index] = np.pad(
+            mask,
+            tuple(
+                (0, target - size)
+                for target, size in zip(package_mask[package_index].shape, mask.shape)
+            ),
+        )
+        roi, mask = package_roi, package_mask
     _commit(session, roi, mask, metadata)
 
 

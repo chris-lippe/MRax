@@ -12,8 +12,7 @@ from mrax.data_struct.geometry import SpatialGeometry
 from mrax.io.nifti import mrax_to_nifti_volume, save_nifti
 
 
-def image_frames(array, dims=None):
-    """Yield (index, suffix, spatial volume), retaining singleton spatial axes."""
+def _image_layout(array, dims=None):
     arr = np.asarray(array)
     if np.iscomplexobj(arr):
         raise ValueError("Choose a real image component before image export")
@@ -33,7 +32,11 @@ def image_frames(array, dims=None):
             candidates = [axes for axes in combinations(non_spatial, len(leading))
                           if tuple(dims[name] for name in axes) == leading]
             if len(candidates) != 1:
-                repeats = [axes for axes in candidates if all(name in ("t", "frame") for name in axes)]
+                repeats = [
+                    axes
+                    for axes in candidates
+                    if all(name in ("t", "frame", "slice_package") for name in axes)
+                ]
                 candidates = repeats if len(repeats) == 1 else candidates
             if len(candidates) != 1:
                 raise ValueError("Ambiguous map dimensions; provide the map's explicit dimension names")
@@ -46,6 +49,12 @@ def image_frames(array, dims=None):
             names = list(("x", "y", "z")[:arr.ndim])
         if len(names) != arr.ndim:
             raise ValueError("Name spatial and frame dimensions before image export")
+    return arr, names
+
+
+def image_frames(array, dims=None):
+    """Yield (index, suffix, spatial volume), retaining singleton spatial axes."""
+    arr, names = _image_layout(array, dims)
     spatial_axes = [i for i, name in enumerate(names) if name in ("x", "y", "z")]
     if len(spatial_axes) not in (2, 3):
         raise ValueError("Image export requires two or three spatial dimensions")
@@ -68,8 +77,36 @@ def export_image_files(path, array, *, dims=None, affine=None, geometry=None, fo
 
     if format not in {"nifti", "dicom"}:
         raise ValueError("Image format must be 'nifti' or 'dicom'")
+    if isinstance(geometry, Mapping):
+        geometry = SpatialGeometry.from_metadata(geometry)
+    shaped, names = _image_layout(array, dims)
+    frame_dims = [
+        (name, shaped.shape[axis]) for axis, name in enumerate(names) if name not in {"x", "y", "z"}
+    ]
+
+    def measured_frame(index, volume):
+        geometry_index = index
+        if geometry is not None and geometry.frame_dims:
+            coordinates = dict(
+                zip(
+                    (name for name, _ in frame_dims),
+                    np.unravel_index(index, tuple(size for _, size in frame_dims)),
+                )
+            )
+            geometry_index = int(
+                np.ravel_multi_index(
+                    tuple(coordinates.get(name, 0) for name, _ in geometry.frame_dims),
+                    tuple(size for _, size in geometry.frame_dims),
+                )
+            )
+        shape = geometry.shape_for_frame(geometry_index) if geometry is not None else None
+        if shape:
+            volume = volume[tuple(slice(0, size) for size in shape)]
+        return geometry_index, volume
+
     # Check every frame and slice before writing any file in a series.
-    for _, suffix, volume in image_frames(array, dims):
+    for index, suffix, volume in image_frames(array, dims):
+        _, volume = measured_frame(index, volume)
         stem = path.name[:-7] if path.name.endswith(".nii.gz") else path.stem
         stem += "_" + suffix if suffix else ""
         if format == "nifti":
@@ -81,13 +118,12 @@ def export_image_files(path, array, *, dims=None, affine=None, geometry=None, fo
                 name = stem + (f"_slice-{z:04d}" if slices != 1 else "") + ".dcm"
                 require_new_file(path.with_name(name), overwrite=overwrite, warn=True)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(geometry, Mapping):
-        geometry = SpatialGeometry.from_metadata(geometry)
     default_affine = np.eye(4) if affine is None else np.asarray(affine, dtype=float)
     outputs = []
     study_uid = reference_uid = None
     for index, suffix, volume in image_frames(array, dims):
-        frame_affine = geometry.affine_for_frame(index) if geometry is not None else None
+        geometry_index, volume = measured_frame(index, volume)
+        frame_affine = geometry.affine_for_frame(geometry_index) if geometry is not None else None
         matrix = default_affine if frame_affine is None else frame_affine
         stem = path.name[:-7] if path.name.endswith(".nii.gz") else path.stem
         stem += "_" + suffix if suffix else ""

@@ -148,7 +148,7 @@ export function ViewerControls({
                 key={plane}
                 disabled={
                   plane !== (navigation?.plane ?? workspace.plane) &&
-                  !(navigation?.volume ?? 'z' in workspace.dimensions)
+                  !(navigation?.volume ?? workspace.can_change_plane)
                 }
               >
                 {plane}

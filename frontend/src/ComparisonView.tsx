@@ -15,6 +15,7 @@ import { WorkbenchIcon } from './WorkbenchIcon';
 import { useContextMenu } from './ContextMenu';
 import { MAX_ZOOM, MIN_ZOOM, type ImageDisplay } from './useImageDisplay';
 import { IntensityControls, type IntensityWindow } from './IntensityControls';
+import { ImageAxes } from './ImageAxes';
 import { OpacityControl } from './OpacityControl';
 import { imageNavigationHelp, useImageNavigation } from './useImageNavigation';
 
@@ -225,23 +226,23 @@ function ComparisonCanvas({
   shape,
   spacing,
   level,
-  contrast,
   palette,
   display,
   label,
   probe,
   onProbe,
+  axes,
 }: {
   values: Pixels;
   shape: [number, number];
   spacing: [number, number];
   level: { center: number; width: number };
-  contrast: number;
   palette: string;
   display: ImageDisplay;
   label: string;
   probe?: [number, number] | null;
   onProbe?: (value: [number, number] | null) => void;
+  axes?: { dims: string[]; labels?: string[]; directions?: number[] };
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
@@ -267,7 +268,7 @@ function ComparisonCanvas({
     const context = canvas.current?.getContext('2d');
     if (!context) return;
     const output = context.createImageData(columns, rows);
-    const scale = contrast / Math.max(level.width, Number.EPSILON);
+    const scale = 1 / Math.max(level.width, Number.EPSILON);
     for (let index = 0; index < values.length; index++) {
       if (Number.isFinite(values[index]))
         writeColor(
@@ -284,7 +285,7 @@ function ComparisonCanvas({
       output.data[index * 4 + 3] = 255;
     }
     context.putImageData(output, 0, 0);
-  }, [values, rows, columns, level.center, level.width, contrast, palette]);
+  }, [values, rows, columns, level.center, level.width, palette]);
   return (
     <div
       className="comparison-canvas-viewport"
@@ -339,6 +340,7 @@ function ComparisonCanvas({
           transform: `translate(${display.pan[0]}px, ${display.pan[1]}px) scale(${display.zoom})`,
         }}
       />
+      {axes && <ImageAxes {...axes} />}
       <span className="comparison-pixel">{onProbe ? sampled : pixel}</span>
     </div>
   );
@@ -544,9 +546,17 @@ export function ComparisonView({
         <ComparisonCanvas
           values={images.values[index]}
           shape={plane.shape}
+          axes={
+            layout === 'side-by-side'
+              ? {
+                  dims: plane.plane_dims,
+                  labels: plane.plane_axis_labels,
+                  directions: plane.plane_axis_directions,
+                }
+              : undefined
+          }
           spacing={plane.spacing}
           level={level}
-          contrast={1}
           palette={source.colormap ?? 'gray'}
           display={display}
           probe={layout === 'overlay' ? probe : undefined}
@@ -586,10 +596,6 @@ export function ComparisonView({
               values={images.values[targetSide === 'left' ? 0 : 1]}
               range={rangeFor(targetSide)}
               level={windowFor(targetSide)}
-              contrast={
-                (rangeFor(targetSide)[1] - rangeFor(targetSide)[0] || 1) /
-                windowFor(targetSide).width
-              }
               onChange={previewIntensity}
               onCommit={(next) => void commitIntensity(next)}
               reset={() => void commitIntensity(null)}
@@ -652,6 +658,13 @@ export function ComparisonView({
           <>
             {pane(0)}
             {pane(1)}
+            {layout !== 'side-by-side' && (
+              <ImageAxes
+                dims={images.planes[0].plane_dims}
+                labels={images.planes[0].plane_axis_labels}
+                directions={images.planes[0].plane_axis_directions}
+              />
+            )}
             {layout !== 'overlay' && (
               <div
                 role="separator"

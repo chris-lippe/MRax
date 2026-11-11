@@ -120,8 +120,10 @@ test('file controls and the discard confirmation stay English', async ({ page })
     name: 'Close study: Synthetic T2 phantom',
     exact: true,
   });
+  await expect(close).toBeEnabled();
   await close.focus();
-  await close.click();
+  await expect(close).toBeFocused();
+  await close.press('Enter');
   const confirmation = page.getByRole('dialog', { name: 'Discard unsaved changes?', exact: true });
   await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
   await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();

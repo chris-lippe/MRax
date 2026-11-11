@@ -38,7 +38,7 @@ export const tutorialSteps: readonly TutorialStep[] = [
     title: 'Navigate images',
     action: 'Open image controls',
     context: { section: 'image', task: 'display' },
-    text: 'Move Echo or Slice below the image; arrow keys also adjust a focused slider. View controls contain brightness, contrast and value bounds. Use the mouse wheel to zoom and drag the image to pan.',
+    text: 'Move Echo or Slice below the image; arrow keys also adjust a focused slider. Change the intensity range in View controls. Arrows at the image borders show increasing axis directions. Use the mouse wheel to zoom and drag the image to pan.',
   },
   {
     id: 'metadata',

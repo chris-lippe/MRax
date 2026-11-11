@@ -5,17 +5,16 @@ export const MIN_ZOOM = 1;
 export const MAX_ZOOM = 8;
 
 type DisplaySettings = {
-  contrast: number;
   zoom: number;
   pan: [number, number];
   window: { center: number; width: number } | null;
 };
-const initial: DisplaySettings = { contrast: 1, zoom: MIN_ZOOM, pan: [0, 0], window: null };
+const initial: DisplaySettings = { zoom: MIN_ZOOM, pan: [0, 0], window: null };
 
 export function useImageDisplay(key: string | undefined, values: Pixels | null, rgb = false) {
   const [settings, setSettings] = useState<Record<string, DisplaySettings>>({});
   const id = key ?? '';
-  const { contrast, zoom, pan, window } = settings[id] ?? initial;
+  const { zoom, pan, window } = settings[id] ?? initial;
   function setField<K extends keyof DisplaySettings>(
     field: K,
     value: SetStateAction<DisplaySettings[K]>,
@@ -29,7 +28,6 @@ export function useImageDisplay(key: string | undefined, values: Pixels | null, 
       return { ...previous, [id]: { ...before, [field]: next } };
     });
   }
-  const setContrast = (value: SetStateAction<number>) => setField('contrast', value);
   const setZoom = (value: SetStateAction<number>) => setField('zoom', value);
   const setPan = (value: SetStateAction<[number, number]>) => setField('pan', value);
   const setWindow = (value: SetStateAction<DisplaySettings['window']>) => setField('window', value);
@@ -46,12 +44,9 @@ export function useImageDisplay(key: string | undefined, values: Pixels | null, 
     return Number.isFinite(minimum) ? ([minimum, maximum] as const) : ([0, 1] as const);
   }, [values, rgb]);
   function resetIntensity() {
-    setContrast(1);
     setWindow(null);
   }
   return {
-    contrast,
-    setContrast,
     zoom,
     setZoom,
     zoomIn: () => setZoom((value) => Math.min(MAX_ZOOM, Number((value * 1.25).toFixed(1)))),

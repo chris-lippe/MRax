@@ -264,7 +264,9 @@ def register_routes(app, get_record, check_revision, add_record):
                         roi = import_mask(
                             path,
                             name=str(options.get("name") or path.stem),
-                            dims=tuple(session.spatial_dim_names),
+                            dims=None
+                            if session.slice_packages
+                            else tuple(session.spatial_dim_names),
                         )
                         rois = [roi]
                     else:
@@ -275,8 +277,7 @@ def register_routes(app, get_record, check_revision, add_record):
                             if linked.parent != sidecar.parent.resolve():
                                 raise ValueError("ROI data must be beside its sidecar")
                         rois = load_roi_set(path)
-                    if any(np.shape(r.mask) != session.spatial_shape for r in rois):
-                        raise ValueError("ROI dimensions do not match the native grid")
+                    rois = [session.imported_roi(roi) for roi in rois]
                     if any(r.name in [v.name for v in session.shared_rois] for r in rois):
                         raise ValueError("An ROI with this name already exists")
                     remember_rois(workspace)

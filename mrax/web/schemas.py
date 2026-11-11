@@ -336,6 +336,8 @@ class WorkspaceInfo(BaseModel):
     plane: str = "axial"
     plane_dims: list[str] = ["x", "y"]
     plane_axis_labels: list[str] = []
+    plane_axis_directions: list[Literal[-1, 1]] = []
+    can_change_plane: bool = False
     indices: dict[str, int] = {}
     dimension_controls: list[dict[str, Any]] = []
     dimensions: dict[str, int] = {}
@@ -450,6 +452,7 @@ class ProcessingMethod(BaseModel):
     group: str
     fields: list[ProcessingField]
     axes: Literal["filter", "series", "none"]
+    axis_count: Literal[2, 3] | None = None
     reference: Literal["frame", "series"] | None
     unavailable: str | None
 

@@ -8,7 +8,7 @@ import numpy as np
 
 from mrax.data_struct.acquisition import AcquisitionData, ReconstructionRecipe
 
-from .bruker_frames import output_frame_grid
+from .bruker_frames import output_frame_grid, slice_packages
 from .bruker_storage import cartesian_event_map, coordinate_event_map, decode_records
 from .definitions import DefinitionLibrary
 
@@ -58,13 +58,26 @@ def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), pro
     method, acqp = parse_jcamp(folder / "method"), parse_jcamp(folder / "acqp")
     pdata = folder / "pdata" / str(pdata_index)
     reco, visu = parse_jcamp(pdata / "reco"), parse_jcamp(pdata / "visu_pars")
-    frame_grid, has_slices = output_frame_grid(visu, slice_package)
-    visu["_mrax_output_frame_indices"] = frame_grid.tolist()
+    packages = slice_packages(visu)
+    package_grids = (
+        [output_frame_grid(visu, package)[0] for package in range(len(packages))]
+        if slice_package is None and len(packages) > 1
+        else []
+    )
+    frame_grid, has_slices = output_frame_grid(visu, 0 if package_grids else slice_package)
+    if package_grids:
+        visu["_mrax_package_frame_indices"] = [grid.tolist() for grid in package_grids]
+    else:
+        visu["_mrax_output_frame_indices"] = frame_grid.tolist()
     visu["_mrax_selected_package"] = slice_package
     sizes = tuple(int(v) for v in _numbers(visu.get("VisuCoreSize")))
     if len(sizes) == 2:
-        if has_slices and frame_grid.shape[1] > 1:
-            sizes += (frame_grid.shape[1],)
+        if package_grids or (has_slices and frame_grid.shape[1] > 1):
+            sizes += (
+                max(grid.shape[1] for grid in package_grids)
+                if package_grids
+                else frame_grid.shape[1],
+            )
     geometry = bruker_spatial_geometry(visu, spatial_shape=sizes)
 
     def image_layout(result):
@@ -77,11 +90,27 @@ def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), pro
             # package selection and spatial ordering as the vendor image decoder.
             ungrouped = replace(acquisition, recipe=replace(acquisition.recipe,
                 stack_slices=1, average_repeats=1, output_frame_indices=(), output_flips=()))
-            indices = (frame_grid[:, None, :] * repeats + np.arange(repeats)[None, :, None]).ravel()
+            grids = package_grids or [frame_grid]
+            indices = np.concatenate(
+                [
+                    (grid[:, None, :] * repeats + np.arange(repeats)[None, :, None]).ravel()
+                    for grid in grids
+                ]
+            )
             selected = ungrouped.select_frames(indices)
-            acquisition = replace(selected, geometry=geometry,
-                recipe=replace(selected.recipe, stack_slices=frame_grid.shape[1], average_repeats=repeats))
-        elif slice_package is not None and acquisition.domain == "kspace":
+            acquisition = replace(
+                selected,
+                geometry=geometry,
+                recipe=replace(
+                    selected.recipe,
+                    stack_slices=max(grid.shape[1] for grid in grids),
+                    average_repeats=repeats,
+                    output_slice_counts=tuple(grid.shape[1] for grid in package_grids for _ in grid)
+                    if package_grids
+                    else (),
+                ),
+            )
+        elif (slice_package is not None or package_grids) and acquisition.domain == "kspace":
             raise ValueError("The raw acquisition does not establish a mapping to the selected slice package")
         if acquisition.domain == "kspace" and geometry.spatial_shape:
             recipe = acquisition.recipe
@@ -90,7 +119,7 @@ def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), pro
                 shape = tuple(shape[i] for i in recipe.output_permutation)
             for permutation in set(recipe.frame_permutations or (tuple(range(len(shape))),)):
                 formatted = tuple(shape[i] for i in permutation)
-                if recipe.stack_slices > 1:
+                if recipe.stack_slices > 1 or recipe.output_slice_counts:
                     formatted += (recipe.stack_slices,)
                 if recipe.output_stack_permutation:
                     formatted = tuple(formatted[i] for i in recipe.output_stack_permutation)

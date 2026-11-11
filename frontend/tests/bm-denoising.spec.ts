@@ -70,6 +70,27 @@ save_workspace_bundle(StudyWorkspace(key='synthetic', label=session.study_name, 
       'Optional denoiser is unavailable',
     );
     await denoiser.selectOption(method);
+    const axisCount = method === 'bm3d' ? 2 : 3;
+    const dimensions = page.getByRole('combobox', {
+      name: axisCount === 2 ? 'Denoising plane (2D)' : 'Denoising block (3D)',
+      exact: true,
+    });
+    await expect(dimensions).toBeVisible();
+    expect(JSON.parse(await dimensions.inputValue())).toHaveLength(axisCount);
+    for (const value of await dimensions
+      .locator('option')
+      .evaluateAll((options) =>
+        options.map((option) => (option as HTMLOptionElement).value).filter(Boolean),
+      ))
+      expect(JSON.parse(value)).toHaveLength(axisCount);
+    await expect(page.getByRole('checkbox', { name: /^Filter axis / })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath(method + '-dimensions.png') });
+    await expect(
+      page.getByText(
+        `BM${axisCount + 1}D denoises one ${axisCount === 2 ? '2D plane' : '3D block'} at a time.`,
+        { exact: false },
+      ),
+    ).toBeVisible();
     const sigma = page.getByLabel('Noise sigma (automatic if empty)', { exact: true });
     await expect(sigma).toHaveValue('');
     await page.getByRole('button', { name: 'Estimate noise', exact: true }).click();
@@ -117,6 +138,7 @@ save_workspace_bundle(StudyWorkspace(key='synthetic', label=session.study_name, 
       const w = (await opened())[0];
       expect(w.experiments).toEqual(['Padded phantom']);
       expect(w.pipeline.steps).toHaveLength(1);
+      expect(w.pipeline.steps[0].options.axes).toHaveLength(axisCount);
       expect(w.pipeline.steps[0].options.parameters).toMatchObject({ sigma: level ? 80000 : null });
       if (!level) {
         expect(w.pipeline.steps[0].noise_estimate?.sigma).toBeGreaterThan(56000);

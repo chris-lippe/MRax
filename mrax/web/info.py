@@ -130,7 +130,14 @@ def workspace_info(record):
         preview = None
     axis = workspace.plot_x_axis_key
     if loaded and (axis == "auto" or axis not in session.experiment_dims):
-        axis = next(iter(session.non_spatial_dim_names or session.spatial_dim_names), "")
+        axis = next(
+            (
+                name
+                for name in (session.non_spatial_dim_names or session.spatial_dim_names)
+                if name != "slice_package"
+            ),
+            "",
+        )
     profile_indices = dict(session.active_indices)
     profile_indices.pop(axis, None)
     if axis == "t":
@@ -213,7 +220,7 @@ def workspace_info(record):
             "frame": session.active_frame,
             "z": session.active_indices.get(session.image_slice_dim, 0) if loaded else 0,
             "frame_count": session.frame_count if loaded else 0,
-            "slice_count": session.experiment_dims.get(session.image_slice_dim, 1) if loaded else 0,
+            "slice_count": session.view_dimensions.get(session.image_slice_dim, 1) if loaded else 0,
             "slice_dim": session.image_slice_dim if loaded else "z",
             "shape": shape,
             "spacing": list(session.image_plane_voxel_sizes) if loaded else [1, 1],
@@ -221,11 +228,20 @@ def workspace_info(record):
             if isinstance(geometry, dict) and geometry.get("voxel_sizes")
             else "px",
             "plane": session.active_image_plane,
+            "can_change_plane": loaded
+            and session.supports_image_planes(
+                "k_space" if mode == "K-space" else "map" if mode == "Map" else "image"
+            ),
             "plane_dims": list(session.image_plane_dims) if loaded else ["x", "y"],
             "plane_axis_labels": list(
                 session.image_plane_dims if mode == "K-space" else session.image_plane_axis_labels
-            ) if loaded else ["x", "y"],
+            )
+            if loaded
+            else ["x", "y"],
             "indices": dict(session.active_indices),
+            "plane_axis_directions": list(session.image_plane_axis_directions)
+            if loaded and mode != "K-space"
+            else [1, 1],
             "dimension_controls": controls,
             "dimensions": session.experiment_dims if loaded else {},
             "view": mode,
@@ -249,8 +265,14 @@ def workspace_info(record):
             else False,
             "can_reconstruct": can_reconstruct,
             "reconstruction_unavailable": reconstruction_unavailable,
-            "reconstruction_encoding": getattr(session.current_experiment.get("acquisition"), "kind", None) if loaded else None,
-            "can_load_raw": session.can_lazy_load_raw_data(require_acquisition=True) if loaded else False,
+            "reconstruction_encoding": getattr(
+                session.current_experiment.get("acquisition"), "kind", None
+            )
+            if loaded
+            else None,
+            "can_load_raw": session.can_lazy_load_raw_data(require_acquisition=True)
+            if loaded
+            else False,
             "rois": rois,
             "selected_roi": None if selected_roi is None else selected_roi.name,
             "roi_undo": bool(workspace.roi_history),

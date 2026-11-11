@@ -15,6 +15,7 @@ import { roiColor, roiMaskPaths, type ScenePreview } from './scene';
 import { palettes, writeColor } from './imageColors';
 import { viewLabel } from './viewing';
 import { IntensityControls } from './IntensityControls';
+import { ImageAxes } from './ImageAxes';
 import { imageNavigationHelp, useImageNavigation } from './useImageNavigation';
 
 type Point = [number, number];
@@ -62,7 +63,7 @@ export function Viewer({
     panStart = useRef<Point | null>(null);
   const [draft, setDraft] = useState<Point[]>([]),
     [pixel, setPixel] = useState('Pixel value: —');
-  const { contrast, zoom, pan, setPan, level } = display;
+  const { zoom, pan, setPan, level } = display;
   const menu = useContextMenu('Image actions', [
     { label: 'Zoom in', run: display.zoomIn, disabled: zoom >= MAX_ZOOM },
     { label: 'Zoom out', run: display.zoomOut, disabled: zoom <= MIN_ZOOM },
@@ -128,7 +129,7 @@ export function Viewer({
         : context.createImageData(columns, rows);
     canvasPixels.current = pixels;
     const palette = palettes[String(workspace.display.colormap)] ?? palettes.gray;
-    const scale = contrast / Math.max(level.width, Number.EPSILON);
+    const scale = 1 / Math.max(level.width, Number.EPSILON);
     for (let index = 0; index < rows * columns; index++) {
       const offset = index * 4;
       if (workspace.channels > 1) {
@@ -183,7 +184,6 @@ export function Viewer({
     context.putImageData(pixels, 0, 0);
   }, [
     values,
-    contrast,
     rows,
     columns,
     workspace.channels,
@@ -205,12 +205,8 @@ export function Viewer({
         <IntensityControls
           values={values}
           range={display.range}
-          level={{ center: level.center, width: level.width / contrast }}
-          contrast={contrast}
-          onChange={(next, gain) => {
-            if (gain !== undefined) display.setContrast(gain);
-            else display.setWindow({ ...next, width: next.width * contrast });
-          }}
+          level={level}
+          onChange={display.setWindow}
           reset={display.resetIntensity}
         />,
       )}
@@ -226,7 +222,7 @@ export function Viewer({
             <span>
               {workspace.active_map} {mapUnit && `(${mapUnit})`}
             </span>
-            <span>{(level.center - level.width / contrast / 2).toPrecision(4)}</span>
+            <span>{(level.center - level.width / 2).toPrecision(4)}</span>
             <span
               className="map-scale-gradient"
               aria-hidden="true"
@@ -234,7 +230,7 @@ export function Viewer({
                 background: `linear-gradient(to right, ${(palettes[String(workspace.display.colormap ?? 'gray')] ?? palettes.gray).map((color) => `rgb(${color.join(',')})`).join(',')})`,
               }}
             />
-            <span>{(level.center + level.width / contrast / 2).toPrecision(4)}</span>
+            <span>{(level.center + level.width / 2).toPrecision(4)}</span>
           </div>
         )}
         <div
@@ -483,13 +479,12 @@ export function Viewer({
                   />
                 ))}
             </svg>
-            <span className="orientation top">
-              {workspace.plane_axis_labels?.[1] ?? workspace.plane_dims[1]}
-            </span>
-            <span className="orientation left">
-              {workspace.plane_axis_labels?.[0] ?? workspace.plane_dims[0]}
-            </span>
           </div>
+          <ImageAxes
+            dims={workspace.plane_dims}
+            labels={workspace.plane_axis_labels}
+            directions={workspace.plane_axis_directions}
+          />
         </div>
         <div className="image-readout">
           <span>{pixel}</span>

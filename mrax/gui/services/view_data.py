@@ -285,7 +285,10 @@ def curve_for_workspace(workspace):
         selected = fitted_inputs.get("input_roi", selected)
     dimension = workspace.plot_x_axis_key
     if dimension == "auto" or dimension not in experiment.dims:
-        dimension = next(iter(experiment.non_spatial_dim_names), experiment.spatial_dim_names[0])
+        dimension = next(
+            (name for name in experiment.non_spatial_dim_names if name != "slice_package"),
+            experiment.spatial_dim_names[0],
+        )
     label, axis = axis_coordinates(
         experiment,
         dimension,

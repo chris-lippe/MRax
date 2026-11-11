@@ -22,7 +22,6 @@ from mrax.io.import_definitions import (
 from mrax.library.default_experiments import default_model_for_type
 
 from .bruker_acquisition import read_bruker_acquisition
-from .bruker_frames import package_plane, slice_packages
 from .bruker_images import (
     _bruker_image_orientation_metadata,
     _bruker_visu_scaling_metadata,
@@ -65,7 +64,7 @@ def _attach_acquisition(dataset, folder, pdata_index, *, definition_paths, profi
         if image_frame_order is not None:
             order = np.asarray(image_frame_order, int)
             acquisition = acquisition.select_frames(order)
-            acquisition = replace(acquisition, geometry=dataset.spatial_geometry)
+        acquisition = replace(acquisition, geometry=dataset.spatial_geometry)
     except (OSError, ValueError) as error:
         if strict_raw:
             raise
@@ -101,9 +100,9 @@ def import_bruker_experiment(
 ) -> Tuple[Experiment, DataSet, Model, dict]:
     """Read one spatial image product without changing any source files.
 
-    ``slice_package`` selects a zero-based package when a localizer contains
-    different stacks. ``import_bruker_study`` imports those packages as separate
-    experiments automatically. Raw reconstruction additionally requires the
+    Multiple stacks remain in one experiment along ``slice_package``. Selecting
+    ``slice_package`` explicitly imports only that zero-based package.
+    Raw reconstruction additionally requires the
     selected product's reconstruction parameters.
     """
     exp_dir = Path(exp_dir)
@@ -114,8 +113,11 @@ def import_bruker_experiment(
     reco_params = parse_jcamp(pdata_dir / "reco") if (pdata_dir / "reco").exists() else {}
     data, visu, spatial_shape = load_2dseq(pdata_dir, slice_package=slice_package)
     name = str(exp_dir.name)
-    if slice_package is not None and len(slice_packages(visu)) > 1:
-        name = f"{name} [{package_plane(visu, slice_package)}, package {slice_package + 1}]"
+    package_grids = visu.get("_mrax_package_frame_indices") or []
+    package_count = len(package_grids)
+    all_data = data
+    if package_count:
+        data = data[: data.shape[0] // package_count]
     study_globals = _normalize_study_globals(study_globals)
     recipe_type, recipe_obs, recipe_model = _apply_recipe(recipe, visu, method, frame_count=data.shape[0])
     frame_count = data.shape[0]
@@ -143,8 +145,17 @@ def import_bruker_experiment(
             fair_mode=method.get("PVM_FairMode"),
         )
         if fair_order is not None:
-            grid = visu["_mrax_output_frame_indices"]
-            visu["_mrax_output_frame_indices"] = [grid[int(index)] for index in fair_order]
+            if package_count:
+                visu["_mrax_package_frame_indices"] = [
+                    [grid[int(index)] for index in fair_order] for grid in package_grids
+                ]
+                fair_order = np.concatenate(
+                    [fair_order + package * frame_count for package in range(package_count)]
+                )
+                all_data = all_data[fair_order]
+            else:
+                grid = visu["_mrax_output_frame_indices"]
+                visu["_mrax_output_frame_indices"] = [grid[int(index)] for index in fair_order]
     experiment, _ = build_imported_experiment_dataset(
         ImportDefinition(
             name=name,
@@ -194,6 +205,20 @@ def import_bruker_experiment(
         spatial_shape=spatial_shape, exp_type=exp_type, observables=obs,
         sequence_type=sequence_type, kspace_metadata=raw_meta,
         spatial_geometry=bruker_spatial_geometry(visu, spatial_shape=spatial_shape)))
+    if package_count:
+        dataset.data = jnp.asarray(all_data.reshape((package_count,) + experiment.shape))
+        experiment.dims = {"slice_package": package_count, **experiment.dims}
+        experiment._mrax_dim_observables = {
+            "slice_package": None,
+            **getattr(experiment, "_mrax_dim_observables", {}),
+        }
+        dataset.spatial_geometry = replace(
+            dataset.spatial_geometry,
+            frame_dims=tuple(
+                (name, experiment.dims[name]) for name in experiment.non_spatial_dim_names
+            ),
+        )
+        experiment.validate(dataset)
     experiment.study_globals = study_globals
     model_from_default = False
     if recipe_model is not None:
@@ -276,7 +301,22 @@ def import_bruker_experiment(
     metadata = {
         "name": name,
         "slice_package": slice_package,
-        "image_geometry_version": 2,
+        "slice_packages": [
+            {
+                **description,
+                "spatial_geometry": bruker_spatial_geometry(
+                    {
+                        **visu,
+                        "_mrax_package_frame_indices": None,
+                        "_mrax_output_frame_indices": package_grids[package],
+                        "_mrax_selected_package": package,
+                    },
+                    spatial_shape=spatial_shape[:2] + (description["slice_count"],),
+                ).to_metadata(),
+            }
+            for package, description in enumerate(visu.get("_mrax_slice_packages", []))
+        ],
+        "image_geometry_version": 3,
         "source_format": "Bruker",
         "image_source": str(exp_dir / "pdata" / resolved_pdata_index / "2dseq"),
         "raw_source": None if stream is None else str(stream),
@@ -377,49 +417,49 @@ def import_bruker_study(
         if type_overrides and entry.name in type_overrides:
             override = type_overrides[entry.name]
         try:
-            packages = slice_packages(parse_jcamp(entry / "pdata" / pdata_idx / "visu_pars"))
-            scan_entries = []
-            for package in range(len(packages)) if len(packages) > 1 else (None,):
-                experiment, dataset, model, meta = import_bruker_experiment(
-                    entry,
-                    override,
-                    model_map_by_type,
-                    model_map_by_name,
-                    study_globals=study_globals,
-                    pdata_index=pdata_idx,
-                    recipe=recipe,
-                    load_raw_kspace=load_raw_kspace,
-                    rotate_bvecs_to_image=rotate_bvecs_to_image,
-                    definition_paths=definition_paths, profiles=profiles, strict_raw=strict_raw, device=device, slice_package=package,
-                )
-                scan_entries.append(
-                    {
-                        "scan_no": meta["scan_no"],
-                        "name": meta["name"],
-                        "slice_package": meta["slice_package"],
-                        "image_geometry_version": meta["image_geometry_version"],
-                        "spatial_geometry": meta["spatial_geometry"],
-                        "experiment": experiment,
-                        "dataset": dataset,
-                        "model": model,
-                        "visu": meta["visu"],
-                        "method": meta["method"],
-                        "acqp": meta.get("acqp", {}),
-                        "reco": meta.get("reco", {}),
-                        "image_scaling": meta.get("image_scaling", {}),
-                        "raw_import": meta.get("raw_import", {}),
-                        "image_frame_order": meta.get("image_frame_order"),
-                        "image_axis_anatomical_labels": meta.get("image_axis_anatomical_labels"),
-                        "native_image_plane": meta.get("native_image_plane"),
-                        "type": meta["type"],
-                        "path": meta["path"],
-                        "pdata_index": meta["pdata_index"],
-                        "source_format": meta.get("source_format", "Bruker"),
-                        "image_source": meta.get("image_source"),
-                        "raw_source": meta.get("raw_source"),
-                    }
-                )
-            entries.extend(scan_entries)
+            experiment, dataset, model, meta = import_bruker_experiment(
+                entry,
+                override,
+                model_map_by_type,
+                model_map_by_name,
+                study_globals=study_globals,
+                pdata_index=pdata_idx,
+                recipe=recipe,
+                load_raw_kspace=load_raw_kspace,
+                rotate_bvecs_to_image=rotate_bvecs_to_image,
+                definition_paths=definition_paths,
+                profiles=profiles,
+                strict_raw=strict_raw,
+                device=device,
+            )
+            entries.append(
+                {
+                    "scan_no": meta["scan_no"],
+                    "name": meta["name"],
+                    "slice_package": meta["slice_package"],
+                    "slice_packages": meta["slice_packages"],
+                    "image_geometry_version": meta["image_geometry_version"],
+                    "spatial_geometry": meta["spatial_geometry"],
+                    "experiment": experiment,
+                    "dataset": dataset,
+                    "model": model,
+                    "visu": meta["visu"],
+                    "method": meta["method"],
+                    "acqp": meta.get("acqp", {}),
+                    "reco": meta.get("reco", {}),
+                    "image_scaling": meta.get("image_scaling", {}),
+                    "raw_import": meta.get("raw_import", {}),
+                    "image_frame_order": meta.get("image_frame_order"),
+                    "image_axis_anatomical_labels": meta.get("image_axis_anatomical_labels"),
+                    "native_image_plane": meta.get("native_image_plane"),
+                    "type": meta["type"],
+                    "path": meta["path"],
+                    "pdata_index": meta["pdata_index"],
+                    "source_format": meta.get("source_format", "Bruker"),
+                    "image_source": meta.get("image_source"),
+                    "raw_source": meta.get("raw_source"),
+                }
+            )
         except Exception as exc:
             missing = []
             if isinstance(exc, FileNotFoundError) and getattr(exc, "filename", None):
@@ -476,6 +516,7 @@ def import_bruker_study(
             e["name"]: {
                 "scan_no": e["scan_no"],
                 "slice_package": e["slice_package"],
+                "slice_packages": e["slice_packages"],
                 "image_geometry_version": e["image_geometry_version"],
                 "study_subject": root.name,
                 "type": e["type"],

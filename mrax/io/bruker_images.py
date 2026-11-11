@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from itertools import permutations
 from pathlib import Path
 from typing import Sequence, Tuple
@@ -12,6 +13,8 @@ from .bruker_frames import (
     frame_group_entries,
     frame_parameter,
     output_frame_grid,
+    package_plane,
+    slice_packages,
 )
 from .bruker_parameters import (
     _as_string_list,
@@ -42,6 +45,8 @@ def _bruker_orientation(visu: dict) -> list[np.ndarray]:
 def _bruker_image_orientation_metadata(visu: dict) -> dict[str, object]:
     """Normalize decoded NumPy image axes to anatomy and acquisition plane."""
 
+    if visu.get("_mrax_package_frame_indices"):
+        return {"native_image_plane": visu["_mrax_slice_packages"][0]["native_image_plane"]}
     orientations = _bruker_orientation(visu)
     if not orientations:
         return {}
@@ -210,6 +215,25 @@ def bruker_spatial_geometry(
     spatial_shape: Sequence[int] | None = None,
 ) -> SpatialGeometry:
     """Native labels/spacing with the matching NIfTI-boundary RAS affine."""
+    package_grids = visu.get("_mrax_package_frame_indices")
+    if package_grids:
+        shapes, affines = [], []
+        for package, grid in enumerate(package_grids):
+            selected = {
+                **visu,
+                "_mrax_package_frame_indices": None,
+                "_mrax_output_frame_indices": grid,
+                "_mrax_selected_package": package,
+            }
+            shape = tuple(spatial_shape[:2]) + (len(grid[0]),)
+            geometry = bruker_spatial_geometry(selected, spatial_shape=shape)
+            for frame in range(len(grid)):
+                affines.append(geometry.affine_for_frame(frame))
+                shapes.append(shape)
+        return replace(
+            SpatialGeometry.from_affines(affines, spatial_shape=spatial_shape, source="bruker"),
+            frame_shapes=tuple(shapes),
+        )
     spatial_ndim = len(tuple(spatial_shape or ())) or 3
     metadata = _bruker_image_orientation_metadata(visu)
     labels = metadata.get("image_axis_anatomical_labels")
@@ -322,9 +346,40 @@ def load_2dseq(
             real_indices, imag_indices = np.arange(count // 2), np.arange(count // 2, count)
         frames = (frames[real_indices] + 1j * frames[imag_indices]).astype(np.complex64)
 
-    grid, has_slices = output_frame_grid(visu, slice_package)
     inverse = np.full(count, -1, dtype=int)
     inverse[real_indices] = np.arange(len(real_indices))
+    packages = slice_packages(visu)
+    if slice_package is None and len(packages) > 1:
+        grids, volumes = [], []
+        maximum = max(len(package) for package in packages)
+        for package in range(len(packages)):
+            grid, _ = output_frame_grid(visu, package)
+            grid = grid[inverse[grid[:, 0]] >= 0]
+            if np.any(inverse[grid] < 0):
+                raise ValueError("Complex components do not share the same spatial slice layout")
+            volume = np.moveaxis(frames[inverse[grid]], 1, -1)
+            volumes.append(
+                np.pad(
+                    volume,
+                    ((0, 0), (0, 0), (0, 0), (0, maximum - grid.shape[1])),
+                    constant_values=np.nan,
+                )
+            )
+            grids.append(grid.tolist())
+        data = np.concatenate(volumes)
+        spatial_shape += (maximum,)
+        visu["_mrax_package_frame_indices"] = grids
+        visu["_mrax_selected_package"] = None
+        visu["_mrax_slice_packages"] = [
+            {
+                "index": package,
+                "slice_count": len(indices),
+                "native_image_plane": package_plane(visu, package),
+            }
+            for package, indices in enumerate(packages)
+        ]
+        return data, visu, spatial_shape
+    grid, has_slices = output_frame_grid(visu, slice_package)
     grid = grid[inverse[grid[:, 0]] >= 0]
     if np.any(inverse[grid] < 0):
         raise ValueError("Complex components do not share the same spatial slice layout")

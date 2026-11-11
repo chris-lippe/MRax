@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { components } from './api.generated';
 import { api, type Options } from './api';
 import type { AnalysisProps } from './analysisTypes';
@@ -59,6 +59,14 @@ const methodLabels: Record<ProcessingSection, string> = {
   analyze: 'Map calculation',
 };
 
+function axisGroups(axes: string[], count: number): string[][] {
+  if (!count) return [[]];
+  return axes.flatMap((name, index) =>
+    axisGroups(axes.slice(index + 1), count - 1).map((tail) => [name, ...tail]),
+  );
+}
+const axisKey = (axes: string[]) => JSON.stringify([...axes].sort());
+
 export function ProcessControls({
   workspace: w,
   busy,
@@ -73,6 +81,7 @@ export function ProcessControls({
   const [loaded, setLoaded] = useState<{ key: string; value: Catalog } | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [error, setError] = useState('');
+  const axesHelpId = useId();
   const context = JSON.stringify([w?.id, w?.experiment, section]);
   const requestKey = JSON.stringify([w?.id, w?.experiment, w?.revision]);
   const editing =
@@ -126,6 +135,7 @@ export function ProcessControls({
   const groups: string[] = [processingGroups[section]];
   const methods = catalog?.methods.filter((m) => groups.includes(m.group)) ?? [];
   const method = methods.find((m) => m.id === draft.method) ?? methods[0];
+  const axisCount = method?.axis_count;
   const source =
     draft.source !== 'view' && catalog?.sources.some((s) => s.id === draft.source)
       ? draft.source!
@@ -142,6 +152,11 @@ export function ProcessControls({
         []
       ).filter((name) => inputAxes.includes(name))
     : [];
+  const axisChoices = axisCount ? axisGroups(inputAxes, axisCount) : [];
+  const independentAxes = (
+    source.startsWith('map:') ? inputAxes : Object.keys(w?.dimensions ?? {})
+  ).filter((name) => !axes.includes(name));
+  const axisLabel = axisCount === 2 ? 'Denoising plane (2D)' : 'Denoising block (3D)';
   const reference = draft.reference ?? w?.experiment ?? '';
   const referenceCount = w?.experiment_catalog.find((e) => e.name === reference)?.frames ?? 1;
   const rois =
@@ -153,9 +168,11 @@ export function ProcessControls({
   const noiseRois = draft.noiseRois ?? null;
   const unavailable =
     method?.unavailable ??
-    ((method?.axes === 'series' || method?.reference === 'series') && !seriesAxes.length
-      ? 'Choose image data with an acquisition series.'
-      : null);
+    (axisCount && inputAxes.length < axisCount
+      ? `${method?.label} requires ${axisCount} data dimensions; this input has ${inputAxes.length}.`
+      : (method?.axes === 'series' || method?.reference === 'series') && !seriesAxes.length
+        ? 'Choose image data with an acquisition series.'
+        : null);
   const parameters = Object.fromEntries(
     method?.fields.map((field) => [
       field.key,
@@ -180,7 +197,8 @@ export function ProcessControls({
     !method ||
     !catalog ||
     Boolean(unavailable) ||
-    (method.axes === 'filter' && !axes.length) ||
+    (method.axes === 'filter' &&
+      (!axes.length || axes.length > 3 || (axisCount != null && axes.length !== axisCount))) ||
     (limited && !scopedRois.length) ||
     (['bm3d', 'bm4d'].includes(method?.id ?? '') &&
       parameters.sigma == null &&
@@ -359,35 +377,84 @@ export function ProcessControls({
               icon="settings"
               help={
                 method?.axes === 'filter'
-                  ? 'Filtering combines samples along the selected axes. Unselected axes are processed independently.'
+                  ? 'Selected data dimensions are filtered jointly. Each combination of the remaining dimensions is processed independently.'
                   : undefined
               }
             >
               {method?.axes === 'filter' && (
                 <fieldset className="processing-axes">
-                  <legend>Filter axes</legend>
-                  <div className="axis-options">
-                    {inputAxes.map((name) => (
-                      <label className="check-label" key={name}>
-                        <input
-                          type="checkbox"
-                          aria-label={`Filter axis ${name}`}
-                          checked={axes.includes(name)}
-                          onChange={(event) =>
-                            update({
-                              axes: {
-                                ...draft.axes,
-                                [method.id]: event.target.checked
-                                  ? [...axes, name]
-                                  : axes.filter((n) => n !== name),
-                              },
-                            })
-                          }
-                        />
-                        {name}
-                      </label>
-                    ))}
-                  </div>
+                  <legend>{axisCount ? axisLabel : 'Filter dimensions'}</legend>
+                  {axisCount ? (
+                    <select
+                      aria-label={axisLabel}
+                      aria-describedby={axesHelpId}
+                      value={axes.length === axisCount ? axisKey(axes) : ''}
+                      onChange={(event) =>
+                        update({
+                          axes: {
+                            ...draft.axes,
+                            [method.id]: JSON.parse(event.target.value) as string[],
+                          },
+                        })
+                      }
+                    >
+                      <option value="" disabled>
+                        Choose {axisCount} dimensions
+                      </option>
+                      {[true, false].map((spatial) => (
+                        <optgroup
+                          label={spatial ? 'Spatial dimensions' : 'Other dimension combinations'}
+                          key={String(spatial)}
+                        >
+                          {axisChoices
+                            .filter(
+                              (choice) =>
+                                choice.every((name) => catalog?.spatial_axes.includes(name)) ===
+                                spatial,
+                            )
+                            .map((choice) => (
+                              <option key={axisKey(choice)} value={axisKey(choice)}>
+                                {choice
+                                  .map((name) => `${name} (${w?.dimensions[name] ?? 1})`)
+                                  .join(' × ')}
+                              </option>
+                            ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="axis-options">
+                      {inputAxes.map((name) => (
+                        <label className="check-label" key={name}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Filter axis ${name}`}
+                            checked={axes.includes(name)}
+                            disabled={!axes.includes(name) && axes.length >= 3}
+                            onChange={(event) =>
+                              update({
+                                axes: {
+                                  ...draft.axes,
+                                  [method.id]: event.target.checked
+                                    ? [...axes, name]
+                                    : axes.filter((n) => n !== name),
+                                },
+                              })
+                            }
+                          />
+                          {name} ({w?.dimensions[name] ?? 1})
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  <p className="control-note" id={axesHelpId}>
+                    {axisCount
+                      ? `${method.label.split(' ')[0]} denoises one ${axisCount === 2 ? '2D plane' : '3D block'} at a time. `
+                      : 'Choose one to three data dimensions to filter jointly. '}
+                    {independentAxes.length
+                      ? `Processed independently: ${independentAxes.map((name) => `${name} (${w?.dimensions[name] ?? 1})`).join(', ')}.`
+                      : 'The selected dimensions cover the entire input.'}
+                  </p>
                 </fieldset>
               )}
               {method?.axes === 'series' && (

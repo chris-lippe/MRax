@@ -396,7 +396,7 @@ def _unexplained_dim_names(experiment: Experiment, model: Model | None = None) -
         if name == "frame" and name not in dim_map and has_frame_observables:
             continue
         # Only treat explicit None mappings or known repeat dims as unexplained by default.
-        if (name in dim_map) or (name in ("t", "frame")):
+        if (name in dim_map) or (name in ("t", "frame", "slice_package")):
             unexplained.append(name)
     return unexplained
 
@@ -722,6 +722,31 @@ def build_loss(
     if set(constant_dims) - field_keys:
         raise ValueError("parameter_constant_dims contains unknown parameter fields")
     params = _collapse_params_for_constant_dims(params, constant_dims)
+    if "slice_package" in field_dim_names:
+        # Slice packages are separate physical grids, not neighbouring voxels.
+        axes = tuple(axis for axis, name in enumerate(field_dim_names) if name != "slice_package")
+        configs = (
+            regularizer_configs if regularizer_configs is not None else model.regularizer_configs
+        )
+        if configs is None:
+            weights = regularizer_weights if regularizer_weights is not None else model.reg_weights
+            kind = regularizer_type if regularizer_type is not None else model.regularizer_type
+            configs = {
+                key: [
+                    {
+                        "weight": weight,
+                        "type": kind.get(key, "smoothness") if isinstance(kind, dict) else kind,
+                    }
+                ]
+                for key, weight in (weights or {}).items()
+            }
+        regularizer_configs = {
+            key: [
+                {**config, "axes": axes if config.get("axes") is None else config["axes"]}
+                for config in values
+            ]
+            for key, values in configs.items()
+        }
     reg_terms = model.make_regularizer_terms(
         field_shape,
         regularizer_configs=regularizer_configs,

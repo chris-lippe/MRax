@@ -1825,6 +1825,21 @@
             "title": "Axes",
             "type": "string"
           },
+          "axis_count": {
+            "anyOf": [
+              {
+                "enum": [
+                  2,
+                  3
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Axis Count"
+          },
           "fields": {
             "items": {
               "$ref": "#/components/schemas/ProcessingField"
@@ -3008,6 +3023,11 @@
             ],
             "title": "Active Map"
           },
+          "can_change_plane": {
+            "default": false,
+            "title": "Can Change Plane",
+            "type": "boolean"
+          },
           "can_load_raw": {
             "default": false,
             "title": "Can Load Raw",
@@ -3226,6 +3246,18 @@
             "default": "axial",
             "title": "Plane",
             "type": "string"
+          },
+          "plane_axis_directions": {
+            "default": [],
+            "items": {
+              "enum": [
+                -1,
+                1
+              ],
+              "type": "integer"
+            },
+            "title": "Plane Axis Directions",
+            "type": "array"
           },
           "plane_axis_labels": {
             "default": [],

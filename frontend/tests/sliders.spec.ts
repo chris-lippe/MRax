@@ -119,14 +119,14 @@ test('rapid keyboard navigation keeps the latest frame and slice without paralle
   expect(updates).toBeLessThan(8);
 });
 
-test('contrast slider tracks a continuous drag without backend requests', async ({ page }) => {
+test('intensity bound tracks a continuous drag without backend requests', async ({ page }) => {
   let viewRequests = 0;
   page.on('request', (request) => {
     if (request.method() === 'PATCH' && request.url().endsWith('/view')) viewRequests++;
   });
   await selectWorkflow(page, 'View');
-  for (const [name, middle, maximum] of [['Display contrast', '1.25', '2']]) {
-    const slider = page.getByLabel(name, { exact: true });
+  {
+    const slider = page.getByLabel('Lower display bound', { exact: true });
     await slider.scrollIntoViewIfNeeded();
     const element = await slider.elementHandle();
     const min = Number(await slider.getAttribute('min'));
@@ -136,9 +136,9 @@ test('contrast slider tracks a continuous drag without backend requests', async 
     await page.mouse.down();
     try {
       await move(page, slider, 0.5);
-      await expect(slider).toHaveValue(middle);
-      await move(page, slider, 1);
-      await expect(slider).toHaveValue(maximum);
+      expect(Number(await slider.inputValue())).toBeGreaterThan(min + (max - min) * 0.45);
+      await move(page, slider, 0.8);
+      expect(Number(await slider.inputValue())).toBeGreaterThan(min + (max - min) * 0.75);
       expect(await element!.evaluate((input) => input.isConnected)).toBe(true);
     } finally {
       await page.mouse.up();

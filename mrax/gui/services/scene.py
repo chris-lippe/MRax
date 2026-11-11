@@ -445,12 +445,12 @@ def fitting_roi(workspace, names):
         raise ValueError("Select at least one enabled ROI for fitting")
     pipeline = workspace.pipelines.get(session.selected_experiment)
     native_shape = (
-        tuple(pipeline["source"]["dims"][d] for d in session.spatial_dim_names)
+        tuple(pipeline["source"]["dims"][d] for d in session.roi_dim_names)
         if pipeline and not getattr(workspace, "_pipeline_evaluating", False)
-        else session.spatial_shape
+        else session.roi_shape
     )
     mask = np.zeros(native_shape, dtype=bool)
-    dims = tuple(session.spatial_dim_names)
+    dims = tuple(session.roi_dim_names)
     for roi in selected:
         if np.asarray(roi.mask).shape != mask.shape or (roi.dims and tuple(roi.dims) != dims):
             raise ValueError("Fit ROIs must match the experiment's native grid")

@@ -4,7 +4,6 @@ import { WorkbenchIcon } from './WorkbenchIcon';
 
 export type IntensityWindow = { center: number; width: number };
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
-const precise = (value: number) => Number(value.toPrecision(7));
 
 function BoundNumber({
   label,
@@ -43,7 +42,6 @@ export function IntensityControls({
   values,
   range,
   level,
-  contrast,
   onChange,
   onCommit,
   reset,
@@ -52,8 +50,7 @@ export function IntensityControls({
   values: Pixels;
   range: readonly [number, number];
   level: IntensityWindow;
-  contrast: number;
-  onChange: (level: IntensityWindow, contrast?: number) => void;
+  onChange: (level: IntensityWindow) => void;
   onCommit?: (level: IntensityWindow) => void;
   reset: () => void;
   target?: ReactNode;
@@ -61,11 +58,9 @@ export function IntensityControls({
   const span = range[1] - range[0] || 1;
   const minimum = range[1] > range[0] ? range[0] : range[0] - span / 2;
   const maximum = minimum + span;
-  const midpoint = minimum + span / 2;
   const gap = Math.max(span * 1e-6, Number.EPSILON * Math.max(span, Math.abs(level.center)));
   const lower = level.center - level.width / 2;
   const upper = level.center + level.width / 2;
-  const brightness = ((midpoint - level.center) / span) * 100;
   const pending = useRef<IntensityWindow | null>(null);
   const histogram = useMemo(() => {
     const bins = new Array<number>(96).fill(0);
@@ -83,9 +78,9 @@ export function IntensityControls({
         .join(' ') + 'L95,28L0,28Z'
     );
   }, [values, minimum, span]);
-  function change(next: IntensityWindow, gain?: number) {
+  function change(next: IntensityWindow) {
     pending.current = next;
-    onChange(next, gain);
+    onChange(next);
   }
   function finish() {
     const next = pending.current;
@@ -102,61 +97,13 @@ export function IntensityControls({
   return (
     <section className="intensity-controls" aria-label="Image intensity">
       {target && <div className="intensity-target">{target}</div>}
-      <div className="intensity-adjustments">
-        <label>
-          <span>
-            Brightness{' '}
-            <output>
-              {precise(brightness).toLocaleString('en', {
-                maximumFractionDigits: 0,
-                signDisplay: 'exceptZero',
-              })}
-              %
-            </output>
-          </span>
-          <input
-            aria-label="Brightness"
-            type="range"
-            min="-100"
-            max="100"
-            step="1"
-            value={clamp(brightness, -100, 100)}
-            onChange={(event) =>
-              change({ ...level, center: midpoint - (Number(event.target.value) / 100) * span })
-            }
-            onPointerUp={finish}
-            onKeyUp={finish}
-            onBlur={finish}
-          />
-        </label>
-        <label>
-          <span>
-            Contrast <output>{contrast.toFixed(2)}×</output>
-          </span>
-          <input
-            aria-label="Display contrast"
-            type="range"
-            min="0.5"
-            max="2"
-            step="0.05"
-            value={clamp(contrast, 0.5, 2)}
-            onChange={(event) => {
-              const gain = Number(event.target.value);
-              change({ ...level, width: (level.width * contrast) / gain }, gain);
-            }}
-            onPointerUp={finish}
-            onKeyUp={finish}
-            onBlur={finish}
-          />
-        </label>
-      </div>
       <div className="intensity-bounds">
         <div className="intensity-range-title">
           <span>Value range</span>
           <button
             className="intensity-auto"
             aria-label="Auto intensity"
-            title="Reset brightness, contrast and value range"
+            title="Reset the displayed intensity range"
             onClick={() => {
               pending.current = null;
               reset();

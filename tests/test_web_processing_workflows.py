@@ -167,6 +167,29 @@ def test_denoise_fit_statistics_and_save_form_one_workflow(client):
 
 
 @pytest.mark.parametrize("method", ["bm3d", "bm4d"])
+def test_bm_dimension_contract_rejects_invalid_planes_before_changing_data(client, method):
+    pytest.importorskip(method)
+    w = create(client)
+    workspace = client.app.state.records[w["id"]].workspace
+    original = np.asarray(workspace.session.image_array).copy()
+    catalog = client.get(f"/api/workspaces/{w['id']}/processing").json()
+    descriptor = next(row for row in catalog["methods"] if row["id"] == method)
+    assert descriptor["axis_count"] == (2 if method == "bm3d" else 3)
+    with pytest.raises(ValueError, match="requires exactly"):
+        run_processing(
+            workspace,
+            {
+                "method": method,
+                "input": "image",
+                "axes": ["x", "y", "z"] if method == "bm3d" else ["x", "y"],
+            },
+            lambda *_: None,
+        )
+    np.testing.assert_array_equal(workspace.session.image_array, original)
+    assert client.get(f"/api/workspaces/{w['id']}/processing").json()["history"] == []
+
+
+@pytest.mark.parametrize("method", ["bm3d", "bm4d"])
 @pytest.mark.parametrize("complex_data", [False, True])
 def test_bm_tasks_denoise_zero_padded_images_without_changing_the_source(client, method, complex_data):
     pytest.importorskip(method)

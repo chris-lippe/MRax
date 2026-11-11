@@ -165,6 +165,7 @@ def processing_methods(session):
                 "label": key.upper() + " denoising",
                 "group": "Denoise",
                 "axes": "filter",
+                "axis_count": 2 if key == "bm3d" else 3,
                 "reference": None,
                 "unavailable": None
                 if importlib.util.find_spec(key)
@@ -185,9 +186,21 @@ def processing_methods(session):
                         kind="choice",
                         choices=("full", "basic"),
                     ),
-                    _field("noise_model", "Noise estimation model", value="auto", kind="choice",
-                           choices=("auto", "gaussian", "background")),
-                    _field("noise_coils", "Effective noise coils", value=1, kind="integer", minimum=1, maximum=64),
+                    _field(
+                        "noise_model",
+                        "Noise estimation model",
+                        value="auto",
+                        kind="choice",
+                        choices=("auto", "gaussian", "background"),
+                    ),
+                    _field(
+                        "noise_coils",
+                        "Effective noise coils",
+                        value=1,
+                        kind="integer",
+                        minimum=1,
+                        maximum=64,
+                    ),
                     complex_mode,
                 ],
             }
@@ -349,12 +362,14 @@ def processing_catalog(workspace):
     return {
         "methods": processing_methods(session),
         "sources": sources,
-        "axes": list(session.experiment_dims),
+        "axes": [name for name in session.experiment_dims if name != "slice_package"],
         "spatial_axes": session.spatial_dim_names,
         "series_axes": [
             name
             for name in session.experiment_dims
-            if name not in session.spatial_dim_names and session.experiment_dims[name] > 1
+            if name not in session.spatial_dim_names
+            and name != "slice_package"
+            and session.experiment_dims[name] > 1
         ],
         "history": pipeline_info(workspace)["steps"],
     }
@@ -422,10 +437,20 @@ def _source(workspace, key, component):
     unit = (session.current_experiment.get("extra_metadata") or {}).get("image_unit", "")
     if key.startswith("map:"):
         name = key.removeprefix("map:")
-        if name not in session.map_names or session.map_array(name).shape != session.spatial_shape:
+        if name not in session.map_names or session.map_array(name).shape != session.roi_shape:
             raise ValueError("Choose a scalar map on the experiment's native grid")
         data = session.map_array(name)
-        dims = {name: dims[name] for name in session.spatial_dim_names}
+        dims = {name: dims[name] for name in session.roi_dim_names}
+        if "slice_package" in dims and geometry is not None:
+            stride = session.frame_count // dims["slice_package"]
+            indices = [
+                geometry.frame_index({"slice_package": package}, default=package * stride)
+                for package in range(dims["slice_package"])
+            ]
+            geometry = geometry.select_frames(
+                indices,
+                frame_dims=(("slice_package", dims["slice_package"]),),
+            )
         observables, model, unit = {}, "identity", session.map_unit(name) or ""
     else:
         observables = copy.deepcopy(experiment.observables)
@@ -521,14 +546,18 @@ def _reference(workspace, options, dims, unit, geometry, *, series):
         or not 0 <= index < context.frame_count
     ):
         raise ValueError("Reference frame is out of range")
-    _same_grid(
-        context,
-        dims,
-        workspace.session.spatial_dim_names,
-        geometry,
-        series=series,
-        reference_frame=index,
+    package_reference = (
+        not series and "slice_package" in dims and "slice_package" in context.experiment_dims
     )
+    if not package_reference:
+        _same_grid(
+            context,
+            dims,
+            workspace.session.spatial_dim_names,
+            geometry,
+            series=series,
+            reference_frame=index,
+        )
     array = np.asarray(context.image_array)
     component = options.get("component", "auto")
     reference_unit = (context.current_experiment.get("extra_metadata") or {}).get("image_unit", "")
@@ -540,6 +569,36 @@ def _reference(workspace, options, dims, unit, geometry, *, series):
             reference_unit = "rad"
     if unit != reference_unit:
         raise ValueError("Input and reference data must have matching units")
+    if package_reference:
+        count = dims["slice_package"]
+        if context.experiment_dims["slice_package"] != count:
+            raise ValueError("Input and reference must have the same slice packages")
+        source_frames = (
+            math.prod(size for name, size in dims.items() if name not in context.spatial_dim_names)
+            // count
+        )
+        reference_frames = context.frame_count // count
+        if index >= reference_frames:
+            raise ValueError("Choose a reference frame within one slice package")
+        frames = reshape_dims_to_frames(array, context.experiment_dims)
+        reference_geometry = context.build_dataset().spatial_geometry
+        references = []
+        for package in range(count):
+            reference_index = package * reference_frames + index
+            for frame in range(source_frames):
+                target_index = package * source_frames + frame
+                require_common_grid(
+                    context.spatial_dim_names,
+                    reference_geometry.shape_for_frame(reference_index),
+                    reference_geometry,
+                    workspace.session.spatial_dim_names,
+                    geometry.shape_for_frame(target_index),
+                    geometry,
+                    source_frame=reference_index,
+                    target_frame=target_index,
+                )
+            references.append(frames[reference_index])
+        return np.stack(references)
     if series:
         if context.experiment_dims != dims:
             raise ValueError("Dilution reference dimensions must match the input series")
@@ -557,7 +616,9 @@ def _reference(workspace, options, dims, unit, geometry, *, series):
     return np.asarray(reshape_dims_to_frames(array, context.experiment_dims))[index]
 
 
-def _filter(data, axes, method, parameters, progress, *, reports=None, roi_estimate=None):
+def _filter(
+    data, axes, method, parameters, progress, *, reports=None, roi_estimate=None, measured=None
+):
     from .noise_estimation import block_estimate
 
     other = [axis for axis in range(data.ndim) if axis not in axes]
@@ -565,8 +626,21 @@ def _filter(data, axes, method, parameters, progress, *, reports=None, roi_estim
     grouped = data.transpose(order)
     shape = grouped.shape
     blocks = grouped.reshape((-1,) + tuple(data.shape[axis] for axis in axes))
+    valid = None if measured is None else measured.transpose(order).reshape(blocks.shape)
     output = None
     for index, block in enumerate(blocks):
+        original_shape = block.shape
+        selection = tuple(slice(None) for _ in original_shape)
+        if valid is not None:
+            locations = np.where(valid[index])
+            if not len(locations[0]):
+                if output is None:
+                    output = np.full(blocks.shape, np.nan, dtype=data.dtype)
+                continue
+            selection = tuple(
+                slice(int(values.min()), int(values.max()) + 1) for values in locations
+            )
+            block = block[selection]
         progress(index, len(blocks), f"{method}: block {index + 1} of {len(blocks)}")
         if method in {"gaussian", "median", "uniform"}:
             result = denoise_filter(block, method=method, **parameters)
@@ -596,7 +670,11 @@ def _filter(data, axes, method, parameters, progress, *, reports=None, roi_estim
         result = np.asarray(result)
         if output is None:
             output = np.empty(blocks.shape, dtype=result.dtype)
-        output[index] = result
+        if valid is None:
+            output[index] = result
+        else:
+            output[index] = np.nan
+            output[(index,) + selection] = result
     progress(len(blocks), len(blocks), "Filtering complete")
     if output is None:
         raise ValueError("The input has no blocks to process")
@@ -716,6 +794,9 @@ def apply_processing(workspace, options, progress):
     source_name = session.selected_experiment
     context = _source(workspace, str(options.get("input", "view")), component)
     data, dims = context[:2]
+    measured = context[5].measured_mask() if context[5] is not None else None
+    if measured is not None:
+        measured = measured.reshape(data.shape)
     roi = (
         fitting_roi(workspace, options["roi_names"])
         if options.get("roi_names") is not None
@@ -737,20 +818,21 @@ def apply_processing(workspace, options, progress):
             not isinstance(axes, list)
             or not 1 <= len(axes) <= 3
             or len(set(axes)) != len(axes)
-            or any(name not in dims for name in axes)
+            or any(name not in dims or name == "slice_package" for name in axes)
         ):
             raise ValueError("Choose one to three filter axes from the input dimensions")
-        if key in {"bm3d", "bm4d"} and len(axes) != (2 if key == "bm3d" else 3):
+        axis_count = method.get("axis_count")
+        if axis_count is not None and len(axes) != axis_count:
             raise ValueError(
                 key.upper()
                 + " requires exactly "
-                + ("two" if key == "bm3d" else "three")
+                + ("two" if axis_count == 2 else "three")
                 + " filter axes"
             )
         options["axes"] = list(axes)
-        if not np.all(np.isfinite(data)) and not (
-            key == "gaussian" and parameters.get("preserve_nan")
-        ):
+        if not np.all(
+            np.isfinite(data) | ~measured if measured is not None else np.isfinite(data)
+        ) and not (key == "gaussian" and parameters.get("preserve_nan")):
             raise ValueError(
                 "This method needs finite input; use NaN-aware Gaussian for missing samples"
             )
@@ -760,8 +842,14 @@ def apply_processing(workspace, options, progress):
             if estimation_mask is not None:
                 estimated_noise = estimate_input(data, dims, axes, parameters, estimation_mask)
         result = _filter(
-            data, [list(dims).index(name) for name in axes], key, parameters, progress,
-            reports=estimates, roi_estimate=estimated_noise,
+            data,
+            [list(dims).index(name) for name in axes],
+            key,
+            parameters,
+            progress,
+            reports=estimates,
+            roi_estimate=estimated_noise,
+            measured=measured,
         )
         if key in {"bm3d", "bm4d"} and parameters["sigma"] is None and estimated_noise is None:
             count = int(np.prod([size for name, size in dims.items() if name not in axes]))
@@ -772,12 +860,21 @@ def apply_processing(workspace, options, progress):
                 "Choose magnitude, real or imaginary input explicitly for time-series processing"
             )
         axis_name = options.get("axis") or next(
-            (name for name in dims if name not in session.spatial_dim_names and dims[name] > 1),
+            (
+                name
+                for name in dims
+                if name not in session.spatial_dim_names
+                and name != "slice_package"
+                and dims[name] > 1
+            ),
             None,
         )
         options["axis"] = axis_name
         if key in {"baseline", "temporal_gaussian", "despike"} and (
-            axis_name not in dims or axis_name in session.spatial_dim_names or dims[axis_name] < 2
+            axis_name not in dims
+            or axis_name in session.spatial_dim_names
+            or axis_name == "slice_package"
+            or dims[axis_name] < 2
         ):
             raise ValueError("Choose a non-spatial acquisition axis with at least two samples")
         progress(0, 1, method["label"])
@@ -803,7 +900,16 @@ def apply_processing(workspace, options, progress):
                 workspace, options, dims, context[4], context[5], series=key == "dilution"
             )
             if key == "normalize":
-                result = compute_z_spectra(frames, reference, **parameters)
+                if "slice_package" in dims:
+                    groups = frames.reshape((dims["slice_package"], -1) + frames.shape[1:])
+                    result = np.concatenate(
+                        [
+                            np.asarray(compute_z_spectra(group, ref, **parameters))
+                            for group, ref in zip(groups, reference, strict=True)
+                        ]
+                    )
+                else:
+                    result = compute_z_spectra(frames, reference, **parameters)
             elif key == "dilution":
                 result = apply_dilution_correction(frames, reference, **parameters)
             else:

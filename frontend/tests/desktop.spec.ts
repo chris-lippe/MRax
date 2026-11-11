@@ -35,7 +35,7 @@ for (const viewport of [
     await page.goto('/');
     await loadExample(page);
     await page.locator('.viewer-controls > summary').click();
-    await expect(page.getByLabel('Brightness', { exact: true })).toBeHidden();
+    await expect(page.getByLabel('Lower display bound', { exact: true })).toBeHidden();
     const image = page.getByTestId('roi-surface');
     await expect(image).toBeVisible();
     for (const tab of await page

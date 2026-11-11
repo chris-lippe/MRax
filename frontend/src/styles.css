@@ -1279,6 +1279,7 @@ main.pipeline-active .image-preview {
   font-size: 12px;
 }
 .image-viewport {
+  position: relative;
   flex: 1 0 auto;
   display: flex;
   align-items: center;
@@ -1329,51 +1330,52 @@ canvas {
 }
 .orientation {
   position: absolute;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  gap: 1px;
   color: #c4d0ce;
   font-size: 12px;
   pointer-events: none;
+  text-shadow: 0 1px 3px #000;
+}
+.orientation > span {
+  padding-inline: 2px;
+  border-radius: 2px;
+  background: #0b0e1199;
 }
 .orientation.top {
   top: 5px;
   left: 50%;
+  transform: translateX(-50%);
 }
 .orientation.left {
   left: 5px;
   top: 50%;
+  transform: translateY(-50%);
+  min-width: 12px;
+  padding-bottom: 26px;
+}
+.orientation svg {
+  width: 32px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  filter: drop-shadow(0 1px 2px #000);
+}
+.orientation.left svg {
+  position: absolute;
+  top: 25px;
 }
 .intensity-controls {
   display: grid;
-  grid-template-columns: minmax(110px, 0.85fr) minmax(0, 1.25fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px 16px;
   flex-shrink: 0;
   padding: 6px 12px;
   border-top: 1px solid var(--line);
   background: var(--surface);
-}
-.intensity-adjustments {
-  display: grid;
-  gap: 4px;
-  align-content: center;
-}
-.intensity-adjustments label {
-  margin: 0;
-  gap: 2px;
-  font-size: 12px;
-}
-.intensity-adjustments label > span {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-.intensity-adjustments output {
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.intensity-adjustments input {
-  display: block;
-  width: 100%;
-  height: 16px;
-  margin: 0;
 }
 .intensity-bounds {
   min-width: 0;
@@ -1490,6 +1492,20 @@ canvas {
   padding: 2px 4px;
   font-size: 12px;
 }
+@container image-viewer (min-width: 560px) {
+  .intensity-bounds {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) minmax(220px, 0.75fr);
+    gap: 4px 12px;
+    align-items: center;
+  }
+  .intensity-range-title {
+    grid-column: 1 / -1;
+  }
+  .intensity-histogram {
+    margin: 0;
+  }
+}
 .intensity-target {
   grid-column: 1 / -1;
 }
@@ -1505,15 +1521,6 @@ canvas {
   min-height: 26px;
   padding-block: 2px;
   font-size: 12px;
-}
-@container image-viewer (max-width: 380px) {
-  .intensity-controls {
-    grid-template-columns: 1fr;
-  }
-  .intensity-adjustments {
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-  }
 }
 .dimension-controls {
   display: grid;

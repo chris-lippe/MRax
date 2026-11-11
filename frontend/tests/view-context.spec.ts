@@ -89,7 +89,7 @@ test('advanced presentation controls belong to View while navigation and intensi
   ] as const) {
     await selectWorkflow(page, workflow, task);
     await expect(center.getByLabel('Plane', { exact: true })).toBeVisible();
-    await expect(center.getByLabel('Brightness', { exact: true })).toBeVisible();
+    await expect(center.getByLabel('Lower display bound', { exact: true })).toBeVisible();
     await expect(page.getByRole('slider', { name: 'Echo', exact: true })).toBeVisible();
     await expect(page.getByRole('slider', { name: 'Slice', exact: true })).toBeVisible();
     await expect(

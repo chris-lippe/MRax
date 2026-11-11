@@ -39,7 +39,8 @@ For a restricted shared installation, an administrator can use
 Workspace
 ---------
 
-The study browser on the left lists open studies and their experiments.
+The study browser on the left lists open studies and their experiments. Use **Slice package** below
+the image to choose a stack and its native orientation.
 Its buttons create, open, import, save or export studies.
 **Data & Studies** stays open on the left. Drag its right divider to adjust its width.
 **New study** opens a form for empty or example studies. **View → Metadata**
@@ -95,8 +96,9 @@ Different grids are shown side by side; use **Register** before overlaying them.
 data and the current processing output. Frame and slice controls navigate the chosen
 pair independently of the active experiment;
 **Image options** selects fixed frames, components and palettes.
-Expand **View controls** above the image for plane selection, brightness,
-contrast and a histogram with draggable value bounds. Collapse the group to
+Arrows at the image borders indicate increasing axis coordinates.
+Expand **View controls** above the image for plane selection and
+an intensity histogram with draggable value bounds. Collapse the group to
 leave more room for the image. Enter exact bounds in **Min** and **Max**, or use **Auto** to reset
 the intensity window. Split view can link both windows or adjust each image
 independently. These controls change the display without altering image data.
@@ -128,7 +130,9 @@ signal normalization. **Register** aligns images and corrects drift. **Analyze**
 groups time-series corrections, ROI timecourses, map statistics and derived
 diffusion metrics. **View** changes display settings without processing data.
 
-For BM3D/BM4D, leave **Noise sigma** empty and select **Estimate noise** to preview
+BM3D denoises a selected 2D plane; BM4D denoises a selected 3D block.
+All other dimensions, including slice packages, are processed independently.
+Leave **Noise sigma** empty and select **Estimate noise** to preview
 sigma and its range. **Estimate noise from ROIs** uses a uniform region independently
 of the processing mask. A noise-only magnitude background requires its effective
 coil count. Completed steps retain the estimates used; automatic whole-image

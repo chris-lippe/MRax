@@ -62,28 +62,34 @@ test('combined intensity controls replace the marked labels and preserve scienti
   await expect(controls).toBeInViewport();
   await expect(page.locator('.workspace-footer, .pipeline-empty')).toHaveCount(0);
   await expect(page.locator('.pipeline-panel header')).not.toContainText('Protected');
-  await page.getByLabel('Brightness', { exact: true }).fill('20');
-  await expect.poll(() => canvas(page)).not.toBe(original);
-  await page.getByLabel('Display contrast', { exact: true }).fill('1.3');
-  for (const workflow of ['Preprocess', 'Register', 'Segment', 'Fit', 'Analyze', 'View']) {
-    await selectWorkflow(page, workflow);
-    await expect(controls).toBeVisible();
-    await expect(page.getByLabel('Brightness', { exact: true })).toHaveValue('20');
-    await expect(page.getByLabel('Display contrast', { exact: true })).toHaveValue('1.3');
-  }
-  await selectWorkflow(page, 'View', 'Image display');
-  await zoomImage(page, 2);
-  const zoomBeforeIntensityReset = await imageZoom(page);
+  await expect(page.getByLabel('Brightness', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Display contrast', { exact: true })).toHaveCount(0);
   const lower = page.getByLabel('Minimum display value', { exact: true });
   const upper = page.getByLabel('Maximum display value', { exact: true });
   const low = Number(await lower.inputValue());
   const high = Number(await upper.inputValue());
+  await lower.fill(String(low + (high - low) * 0.2));
+  await lower.press('Enter');
+  await expect.poll(() => canvas(page)).not.toBe(original);
+  await upper.fill(String(high - (high - low) * 0.1));
+  await upper.press('Enter');
+  const bounds = [await lower.inputValue(), await upper.inputValue()];
+  for (const workflow of ['Preprocess', 'Register', 'Segment', 'Fit', 'Analyze', 'View']) {
+    await selectWorkflow(page, workflow);
+    await expect(controls).toBeVisible();
+    await expect(lower).toHaveValue(bounds[0]);
+    await expect(upper).toHaveValue(bounds[1]);
+  }
+  await selectWorkflow(page, 'View', 'Image display');
+  await zoomImage(page, 2);
+  const zoomBeforeIntensityReset = await imageZoom(page);
+  await expect(page.locator('.orientation.top')).toBeInViewport();
+  await expect(page.locator('.orientation.left')).toBeInViewport();
   await lower.fill(String(low + (high - low) * 0.1));
   await lower.press('Enter');
-  await expect(page.getByLabel('Brightness', { exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Auto intensity', exact: true }).click();
-  await expect(page.getByLabel('Brightness', { exact: true })).toHaveValue('0');
-  await expect(page.getByLabel('Display contrast', { exact: true })).toHaveValue('1');
+  expect(Number(await lower.inputValue())).toBeCloseTo(low, 5);
+  expect(Number(await upper.inputValue())).toBeCloseTo(high, 5);
   await expect.poll(() => imageZoom(page)).toBe(zoomBeforeIntensityReset);
   await expect.poll(() => canvas(page)).toBe(original);
   expect(await (await request.get('/api/workspaces/' + before.id + '/slice')).body()).toEqual(raw);
@@ -97,7 +103,36 @@ test('combined intensity controls replace the marked labels and preserve scienti
   }
 });
 
-test('brightness, contrast and both value handles remain reactive throughout a drag without data requests', async ({
+test('intensity slider and numeric bounds share a row in wide panels and stack in narrow panels', async ({
+  page,
+}, info) => {
+  await page.setViewportSize({ width: 1500, height: 1000 });
+  await page.goto('/');
+  await loadExample(page);
+  const histogram = page.locator('.intensity-histogram');
+  const fields = page.locator('.intensity-bound-fields');
+  await expect
+    .poll(async () => {
+      const h = (await histogram.boundingBox())!;
+      const f = (await fields.boundingBox())!;
+      return Math.abs(h.y + h.height / 2 - (f.y + f.height / 2));
+    })
+    .toBeLessThan(3);
+  await page.screenshot({ path: info.outputPath('intensity-inline.png') });
+  await page.setViewportSize({ width: 700, height: 900 });
+  await expect
+    .poll(async () => {
+      const h = (await histogram.boundingBox())!;
+      return (await fields.boundingBox())!.y - h.y - h.height;
+    })
+    .toBeGreaterThanOrEqual(0);
+  expect(
+    (await page.getByLabel('Minimum display value', { exact: true }).boundingBox())!.width,
+  ).toBeGreaterThan(50);
+  await page.screenshot({ path: info.outputPath('intensity-stacked.png') });
+});
+
+test('both intensity handles remain reactive throughout a drag without data requests', async ({
   page,
 }) => {
   await page.goto('/');
@@ -106,16 +141,6 @@ test('brightness, contrast and both value handles remain reactive throughout a d
   page.on('request', (request) => {
     if (/\/(view|slice|comparison|tasks)(?:\?|$)/.test(request.url())) calls.push(request.url());
   });
-  const brightness = page.getByLabel('Brightness', { exact: true });
-  await drag(page, brightness, 0.5, 0.6, 0.7, async () => {
-    expect(Number(await brightness.inputValue())).toBeGreaterThan(10);
-  });
-  await page.getByRole('button', { name: 'Auto intensity', exact: true }).click();
-  const contrast = page.getByLabel('Display contrast', { exact: true });
-  await drag(page, contrast, 1 / 3, 0.5, 1, async () => {
-    expect(Number(await contrast.inputValue())).toBeGreaterThan(1);
-  });
-  await page.getByRole('button', { name: 'Auto intensity', exact: true }).click();
   const lower = page.getByLabel('Lower display bound', { exact: true });
   const upper = page.getByLabel('Upper display bound', { exact: true });
   const minimum = Number(await lower.inputValue());
@@ -142,33 +167,38 @@ test('view selectors and intensity form one collapsible group above the image wi
   await loadExample(page);
   const group = page.locator('.viewer-controls');
   const summary = group.locator('summary').first();
-  const brightness = group.getByLabel('Brightness', { exact: true });
+  const bound = group.getByLabel('Lower display bound', { exact: true });
   await expect(group).toHaveAttribute('open', '');
   await expect(page.getByRole('combobox', { name: 'View', exact: true })).toBeVisible();
   await expect(group.getByLabel('View', { exact: true })).toHaveCount(0);
   await expect(group.getByLabel('Plane', { exact: true })).toBeVisible();
-  await brightness.fill('15');
+  const shifted = String(
+    Number(await bound.getAttribute('min')) +
+      (Number(await bound.getAttribute('max')) - Number(await bound.getAttribute('min'))) * 0.15,
+  );
+  await bound.fill(shifted);
+  const saved = await bound.inputValue();
   const image = page.getByTestId('roi-surface');
   const before = (await image.boundingBox())!;
   expect(before.height).toBeGreaterThan(150);
-  expect((await brightness.boundingBox())!.y).toBeLessThan(before.y);
+  expect((await bound.boundingBox())!.y).toBeLessThan(before.y);
   const calls: string[] = [];
   page.on('request', (request) => {
     if (/\/(view|slice|comparison|tasks)(?:\?|$)/.test(request.url())) calls.push(request.url());
   });
   await summary.click();
-  await expect(brightness).toBeHidden();
+  await expect(bound).toBeHidden();
   await expect(page.getByRole('combobox', { name: 'View', exact: true })).toBeVisible();
   await expect(group.getByLabel('Plane', { exact: true })).toBeHidden();
   await expect.poll(async () => (await image.boundingBox())!.y).toBeLessThan(before.y - 50);
   expect((await image.boundingBox())!.height).toBeCloseTo(before.height, 0);
   await summary.press('Enter');
-  await expect(brightness).toHaveValue('15');
+  await expect(bound).toHaveValue(saved);
   expect(calls).toEqual([]);
   await summary.click();
   await page.getByRole('button', { name: 'Split view', exact: true }).click();
   await expect(page.getByRole('img', { name: /^Image A:/ })).toBeVisible();
-  await expect(brightness).toBeHidden();
+  await expect(bound).toBeHidden();
   await summary.click();
   await expect(page.getByLabel('Image A', { exact: true })).toBeVisible();
   await expect(group.getByLabel('Image A', { exact: true })).toHaveCount(0);
@@ -176,7 +206,7 @@ test('view selectors and intensity form one collapsible group above the image wi
   await summary.click();
   await page.reload();
   await expect(page.getByRole('img', { name: /^Image A:/ })).toBeVisible();
-  await expect(brightness).toBeHidden();
+  await expect(bound).toBeHidden();
   await expect(summary).toBeVisible();
   await page.screenshot({ path: info.outputPath('view-controls-collapsed.png') });
 });
@@ -196,8 +226,8 @@ test('split intensity previews immediately and commits linked or independent win
   page.on('request', (request) => {
     if (/\/(view|slice|comparison|tasks)(?:\?|$)/.test(request.url())) calls.push(request.url());
   });
-  const brightness = page.getByLabel('Brightness', { exact: true });
-  await drag(page, brightness, 0.5, 0.6, 0.7, async () => {
+  const lower = page.getByLabel('Lower display bound', { exact: true });
+  await drag(page, lower, 0, 0.2, 0.4, async () => {
     await expect.poll(() => canvas(page, '.comparison-left canvas')).not.toBe(original);
     expect(calls).toEqual([]);
   });
@@ -208,8 +238,8 @@ test('split intensity previews immediately and commits linked or independent win
   expect(calls.filter((url) => !url.endsWith('/view'))).toEqual([]);
   await page.getByRole('checkbox', { name: 'Link intensity windows', exact: true }).uncheck();
   await page.getByLabel('Adjust comparison intensity', { exact: true }).selectOption('right');
-  await page.getByLabel('Brightness', { exact: true }).fill('0');
-  await page.getByLabel('Brightness', { exact: true }).press('Tab');
+  await page.getByLabel('Minimum display value', { exact: true }).fill('0');
+  await page.getByLabel('Minimum display value', { exact: true }).press('Enter');
   await expect
     .poll(async () => (await current(request)).scene.comparison.right.window?.center)
     .not.toBe(linked.scene.comparison.right.window?.center);

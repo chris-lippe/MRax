@@ -174,10 +174,13 @@ def validate_comparison(workspace, raw, catalog):
             for dim, index in settings["indices"].items()
         ):
             raise ValueError("Choose a slice available in both images")
-        if settings["plane"] not in {None, "axial"} and any(
-            "z" not in choice["dimensions"] for choice in selected
-        ):
-            raise ValueError("Choose Axial for two-dimensional images")
+        if settings["plane"] is not None:
+            for choice in selected:
+                native = workspace.session.native_image_plane_for_experiment(choice["experiment"])
+                if "z" not in choice["dimensions"] and settings["plane"] != native:
+                    raise ValueError(
+                        "Choose " + native.capitalize() + " for two-dimensional images"
+                    )
     return settings
 
 
@@ -218,8 +221,16 @@ def _plane(workspace, source, navigation):
         frame = 0
     if not 0 <= frame < frame_count:
         raise ValueError("This source has no matching frame. Choose a fixed comparison frame.")
-    if plane != "axial" and not grid.supports_image_planes():
-        raise ValueError("This source has no matching anatomical plane. Choose Axial.")
+    session.set_active_frame(frame)
+    grid.set_active_frame(frame)
+    if plane is None:
+        plane = grid.native_image_plane
+    if plane != grid.native_image_plane and not grid.supports_image_planes():
+        raise ValueError(
+            "This source has no matching anatomical plane. Choose "
+            + grid.native_image_plane.capitalize()
+            + "."
+        )
     session.set_image_plane(plane)
     grid.set_image_plane(plane)
     for dimension, index in indices.items():
@@ -230,8 +241,6 @@ def _plane(workspace, source, navigation):
             raise ValueError("This source has no matching slice. Choose a shared slice.")
         session.set_active_index(dimension, index)
         grid.set_active_index(dimension, index)
-    session.set_active_frame(frame)
-    grid.set_active_frame(frame)
     if kind == "registration":
         values = render_overlay(
             context, {**source, "component": source.get("component", "auto"), "frame": frame}
@@ -264,6 +273,8 @@ def _plane(workspace, source, navigation):
             "shape": list(values.shape),
             "spacing": list(grid.image_plane_voxel_sizes),
             "plane_dims": list(grid.image_plane_dims),
+            "plane_axis_labels": list(grid.image_plane_axis_labels),
+            "plane_axis_directions": list(grid.image_plane_axis_directions),
             "frame": frame,
             "unit": str(unit),
             "range": [float(finite.min()), float(finite.max())] if finite.size else [0.0, 1.0],
@@ -313,7 +324,7 @@ def render_comparison(workspace, *, catalog=None):
         plane = (
             workspace.session.active_image_plane
             if all("z" in choice["dimensions"] for choice in selected)
-            else "axial"
+            else None
         )
     navigation = {
         "frame": min(workspace.session.active_frame, frame_count - 1)
