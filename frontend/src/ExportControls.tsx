@@ -2,7 +2,14 @@ import { useEffect, useState } from 'react';
 import { api, type Job, type TimecourseResult } from './api';
 import { timecourseCsv } from './timecourse';
 import { useFileSystem } from './FileSystemDialog';
-import { defaultExportDraft, type ExportDraft } from './exportDraft';
+import {
+  changeExportSuffix,
+  defaultExportDraft,
+  exportNameError,
+  exportSuffix,
+  roiExportName,
+  type ExportDraft,
+} from './exportDraft';
 import type { AnalysisProps } from './analysisTypes';
 import type { Inspection } from './metadata';
 
@@ -56,6 +63,10 @@ export function ExportControls({
       scope === 'rois' ? item.kind === 'roi' : item.kind !== 'roi',
     ) ?? [];
   const object = objects.find((item) => item.id === selected);
+  const filename =
+    draft.filename ??
+    roiExportName(selected.startsWith('roi/') ? selected.slice(4) : 'mrax_rois', format);
+  const filenameError = scope === 'rois' ? exportNameError(filename) : '';
   const pending =
     job?.workspace_id === w?.id &&
     job?.status === 'completed' &&
@@ -77,14 +88,27 @@ export function ExportControls({
     }
   }
   async function saveExport(kind: string) {
-    if (!w) return;
+    if (!w || filenameError) return;
     setSelecting(true);
     setError('');
     try {
       const folder =
         ['package', 'state', 'rois'].includes(kind) ||
         (kind === 'object' && ['nifti', 'dicom', 'roi_set'].includes(format));
-      const suffix = kind === 'object' ? '.' + format : kind === 'timecourse' ? '.csv' : '.json';
+      const suffix =
+        kind === 'object'
+          ? exportSuffix(format)
+          : kind === 'rois'
+            ? '.npz'
+            : kind === 'timecourse'
+              ? '.csv'
+              : '.json';
+      const outputName =
+        kind === 'rois'
+          ? changeExportSuffix(filename, format, 'roi_set')
+          : filename.toLowerCase().endsWith(suffix)
+            ? filename
+            : filename + suffix;
       const destination = await choose({
         title:
           kind === 'timecourse'
@@ -102,11 +126,14 @@ export function ExportControls({
         extensions: folder ? undefined : [suffix],
         suggestedName: folder
           ? undefined
-          : kind === 'object'
-            ? 'mrax-export' + suffix
-            : 'mrax-' + kind + suffix,
+          : scope === 'rois'
+            ? outputName
+            : kind === 'object'
+              ? 'mrax-export' + suffix
+              : 'mrax-' + kind + suffix,
       });
       if (!destination) return;
+      if (scope === 'rois' && !folder) updateExport({ filename: destination.name });
       const target = {
         root: destination.root,
         path: destination.path,
@@ -120,7 +147,14 @@ export function ExportControls({
           content: timecourseCsv(timecourse),
         });
         setError('');
-      } else await run('export', { kind, object: selected, format, ...target });
+      } else
+        await run('export', {
+          kind,
+          object: selected,
+          format,
+          ...(scope === 'rois' ? { filename: outputName } : {}),
+          ...target,
+        });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Could not save the export');
     } finally {
@@ -242,6 +276,7 @@ export function ExportControls({
             updateExport({
               selected: e.target.value,
               format: scope === 'rois' ? 'roi_set' : 'npz',
+              filename: undefined,
             });
           }}
         >
@@ -259,7 +294,14 @@ export function ExportControls({
         <select
           aria-label="Export format"
           value={format}
-          onChange={(e) => updateExport({ format: e.target.value })}
+          onChange={(e) =>
+            updateExport({
+              format: e.target.value,
+              ...(draft.filename !== undefined
+                ? { filename: changeExportSuffix(draft.filename, format, e.target.value) }
+                : {}),
+            })
+          }
         >
           {object?.formats.map((f) => (
             <option key={f.id} value={f.id}>
@@ -268,9 +310,22 @@ export function ExportControls({
           ))}
         </select>
       </label>
+      {scope === 'rois' && (
+        <label>
+          File name
+          <input
+            aria-label="ROI export file name"
+            value={filename}
+            disabled={busy || selecting}
+            aria-invalid={Boolean(filenameError)}
+            onChange={(event) => updateExport({ filename: event.target.value })}
+          />
+          {filenameError && <span role="alert">{filenameError}</span>}
+        </label>
+      )}
       <button
         className="primary full"
-        disabled={!object || busy || selecting}
+        disabled={!object || busy || selecting || Boolean(filenameError)}
         onClick={() => void saveExport('object')}
       >
         {scope === 'rois' ? 'Export selected mask' : 'Export selected object'}
@@ -278,7 +333,7 @@ export function ExportControls({
       {scope === 'rois' ? (
         <button
           className="secondary full"
-          disabled={!w?.rois.length || busy || selecting}
+          disabled={!w?.rois.length || busy || selecting || Boolean(filenameError)}
           onClick={() => void saveExport('rois')}
         >
           Save ROI set

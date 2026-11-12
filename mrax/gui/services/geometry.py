@@ -439,21 +439,45 @@ def _seeded_region_mask(
     }
 
 
-def _auto_threshold_mask(image: Any) -> tuple[np.ndarray, dict[str, Any]]:
+def _auto_threshold_mask(
+    image: Any,
+    *,
+    bins: int = 256,
+    foreground: str = "bright",
+    largest_component: bool = True,
+    fill_holes: bool = True,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    if isinstance(bins, bool) or not isinstance(bins, (int, np.integer)) or not 16 <= bins <= 4096:
+        raise ValueError("Histogram bins must be an integer between 16 and 4096")
+    if not isinstance(foreground, str) or foreground not in {"bright", "dark"}:
+        raise ValueError("Choose foreground above or below the threshold")
+    if not isinstance(largest_component, bool) or not isinstance(fill_holes, bool):
+        raise ValueError("Region selection and hole filling require boolean values")
+    settings = {
+        "auto_method": "otsu_largest_component" if largest_component else "otsu",
+        "bins": int(bins),
+        "foreground": foreground,
+        "largest_component": largest_component,
+        "fill_holes": fill_holes,
+    }
     arr = _roi_plane_image(image)
     if arr.ndim != 2:
-        return np.zeros(arr.shape[-2:], dtype=bool), {"auto_method": "otsu_largest_component"}
+        return np.zeros(arr.shape[-2:], dtype=bool), settings
     finite = np.isfinite(arr)
     if not np.any(finite):
-        return np.zeros(arr.shape, dtype=bool), {"auto_method": "otsu_largest_component"}
-    threshold = _otsu_threshold(arr[finite])
+        return np.zeros(arr.shape, dtype=bool), settings
+    threshold = _otsu_threshold(arr[finite], bins=bins)
     if not np.isfinite(threshold):
-        return np.zeros(arr.shape, dtype=bool), {"auto_method": "otsu_largest_component"}
-    candidate = finite & (arr >= float(threshold))
-    component = _largest_component_mask(candidate)
-    component = _fill_mask_holes(component)
+        return np.zeros(arr.shape, dtype=bool), settings
+    candidate = finite & (
+        arr >= float(threshold) if foreground == "bright" else arr < float(threshold)
+    )
+    component = _largest_component_mask(candidate) if largest_component else candidate
+    if fill_holes:
+        component = _fill_mask_holes(component)
+    component &= finite
     return component, {
-        "auto_method": "otsu_largest_component",
+        **settings,
         "threshold": float(threshold),
         "voxel_count": int(np.count_nonzero(component)),
     }

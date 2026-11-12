@@ -40,6 +40,7 @@ async function synthetic(page: Page, multimodal = false) {
 
 test('complex views, planes, integer labels, brush, and undo use the real backend', async ({
   page,
+  request,
 }, testInfo) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -50,8 +51,30 @@ test('complex views, planes, integer labels, brush, and undo use the real backen
   await expect(page.getByLabel('t2 initial', { exact: true })).toHaveCount(0);
   await selectWorkflow(page, 'View');
   await page.getByLabel('Component', { exact: true }).selectOption('real');
+  const imageBounds = (await page.getByTestId('roi-surface').boundingBox())!;
+  await page.mouse.move(
+    imageBounds.x + imageBounds.width * 0.43,
+    imageBounds.y + imageBounds.height * 0.41,
+  );
+  const readout = page.locator('.image-readout > span').first();
+  const beforeFrame = await readout.textContent();
   await page.getByLabel('frame', { exact: true }).fill('1');
+  await expect(readout).not.toHaveText(beforeFrame!);
+  const position = (await readout.textContent())!.match(/Row (\d+), column (\d+)/)!;
+  const current = (await opened(request))[0];
+  const info = await (await request.get('/api/workspaces/' + current.id)).json();
+  const slice = await request.get('/api/workspaces/' + current.id + '/slice');
+  const header = slice.headers(),
+    data = await slice.body();
+  const bytes = header['x-dtype'] === 'float64-le' ? 8 : 4;
+  const offset =
+    (Number(position[1]) * JSON.parse(header['x-shape'])[1] + Number(position[2])) *
+    info.channels *
+    bytes;
+  const value = bytes === 8 ? data.readDoubleLE(offset) : data.readFloatLE(offset);
+  await expect(readout).toContainText(value.toPrecision(6));
   await page.getByLabel('Plane', { exact: true }).selectOption('coronal');
+  await expect(readout).toHaveText('Pixel value: —');
   await expect(page.getByRole('img', { name: /24 by 3 quantitative image/ })).toBeVisible();
   await selectWorkflow(page, 'Segment');
   await page.getByRole('button', { name: 'Ellipse tool', exact: true }).click();

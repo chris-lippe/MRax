@@ -1327,6 +1327,15 @@ canvas {
   stroke-width: 1.5;
   pointer-events: none;
 }
+.roi-brush-draft {
+  fill: none;
+  stroke: #aedbd7;
+  opacity: 0.6;
+  pointer-events: none;
+}
+.roi-brush-draft.erasing {
+  stroke: #ef8f8f;
+}
 .roi-handle {
   fill: #d8eeeb;
   stroke: #3f7976;

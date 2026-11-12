@@ -164,6 +164,14 @@ def test_growth_and_selective_label_edits_keep_labels_and_image_values(browser):
     client, _ = browser
     w = view(client, new(client), z=1)
     original = pixels(client, w).copy()
+    w = action(
+        client, w, "roi.create", name="Painted", tool="brush",
+        points=[[3, 3], [6, 4]], size=3, label=7,
+    )
+    assert w["rois"][0]["metadata"]["kind"] == "mask"
+    assert w["rois"][0]["pixels"] > 0 and w["rois"][0]["labels"] == [7]
+    w = action(client, w, "roi.undo")
+    assert w["rois"] == []
     w = action(client, w, "roi.create", name="Labels", tool="rect", bounds=[8, 8, 1, 1], label=7)
     w = action(
         client, w, "roi.draw", name="Labels", tool="rect", bounds=[12, 8, 1, 1], label=9, mode="add"
@@ -242,3 +250,80 @@ def test_label_appearance_preserves_masks_and_survives_workspace_save(browser):
         )
         assert response.status_code in {400, 422}
     np.testing.assert_array_equal(roi_array(client, w, "Labels"), mask)
+
+
+def test_otsu_settings_control_foreground_regions_holes_and_validation(browser):
+    from mrax.gui.services.geometry import _auto_threshold_mask
+
+    image = np.zeros((24, 32))
+    image[3:10, 3:10] = 10
+    image[5:7, 5:7] = 0
+    image[14:17, 20:23] = 10
+    image[6, 6] = np.nan
+    all_regions, metadata = _auto_threshold_mask(image, largest_component=False, fill_holes=False)
+    np.testing.assert_array_equal(all_regions, image == 10)
+    filled, _ = _auto_threshold_mask(image)
+    assert filled.sum() == 48 and not filled[6, 6] and not filled[15, 21]
+    dark, _ = _auto_threshold_mask(
+        image, foreground="dark", largest_component=False, fill_holes=False
+    )
+    np.testing.assert_array_equal(dark, image == 0)
+    assert 0 < metadata["threshold"] < 10
+
+    client, _ = browser
+    w = new(client)
+    original = pixels(client, w).copy()
+    settings = dict(foreground="dark", largest_component=False, fill_holes=False, bins=64)
+    w = action(client, w, "roi.create", name="Threshold ROI", tool="otsu", **settings)
+    assert all(w["rois"][0]["metadata"][key] == value for key, value in settings.items())
+    for invalid in ({"bins": 1}, {"bins": 16.5}, {"foreground": "unknown"}, {"fill_holes": "false"}):
+        response = client.post(
+            f"/api/workspaces/{w['id']}/actions",
+            json={
+                "revision": w["revision"], "view_revision": w["view_revision"],
+                "action": "roi.create", "options": {"name": "Invalid", "tool": "otsu", **invalid},
+            },
+        )
+        assert response.status_code == 422, response.text
+        assert len(client.get(f"/api/workspaces/{w['id']}").json()["rois"]) == 1
+    np.testing.assert_array_equal(pixels(client, w), original)
+
+
+def test_roi_export_names_preserve_dots_and_control_multi_file_outputs(browser, tmp_path):
+    from mrax.gui.services.export_workflow import export_workspace
+
+    client, _ = browser
+    w = new(client)
+    w = action(client, w, "roi.create", name="Tissue.v1", tool="rect", bounds=[2, 2, 4, 4])
+    workspace = client.app.state.records[w["id"]].workspace
+    destination = tmp_path / "exports"
+    destination.mkdir()
+    sentinel = destination / "existing.txt"
+    sentinel.write_text("Keep this file")
+    options = {
+        "kind": "object", "object": "roi/Tissue.v1", "format": "roi_set",
+        "destination": str(destination),
+    }
+    export_workspace(workspace, options, tmp_path / "default", lambda *args: None)
+    assert {path.name for path in destination.iterdir()} == {
+        "Tissue.v1.npz", "Tissue.v1.json", "existing.txt",
+    }
+    export_workspace(
+        workspace, {**options, "filename": "label-map.npz"},
+        tmp_path / "named", lambda *args: None,
+    )
+    assert (destination / "label-map.npz").is_file()
+    assert json.loads((destination / "label-map.json").read_text())["npz"] == "label-map.npz"
+    export_workspace(
+        workspace, {**options, "format": "nifti", "filename": "label-map.nii"},
+        tmp_path / "nifti", lambda *args: None,
+    )
+    assert (destination / "label-map.nii").is_file()
+    before = {path.name: path.read_bytes() for path in destination.iterdir()}
+    for index, filename in enumerate(("../outside.npz", "C:\\outside.npz", "CON.npz")):
+        with pytest.raises(ValueError, match="file name"):
+            export_workspace(
+                workspace, {**options, "filename": filename},
+                tmp_path / f"invalid-{index}", lambda *args: None,
+            )
+    assert {path.name: path.read_bytes() for path in destination.iterdir()} == before

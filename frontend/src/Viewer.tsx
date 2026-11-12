@@ -26,6 +26,7 @@ export function Viewer({
   scenePreview,
   drawing,
   tool,
+  erasing,
   busy,
   brushSize,
   label,
@@ -44,6 +45,7 @@ export function Viewer({
   scenePreview: ScenePreview;
   drawing: boolean;
   tool: Tool;
+  erasing: boolean;
   busy: boolean;
   brushSize: number;
   label: number;
@@ -61,8 +63,12 @@ export function Viewer({
   const start = useRef<Point | null>(null),
     points = useRef<Point[]>([]),
     panStart = useRef<Point | null>(null);
-  const [draft, setDraft] = useState<Point[]>([]),
-    [pixel, setPixel] = useState('Pixel value: —');
+  const [draft, setDraft] = useState<Point[]>([]);
+  const [pixelPoint, setPixelPoint] = useState<{
+    row: number;
+    column: number;
+    context: string;
+  } | null>(null);
   const { zoom, pan, setPan, level } = display;
   const menu = useContextMenu('Image actions', [
     { label: 'Zoom in', run: display.zoomIn, disabled: zoom >= MAX_ZOOM },
@@ -75,6 +81,21 @@ export function Viewer({
   const mapUnit = String(
     workspace.maps.find((map) => map.name === workspace.active_map)?.unit ?? workspace.unit ?? '',
   );
+  const pixelContext = JSON.stringify([
+    workspace.id,
+    workspace.experiment,
+    workspace.view,
+    workspace.plane_dims,
+    workspace.shape,
+  ]);
+  const hovered = pixelPoint?.context === pixelContext ? pixelPoint : null;
+  const pixelValue = hovered
+    ? values[(hovered.row * columns + hovered.column) * workspace.channels]
+    : NaN;
+  const pixelUnit = workspace.view === 'Map' ? mapUnit : workspace.unit;
+  const pixel = hovered
+    ? `Row ${hovered.row}, column ${hovered.column} · ${Number.isFinite(pixelValue) ? pixelValue.toPrecision(6) : 'Missing / nonfinite'}${pixelUnit ? ` ${pixelUnit}` : ''}`
+    : 'Pixel value: —';
   const aspect = (columns * workspace.spacing[1]) / (rows * workspace.spacing[0]);
   const imageWidth = Math.min(available.width, available.height * aspect);
   useEffect(() => {
@@ -118,7 +139,7 @@ export function Viewer({
     setDraft([]);
     editing.current = null;
     setEditNodes(null);
-  }, [workspace.id, workspace.revision, workspace.view_revision, drawing, tool]);
+  }, [workspace.id, workspace.revision, workspace.view_revision, drawing, tool, erasing]);
   const canvasPixels = useRef<ImageData | null>(null);
   const layerAppearance = JSON.stringify([
     workspace.scene.layers.map(({ id, visible, unavailable, window, colormap, opacity }) => ({
@@ -339,9 +360,12 @@ export function Viewer({
                 }
                 const column = Math.min(columns - 1, Math.floor(point[0])),
                   row = Math.min(rows - 1, Math.floor(point[1]));
-                const value = values[(row * columns + column) * workspace.channels];
-                setPixel(
-                  `Row ${row}, column ${column} · ${Number.isFinite(value) ? value.toPrecision(6) : 'Missing / nonfinite'}${workspace.unit ? ` ${workspace.unit}` : ''}`,
+                setPixelPoint((previous) =>
+                  previous?.row === row &&
+                  previous.column === column &&
+                  previous.context === pixelContext
+                    ? previous
+                    : { row, column, context: pixelContext },
                 );
                 if (start.current) {
                   if (['lasso', 'brush', 'erase'].includes(tool)) {
@@ -497,7 +521,19 @@ export function Viewer({
                   <title>Drag to edit {selectedGeometry?.name}</title>
                 </circle>
               ))}
+              {draft.length > 0 && ['brush', 'erase'].includes(tool) && (
+                <polyline
+                  className={'roi-brush-draft' + (erasing ? ' erasing' : '')}
+                  points={[...draft, draft[draft.length - 1]]
+                    .map((point) => point.join(','))
+                    .join(' ')}
+                  strokeWidth={brushSize}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              )}
               {draft.length > 1 &&
+                !['brush', 'erase'].includes(tool) &&
                 (['rect', 'ellipse', 'regular_polygon'].includes(tool) ? (
                   (() => {
                     const b = rectangle(draft[0], draft[draft.length - 1]);

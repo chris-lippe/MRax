@@ -1,5 +1,5 @@
 import type { components } from './api.generated';
-import type { Workspace } from './api';
+import type { Options, Tool, Workspace } from './api';
 
 export type Layer = components['schemas']['OverlayLayer'];
 export type LayerInfo = components['schemas']['OverlayInfo'];
@@ -12,6 +12,12 @@ export type ScenePreview = {
 };
 
 const palette = ['#2dd4bf', '#fbbf24', '#f472b6', '#a78bfa', '#38bdf8', '#fb923c'];
+export function roiDrawingMode(tool: Tool, options: Options, hasRoi: boolean) {
+  if (tool === 'erase') return 'subtract';
+  if (tool === 'brush') return String(options.brush_mode ?? (hasRoi ? 'add' : 'new'));
+  return String(options.mode ?? 'new');
+}
+
 export function nextRoiName(rois: readonly { name: string }[]) {
   const names = new Set(rois.map((roi) => roi.name));
   let number = rois.length + 1;

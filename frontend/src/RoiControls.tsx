@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Bounds, Tool, Options } from './api';
 import type { AnalysisProps, DrawingProps } from './analysisTypes';
 import { NumberField, JsonEditor } from './Controls';
@@ -7,7 +7,7 @@ import { WorkbenchIcon } from './WorkbenchIcon';
 import { RoiMaskControls } from './RoiMaskControls';
 import { RoiAppearanceControls } from './RoiAppearanceControls';
 import { MaskPreviewDialog } from './MaskPreviewDialog';
-import { nextRoiName, roiColor } from './scene';
+import { nextRoiName, roiColor, roiDrawingMode } from './scene';
 
 export function RoiControls({
   workspace: w,
@@ -27,6 +27,16 @@ export function RoiControls({
   const [bounds, setBounds] = useState<Bounds>([5, 5, 12, 10]),
     [name, setName] = useState('');
   const [maskPreview, setMaskPreview] = useState(false);
+  const [otsu, setOtsu] = useState({
+    foreground: 'bright',
+    largest_component: true,
+    fill_holes: true,
+    bins: 256,
+  });
+  const otsuSettings = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (tool === 'otsu') otsuSettings.current?.scrollIntoView({ block: 'nearest' });
+  }, [tool]);
   const angle = Number(drawOptions.angle ?? 0),
     sides = Number(drawOptions.sides ?? 6);
   const setAngle = (value: number) => setDrawOptions({ ...drawOptions, angle: value });
@@ -36,7 +46,7 @@ export function RoiControls({
   const selected = w?.selected_roi ?? w?.rois.find((r) => r.enabled)?.name;
   const roi = w?.rois.find((r) => r.name === selected);
   const geometric = !['brush', 'erase'].includes(tool);
-  const mode = String(drawOptions.mode ?? 'new');
+  const mode = roiDrawingMode(tool, drawOptions, Boolean(roi));
   const coordinateTool = ['pan', 'rect', 'ellipse', 'regular_polygon'].includes(tool);
   const coordinateShape =
     tool === 'rect' || tool === 'pan' ? 'rectangle' : tool === 'ellipse' ? 'ellipse' : 'polygon';
@@ -52,12 +62,14 @@ export function RoiControls({
     label,
   });
   const command = (op: string, extra = {}) => action(`roi.${op}`, { name: selected, ...extra });
-  const editMask = async () => {
+  const editMask = async (paintLabel?: number) => {
     if (!roi) return;
     if (!roi.metadata.consolidated) {
       await command('consolidate');
-      if (roi.labels.length === 1) setLabel(roi.labels[0]);
     }
+    if (paintLabel !== undefined) setLabel(paintLabel);
+    else if (roi.labels.length === 1) setLabel(roi.labels[0]);
+    setDrawOptions({ ...drawOptions, brush_mode: 'add', label_only: true });
     setMaskPreview(false);
     setTool('brush');
   };
@@ -73,28 +85,32 @@ export function RoiControls({
         icon="rois"
         help="Click a tool to draw. Click it again to return to panning and shape handles. Alt-drag or the middle mouse button pans with any tool. Label 0 is background."
       >
-        {geometric && (
-          <label>
-            Drawing mode
-            <select
-              aria-label="Drawing mode"
-              value={mode}
-              onChange={(event) => setDrawOptions({ ...drawOptions, mode: event.target.value })}
-            >
-              <option value="new">Create a new ROI</option>
-              <option value="add" disabled={!roi}>
-                Add drawn region to {selected ?? 'selected ROI'}
-              </option>
-              <option value="subtract" disabled={!roi}>
-                Subtract drawn region from {selected ?? 'selected ROI'}
-              </option>
-            </select>
-          </label>
-        )}
-        {geometric && mode !== 'new' && !roi && (
+        <label>
+          Drawing mode
+          <select
+            aria-label="Drawing mode"
+            value={mode}
+            disabled={busy || tool === 'erase'}
+            onChange={(event) =>
+              setDrawOptions({
+                ...drawOptions,
+                [tool === 'brush' ? 'brush_mode' : 'mode']: event.target.value,
+              })
+            }
+          >
+            <option value="new">Create a new ROI</option>
+            <option value="add" disabled={!roi}>
+              Add drawn region to {selected ?? 'selected ROI'}
+            </option>
+            <option value="subtract" disabled={!roi}>
+              Subtract drawn region from {selected ?? 'selected ROI'}
+            </option>
+          </select>
+        </label>
+        {mode !== 'new' && !roi && (
           <p className="control-note">Select an ROI or choose Create a new ROI.</p>
         )}
-        {geometric && mode === 'subtract' && roi && (
+        {mode === 'subtract' && roi && (
           <p className="control-note">
             Draw the region to remove from <strong>{roi.name}</strong>.
           </p>
@@ -131,25 +147,27 @@ export function RoiControls({
             type="button"
             className="secondary"
             aria-label="Otsu threshold"
+            aria-pressed={tool === 'otsu'}
+            aria-expanded={tool === 'otsu'}
+            aria-controls="otsu-settings"
             title={
               mode === 'subtract'
                 ? `Subtract Otsu selection from ${selected ?? 'selected ROI'}`
                 : 'Select a region using Otsu thresholding'
             }
             disabled={!w?.editable || busy || (mode !== 'new' && !roi)}
-            onClick={() => {
-              setTool('pan');
-              void create({ ...options(), tool: 'otsu', name: defaultName });
-            }}
+            onClick={() => setTool(tool === 'otsu' ? 'pan' : 'otsu')}
           >
             <WorkbenchIcon name="threshold" />
             <span>Otsu</span>
           </button>
         </div>
         <p className="control-note">
-          {tool === 'pan'
-            ? 'Drag to pan. Select a tool to draw.'
-            : 'Click the selected tool again to pan.'}
+          {tool === 'otsu'
+            ? 'Adjust settings, then apply Otsu to the current image.'
+            : tool === 'pan'
+              ? 'Drag to pan. Select a tool to draw.'
+              : 'Click the selected tool again to pan.'}
         </p>
         <div className="bounds-grid">
           <NumberField label="Label value" value={label} min={1} step="1" onChange={setLabel} />
@@ -176,9 +194,7 @@ export function RoiControls({
             type="checkbox"
             checked={Boolean(drawOptions.auto_subtract)}
             aria-label="Auto subtract from other ROIs"
-            disabled={
-              busy || !w?.editable || tool === 'erase' || (geometric && mode === 'subtract')
-            }
+            disabled={busy || !w?.editable || mode === 'subtract'}
             onChange={(e) => setDrawOptions({ ...drawOptions, auto_subtract: e.target.checked })}
           />
           <span title="Remove newly drawn voxels from other enabled ROIs. Undo restores the whole edit.">
@@ -194,7 +210,7 @@ export function RoiControls({
                 setDrawOptions({ ...drawOptions, label_only: event.target.checked })
               }
             />
-            {tool === 'brush'
+            {tool === 'brush' && mode !== 'subtract'
               ? 'Keep other labels when painting ' + label
               : 'Erase only label ' + label}
           </label>
@@ -206,6 +222,78 @@ export function RoiControls({
             min={0}
             onChange={(v) => setDrawOptions({ ...drawOptions, tolerance: v })}
           />
+        )}
+        {tool === 'otsu' && (
+          <form
+            ref={otsuSettings}
+            id="otsu-settings"
+            className="control-form"
+            aria-label="Otsu segmentation"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void create({ ...options(), ...otsu, tool: 'otsu', name: defaultName });
+            }}
+          >
+            <h4>Otsu settings</h4>
+            <fieldset className="control-form" disabled={busy || !w?.editable}>
+              <div className="field-grid">
+                <label>
+                  Foreground
+                  <select
+                    aria-label="Otsu foreground"
+                    value={otsu.foreground}
+                    onChange={(event) => setOtsu({ ...otsu, foreground: event.target.value })}
+                  >
+                    <option value="bright">Above threshold</option>
+                    <option value="dark">Below threshold</option>
+                  </select>
+                </label>
+                <label>
+                  Regions
+                  <select
+                    aria-label="Otsu regions"
+                    value={otsu.largest_component ? 'largest' : 'all'}
+                    onChange={(event) =>
+                      setOtsu({ ...otsu, largest_component: event.target.value === 'largest' })
+                    }
+                  >
+                    <option value="largest">Largest region</option>
+                    <option value="all">All regions</option>
+                  </select>
+                </label>
+                <NumberField
+                  label="Histogram bins"
+                  caption="Histogram bins (16 to 4096)"
+                  value={otsu.bins}
+                  min={16}
+                  step="1"
+                  onChange={(bins) => setOtsu({ ...otsu, bins })}
+                />
+              </div>
+              <label className="check-label">
+                <input
+                  type="checkbox"
+                  checked={otsu.fill_holes}
+                  onChange={(event) => setOtsu({ ...otsu, fill_holes: event.target.checked })}
+                />
+                Fill holes
+              </label>
+              <button
+                className="primary full"
+                disabled={
+                  (mode !== 'new' && !roi) ||
+                  !Number.isInteger(otsu.bins) ||
+                  otsu.bins < 16 ||
+                  otsu.bins > 4096 ||
+                  !Number.isInteger(label) ||
+                  label < 1 ||
+                  label > 65535
+                }
+              >
+                Apply Otsu
+              </button>
+            </fieldset>
+          </form>
         )}
       </InspectorSection>
       <InspectorSection title="ROIs" icon="layers">
@@ -276,9 +364,7 @@ export function RoiControls({
                       },
                     });
                   }
-                  setLabel(value);
-                  setDrawOptions({ ...drawOptions, label_only: true });
-                  await editMask();
+                  await editMask(value);
                 }}
               />
               <div className="button-row">

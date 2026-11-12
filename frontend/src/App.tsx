@@ -80,7 +80,7 @@ import { tutorialSteps } from './tutorialSteps';
 import type { WorkflowKind } from './reusableWorkflows';
 import { NewStudyDialog, type NewStudyKind } from './NewStudyDialog';
 import { useImageDisplay } from './useImageDisplay';
-import { nextRoiName, type ScenePreview } from './scene';
+import { nextRoiName, roiDrawingMode, type ScenePreview } from './scene';
 
 type Panel = 'tools' | null;
 const WorkflowDialog = lazy(() =>
@@ -194,14 +194,15 @@ export function App() {
   const [workflowTasks, setWorkflowTasks] = useState(initialWorkflowTasks);
   const [signalOpened, setSignalOpened] = useState(false);
   const workflowTask = workflowTasks[workflow];
+  const activeRoi = workspace?.selected_roi ?? workspace?.rois.find((roi) => roi.enabled)?.name;
+  const drawingMode = roiDrawingMode(tool, drawOptions, Boolean(activeRoi));
   const requiresRoi =
-    !['brush', 'erase', 'pan'].includes(tool) &&
-    ['add', 'subtract'].includes(String(drawOptions.mode));
+    tool === 'erase' || (tool !== 'pan' && ['add', 'subtract'].includes(drawingMode));
   const drawing =
     workflowTask === 'roi-edit' &&
-    tool !== 'pan' &&
+    !['pan', 'otsu'].includes(tool) &&
     Boolean(workspace?.editable) &&
-    (!requiresRoi || Boolean(workspace?.selected_roi));
+    (!requiresRoi || Boolean(activeRoi));
   const previousDrawingTool = useRef<Tool>('rect');
   useEffect(() => {
     if (tool !== 'pan') previousDrawingTool.current = tool;
@@ -985,16 +986,29 @@ export function App() {
     options = { ...drawOptions, ...options };
     const w = current.current;
     if (!w) return;
+    const selectedRoi = w.selected_roi ?? w.rois.find((roi) => roi.enabled)?.name;
     if (options.edit) {
       const edited = { ...options };
       delete edited.edit;
       await action('roi.geometry', edited);
     } else if (options.tool === 'brush') {
-      const name = w.selected_roi || nextRoiName(w.rois);
-      if (!w.selected_roi) await action('roi.empty', { name });
-      await action('roi.brush', { name, ...options });
+      options.mode = roiDrawingMode(
+        options.erase ? 'erase' : 'brush',
+        options,
+        Boolean(selectedRoi),
+      );
+      delete options.brush_mode;
+      if (options.mode === 'new') {
+        await action('roi.create', { ...options, name: nextRoiName(w.rois) });
+      } else if (selectedRoi) {
+        await action('roi.brush', {
+          ...options,
+          name: selectedRoi,
+          erase: Boolean(options.erase) || options.mode === 'subtract',
+        });
+      } else setError('Select an ROI to edit.');
     } else if (['add', 'subtract'].includes(String(options.mode))) {
-      await action('roi.draw', { ...options, name: w.selected_roi });
+      await action('roi.draw', { ...options, name: selectedRoi });
     } else await action('roi.create', { name: nextRoiName(w.rois), ...options });
   }
 
@@ -1505,6 +1519,7 @@ export function App() {
                       editingEnabled={workflowTask === 'roi-edit'}
                       drawing={drawing}
                       tool={tool}
+                      erasing={drawingMode === 'subtract'}
                       brushSize={brushSize}
                       label={label}
                       onShape={shape}

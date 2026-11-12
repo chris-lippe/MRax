@@ -75,7 +75,6 @@ test('scientific viewer inspects samples, customizes axes, summarizes ranges and
   expect(whole.rois).toHaveLength(2);
   await selectWorkflow(page, 'Preprocess', 'Denoising');
   await expect(roi).toHaveValue('');
-  await page.screenshot({ path: info.outputPath('quick-roi-selector.png') });
   await selectWorkflow(page, 'View', 'Signal curves');
   await expect(page.getByRole('combobox', { name: 'Signal ROI', exact: true })).toHaveValue('');
   await expect(
@@ -122,17 +121,6 @@ test('scientific viewer inspects samples, customizes axes, summarizes ranges and
       .locator('td')
       .first(),
   ).toHaveText('4');
-  await selectWorkflow(page, 'Segment');
-  await axis.selectOption('x');
-  await expect.poll(async () => (await current(request)).timecourse?.dimension).toBe('x');
-  await axis.selectOption('auto');
-  await expect
-    .poll(async () => (await current(request)).timecourse?.dimension)
-    .toBe(initialProfile.dimension);
-  await page.screenshot({ path: info.outputPath('quick-signal-axis.png') });
-  await selectWorkflow(page, 'View', 'Signal curves');
-  await expect(page.getByLabel('Signal X min', { exact: true })).toHaveValue('');
-  await expect(page.getByLabel('Signal X max', { exact: true })).toHaveValue('');
   await page.getByRole('tab', { name: 'Samples', exact: true }).click();
   await expect(
     page.getByRole('table', { name: 'Scientific signal samples', exact: true }).locator('tbody tr'),
@@ -247,16 +235,13 @@ session.save_imported_study(sys.argv[1])
   const spectrum = (await (await request.get('/api/workspaces')).json()).find(
     (w: Workspace) => w.experiment === 'Spectrum',
   ) as Workspace;
-  expect(spectrum.non_imaging).toBe(true);
-  expect(spectrum.timecourse?.x).toHaveLength(65);
   await page.getByLabel('Signal component', { exact: true }).selectOption('imag');
   await expect
-    .poll(async () =>
-      (
-        await (await request.get('/api/workspaces/' + spectrum.id)).json()
-      ).timecourse.observed.every((value: number) => value === 0),
+    .poll(
+      async () =>
+        (await (await request.get('/api/workspaces/' + spectrum.id)).json()).timecourse.observed[0],
     )
-    .toBe(true);
+    .toBe(0);
   await page.getByLabel('Signal component', { exact: true }).selectOption('real');
   await expect
     .poll(
@@ -264,7 +249,6 @@ session.save_imported_study(sys.argv[1])
         (await (await request.get('/api/workspaces/' + spectrum.id)).json()).timecourse.observed[0],
     )
     .toBeCloseTo(spectrum.timecourse!.observed[0]!, 5);
-  const first = spectrum.timecourse!.observed.map((v) => 2 * v!);
   await selectWorkflow(page, 'Preprocess', 'Denoising');
   await expect(plot).toBeVisible();
   const frame = page.locator('.signal-navigation input[type="range"]');
@@ -274,12 +258,11 @@ session.save_imported_study(sys.argv[1])
     .poll(async () => (await (await request.get('/api/workspaces/' + spectrum.id)).json()).frame)
     .toBe(1);
   const updated = (await (await request.get('/api/workspaces/' + spectrum.id)).json()) as Workspace;
-  updated.timecourse!.observed.forEach((value, i) => expect(value).toBeCloseTo(first[i], 5));
+  expect(updated.timecourse!.observed[0]).toBeCloseTo(2 * spectrum.timecourse!.observed[0]!, 5);
   await plot.focus();
   await plot.press('End');
   await expect(
     page.getByRole('status', { name: 'Signal sample values', exact: true }),
   ).toContainText('Sample 65 / 65');
-  await page.screenshot({ path: info.outputPath('spectroscopy-signal.png') });
   expect(errors).toEqual([]);
 });

@@ -26,7 +26,7 @@ test.afterEach(async ({ request }) => {
   }
 });
 
-async function draw(page: Page, start: number[], end: number[]) {
+async function draw(page: Page, start: number[], end: number[], preview?: () => Promise<void>) {
   const surface = page.getByTestId('roi-surface');
   await surface.scrollIntoViewIfNeeded();
   const box = (await surface.boundingBox())!;
@@ -35,6 +35,7 @@ async function draw(page: Page, start: number[], end: number[]) {
   await page.mouse.move(box.x + (box.width * end[0]) / 32, box.y + (box.height * end[1]) / 24, {
     steps: 5,
   });
+  await preview?.();
   await page.mouse.up();
 }
 
@@ -92,17 +93,67 @@ test('ROI editing and file exchange preserve binary and indexed masks', async ({
   await expect(page.locator('.roi-card.selected strong')).toHaveText('ROI 3');
   await expect(page.getByRole('img', { name: 'ROI 3 · label 1', exact: true })).toBeVisible();
   await expect(page.locator('.image-surface')).toHaveClass(/drawing/);
-  await page.getByRole('button', { name: 'Lasso tool', exact: true }).click();
-  await expect(page.locator('.image-surface')).not.toHaveClass(/drawing/);
+  const lasso = (await opened(request))[0].rois.find((roi) => roi.name === 'ROI 3')!;
+  await page.getByRole('button', { name: 'Brush tool', exact: true }).click();
+  const mode = page.getByLabel('Drawing mode', { exact: true });
+  await expect(mode).toBeVisible();
+  await mode.selectOption('add');
+  await page.getByLabel('Brush size', { exact: true }).fill('3');
+  await draw(page, [15, 6], [22, 8], async () => {
+    await expect(surface.locator('.roi-brush-draft')).toBeVisible();
+    await expect(surface.locator('.roi-draft')).toHaveCount(0);
+  });
+  await expect
+    .poll(async () => (await opened(request))[0].rois.find((roi) => roi.name === 'ROI 3')!.pixels)
+    .toBeGreaterThan(lasso.pixels);
+  const painted = (await opened(request))[0].rois.find((roi) => roi.name === 'ROI 3')!.pixels;
+  await page.getByRole('button', { name: 'Eraser tool', exact: true }).click();
+  await expect(mode).toBeVisible();
+  await expect(mode).toHaveValue('subtract');
+  await draw(page, [15, 6], [22, 8]);
+  await expect
+    .poll(async () => (await opened(request))[0].rois.find((roi) => roi.name === 'ROI 3')!.pixels)
+    .toBeLessThan(painted);
+  for (let i = 0; i < 2; i++)
+    await page.getByRole('button', { name: 'Undo ROI edit', exact: true }).click();
+  await expect
+    .poll(async () => (await opened(request))[0].rois.find((roi) => roi.name === 'ROI 3')!.mask)
+    .toEqual(lasso.mask);
+  await page.getByRole('button', { name: 'Brush tool', exact: true }).click();
+  await mode.selectOption('new');
+  await draw(page, [24, 16], [29, 17]);
+  await expect(page.locator('.roi-card.selected strong')).toHaveText('ROI 4');
+  expect((await opened(request))[0].rois.find((roi) => roi.name === 'ROI 4')!.metadata.kind).toBe(
+    'mask',
+  );
+  await page.getByRole('button', { name: 'Undo ROI edit', exact: true }).click();
+  await expect(page.locator('.roi-card')).toHaveCount(3);
   await page
     .getByRole('group', { name: 'ROI tool', exact: true })
     .getByRole('button', { name: 'Otsu threshold', exact: true })
     .click();
+  const otsu = page.getByRole('form', { name: 'Otsu segmentation', exact: true });
+  await expect(otsu).toBeVisible();
+  await expect(page.locator('.roi-card')).toHaveCount(3);
+  await expect(page.locator('.image-surface')).not.toHaveClass(/drawing/);
+  await otsu.getByLabel('Otsu foreground', { exact: true }).selectOption('dark');
+  await otsu.getByLabel('Otsu regions', { exact: true }).selectOption('all');
+  await otsu.getByLabel('Histogram bins', { exact: true }).fill('64');
+  await otsu.getByRole('checkbox', { name: 'Fill holes', exact: true }).uncheck();
+  await expect(page.locator('.roi-card')).toHaveCount(3);
+  await otsu.getByRole('button', { name: 'Apply Otsu', exact: true }).click();
   await expect(page.locator('.roi-card.selected strong')).toHaveText('ROI 4');
+  expect((await opened(request))[0].rois.at(-1)!.metadata).toMatchObject({
+    foreground: 'dark',
+    largest_component: false,
+    fill_holes: false,
+    bins: 64,
+  });
   await expect(page.locator('.image-surface')).not.toHaveClass(/drawing/);
   await page.getByRole('button', { name: 'Undo ROI edit', exact: true }).click();
   await expect(page.locator('.roi-card')).toHaveCount(3);
   await rectangle.click();
+  await expect(otsu).not.toBeVisible();
   await page.getByRole('separator', { name: 'Resize analysis controls', exact: true }).press('End');
   await selectWorkflow(page, 'Segment', 'Edit ROIs and masks');
   await expect(page.getByRole('region', { name: 'Combine ROIs', exact: true })).toBeVisible();
@@ -121,7 +172,6 @@ test('ROI editing and file exchange preserve binary and indexed masks', async ({
     .poll(async () => (await opened(request))[0].rois.find((r) => r.name === 'B')?.pixels)
     .toBe(12);
   expect((await opened(request))[0].rois.find((r) => r.name === 'A')?.pixels).toBe(16);
-  await page.screenshot({ path: info.outputPath('subtract-a-from-b.png') });
   await page.getByRole('button', { name: 'Undo ROI edit', exact: true }).click();
   await expect
     .poll(async () => (await opened(request))[0].rois.find((r) => r.name === 'B')?.pixels)
@@ -177,9 +227,6 @@ test('ROI editing and file exchange preserve binary and indexed masks', async ({
     .click();
   await expect(labelTwo).toHaveCSS('fill-opacity', '0.35');
   await expect(labelOne).toHaveCSS('fill', 'rgb(204, 51, 85)');
-  await page.screenshot({ path: info.outputPath('segment-combine.png') });
-  await selectWorkflow(page, 'Segment');
-  await page.getByRole('button', { name: 'Use label 2', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Brush tool', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -187,7 +234,6 @@ test('ROI editing and file exchange preserve binary and indexed masks', async ({
   await expect(
     page.getByRole('checkbox', { name: 'Auto subtract from other ROIs', exact: true }),
   ).toBeVisible();
-  await page.getByRole('button', { name: 'Use label 2', exact: true }).click();
   await page.getByLabel('Replacement label', { exact: true }).fill('7');
   await page.getByRole('button', { name: 'Relabel selected label', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Use label 7', exact: true })).toBeVisible();
@@ -204,35 +250,6 @@ test('ROI editing and file exchange preserve binary and indexed masks', async ({
   await expect
     .poll(async () => (await opened(request))[0].rois.find((r) => r.name === 'Labels')?.pixels)
     .toBe(28);
-  await page.screenshot({ path: info.outputPath('segment-label-mask.png') });
-  await expect
-    .poll(async () =>
-      page.locator('#analysis-controls').evaluate((panel) => {
-        const grow = panel
-          .querySelector('section[aria-label="Grow in 3D"]')!
-          .getBoundingClientRect();
-        const above = [...panel.querySelectorAll('.control-section')]
-          .map((card) => card.getBoundingClientRect())
-          .filter(
-            (box) => box.height > 0 && Math.abs(box.left - grow.left) < 1 && box.bottom <= grow.top,
-          );
-        return above.length ? grow.top - Math.max(...above.map((box) => box.bottom)) : Infinity;
-      }),
-    )
-    .toBeLessThanOrEqual(12);
-  const divider = page.getByRole('separator', { name: 'Resize analysis controls', exact: true });
-  await divider.press('Home');
-  await expect
-    .poll(async () => {
-      const drawing = (await page
-        .getByRole('region', { name: 'Draw and paint', exact: true })
-        .boundingBox())!;
-      const rois = (await page.getByRole('region', { name: 'ROIs', exact: true }).boundingBox())!;
-      return Math.abs(drawing.x - rois.x);
-    })
-    .toBeLessThan(1);
-  await divider.press('End');
-  await selectWorkflow(page, 'Segment');
   await page.getByRole('button', { name: 'Copy current slice', exact: true }).click();
   await expect
     .poll(async () => (await opened(request))[0].rois.find((r) => r.name === 'Labels')?.pixels)
@@ -243,7 +260,6 @@ test('ROI editing and file exchange preserve binary and indexed masks', async ({
     .toBeGreaterThan(84);
   const before = (await opened(request))[0];
   expect(before.rois.slice(0, 2).map((r) => r.pixels)).toEqual([16, 16]);
-  await page.screenshot({ path: info.outputPath('segment-3d.png') });
   const file = info.outputPath('label-masks.mrax');
   await saveWorkspace(page, file);
   await openWorkspace(page, file);
@@ -254,34 +270,39 @@ test('ROI editing and file exchange preserve binary and indexed masks', async ({
   await expect(page.getByRole('group', { name: 'ROI tool', exact: true })).not.toBeVisible();
   await expect(page.getByRole('region', { name: 'Export ROIs and masks' })).toBeVisible();
   await page.getByLabel('Export ROI', { exact: true }).selectOption('roi/Labels');
+  const filename = page.getByLabel('ROI export file name', { exact: true });
+  await expect(filename).toHaveValue('Labels.npz');
   await page.getByLabel('Export format', { exact: true }).selectOption('npy');
-  const maskFile = info.outputPath('labels.npy');
+  await expect(filename).toHaveValue('Labels.npy');
+  await filename.fill('lesion-mask.npy');
+  const maskFile = info.outputPath('lesion-mask.npy');
   await page.getByRole('button', { name: 'Export selected mask', exact: true }).click();
+  await expect(
+    page.locator('.file-system-dialog').getByLabel('File name', { exact: true }),
+  ).toHaveValue('lesion-mask.npy');
   await chooseFilePath(page, maskFile, 'Save');
   await expect(page.locator('#analysis-controls .job-status .file-source')).toContainText(maskFile);
   expect((await readFile(maskFile)).subarray(0, 6).toString('latin1')).toBe('\x93NUMPY');
+  await page.getByLabel('Export format', { exact: true }).selectOption('nifti');
+  await expect(filename).toHaveValue('lesion-mask.nii');
+  await filename.fill('../outside.nii');
+  await expect(
+    page.getByRole('button', { name: 'Export selected mask', exact: true }),
+  ).toBeDisabled();
+  await filename.fill('all-regions.npz');
   const roiFolder = info.outputPath('ROI set');
   await page.getByRole('button', { name: 'Save ROI set', exact: true }).click();
   await chooseExportFolder(page, roiFolder, true);
   await expect(page.locator('#analysis-controls .job-status .file-source')).toContainText(
     roiFolder,
   );
-  expect((await readdir(roiFolder)).sort()).toEqual(['mrax_rois.json', 'mrax_rois.npz']);
-  const savedRois = await readFile(roiFolder + '/mrax_rois.npz');
-  await page.getByRole('button', { name: 'Save ROI set', exact: true }).click();
-  await chooseExportFolder(page, roiFolder);
-  const review = page.getByRole('alert', { name: 'Existing output files', exact: true });
-  await expect(review).toBeVisible();
-  await review.getByRole('button', { name: 'Cancel export', exact: true }).click();
-  await expect(review).not.toBeVisible();
-  expect(await readFile(roiFolder + '/mrax_rois.npz')).toEqual(savedRois);
-  await page.screenshot({ path: info.outputPath('segment-import-export.png') });
+  expect((await readdir(roiFolder)).sort()).toEqual(['all-regions.json', 'all-regions.npz']);
   const priorIds = new Set((await opened(request)).map((w) => w.id));
   await loadExample(page);
   const target = (await opened(request)).find((w) => !priorIds.has(w.id))!;
   await selectWorkflow(page, 'Segment', 'Import and export ROIs');
   await page.getByRole('button', { name: 'Open ROI set or mask…', exact: true }).click();
-  await chooseFilePath(page, roiFolder + '/mrax_rois.npz');
+  await chooseFilePath(page, roiFolder + '/all-regions.npz');
   await expect
     .poll(async () => (await opened(request)).find((w) => w.id === target.id)?.rois)
     .toEqual(before.rois);

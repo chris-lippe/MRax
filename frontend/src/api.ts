@@ -11,7 +11,16 @@ export type Bounds = [number, number, number, number];
 export type Pixels = Float32Array | Float64Array;
 export type Options = Record<string, unknown>;
 export type Tool =
-  'rect' | 'ellipse' | 'regular_polygon' | 'polygon' | 'lasso' | 'brush' | 'erase' | 'wand' | 'pan';
+  | 'rect'
+  | 'ellipse'
+  | 'regular_polygon'
+  | 'polygon'
+  | 'lasso'
+  | 'brush'
+  | 'erase'
+  | 'wand'
+  | 'otsu'
+  | 'pan';
 
 export function originalComparison(workspace: Workspace): ComparisonSettings {
   return {

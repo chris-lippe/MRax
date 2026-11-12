@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -33,13 +34,35 @@ def export_destination_options(options):
     return directory, image_export
 
 
+def _export_filename(options, default, suffix):
+    name = options.get("filename")
+    if name is None:
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(default)).strip().rstrip(". ") or "ROI"
+        if re.match(r"^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)", name, re.IGNORECASE):
+            name = "_" + name
+        name = name[:180]
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or len(name) > 200
+        or re.search(r'[<>:"/\\|?*\x00-\x1f]', name)
+        or name.endswith((".", " "))
+        or re.match(r"^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)", name, re.IGNORECASE)
+    ):
+        raise ValueError("Enter a file name without folder paths or reserved characters")
+    return name if name.lower().endswith(suffix) else name + suffix
+
+
 def _write_export_files(workspace, options, folder):
     kind = str(options.get("kind", "bundle"))
     if kind in {"package", "state"}:
         # A state file carries its referenced study and arrays for portability.
         save_workspace_folder(workspace, folder)
     elif kind == "rois":
-        save_roi_set(workspace.session.shared_rois, folder / "mrax_rois.npz")
+        save_roi_set(
+            workspace.session.shared_rois,
+            folder / _export_filename(options, "mrax_rois", ".npz"),
+        )
     elif kind == "fit":
         fits = workspace.fit_results_by_experiment
         if not fits:
@@ -78,9 +101,12 @@ def _write_export_files(workspace, options, folder):
         if record is None:
             raise ValueError("Choose an export object")
         format_name = str(options.get("format", "npz"))
-        if format_name not in {f["id"] for f in _single_export_file_types(record)}:
+        formats = {f["id"]: f for f in _single_export_file_types(record)}
+        if format_name not in formats:
             raise ValueError("This format cannot represent the selected object")
-        _write_single_export_object(record, folder / "mrax-export", format_name)
+        default = record["name"] if record["kind"] == "roi" else "mrax-export"
+        filename = _export_filename(options, default, formats[format_name]["suffix"])
+        _write_single_export_object(record, folder / filename, format_name)
     else:
         raise ValueError("Unknown export format")
 

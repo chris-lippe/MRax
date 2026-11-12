@@ -184,9 +184,36 @@ def _embed(session, plane):
     )
 
 
+def _brush_stroke_mask(shape, options):
+    points = np.asarray(options.get("points", []), dtype=float)
+    if (
+        points.ndim != 2
+        or points.shape[1] != 2
+        or not 1 <= len(points) <= 4096
+        or not np.all(np.isfinite(points))
+    ):
+        raise ValueError("A brush stroke requires finite native coordinates")
+    size = float(options.get("size", 5))
+    if not 1 <= size <= 512:
+        raise ValueError("Brush size must be between 1 and 512 voxels")
+    stamp = np.zeros(shape, dtype=bool)
+    for index, point in enumerate(points):
+        previous = points[max(0, index - 1)]
+        for x, y in np.linspace(
+            previous, point, max(1, int(np.ceil(np.linalg.norm(point - previous))) + 1)
+        ):
+            stamp |= _brush_mask(stamp.shape, (int(y), int(x)), _brush_radius_from_size(size))
+    return stamp
+
+
 def geometry_mask(session, options, image):
     shape = tuple(session.frame_image().shape)
     kind = options.get("tool", "rect")
+    if kind == "brush":
+        mask = _brush_stroke_mask(shape, options)
+        if not np.any(mask):
+            raise ValueError("The stroke contains no native voxels")
+        return mask, {"kind": "mask", "consolidated": True}
     bounds = np.asarray(options.get("bounds", [0, 0, 1, 1]), dtype=float)
     if bounds.shape != (4,) or not np.all(np.isfinite(bounds)) or np.any(bounds[2:] <= 0):
         raise ValueError("Geometry requires finite bounds with a positive width and height")
@@ -226,7 +253,13 @@ def geometry_mask(session, options, image):
         mask = _polygon_mask(shape, points)
         metadata["points"] = points.tolist()
     elif kind == "otsu":
-        mask, extra = _auto_threshold_mask(image)
+        mask, extra = _auto_threshold_mask(
+            image,
+            bins=options.get("bins", 256),
+            foreground=options.get("foreground", "bright"),
+            largest_component=options.get("largest_component", True),
+            fill_holes=options.get("fill_holes", True),
+        )
         metadata.update(extra)
     elif kind == "wand":
         seed = np.asarray(options.get("seed", [0, 0]), dtype=float)
@@ -333,25 +366,10 @@ def _native_roi_command(workspace, action, options, image=None):
     if tuple(np.shape(roi.mask)) != tuple(session.roi_shape):
         raise ValueError("This ROI belongs to a different native grid")
     if action == "brush":
-        points = np.asarray(options.get("points", []), dtype=float)
-        if (
-            points.ndim != 2
-            or points.shape[1] != 2
-            or not 1 <= len(points) <= 4096
-            or not np.all(np.isfinite(points))
-        ):
-            raise ValueError("A brush stroke requires finite native coordinates")
-        size = float(options.get("size", 5))
         label = int(options.get("label", 1))
-        if not 1 <= size <= 512 or not 0 <= label <= 65535:
-            raise ValueError("Invalid brush size or label")
-        stamp = np.zeros(tuple(session.frame_image().shape), dtype=bool)
-        for index, point in enumerate(points):
-            previous = points[max(0, index - 1)]
-            for x, y in np.linspace(
-                previous, point, max(1, int(np.ceil(np.linalg.norm(point - previous))) + 1)
-            ):
-                stamp |= _brush_mask(stamp.shape, (int(y), int(x)), _brush_radius_from_size(size))
+        if not 0 <= label <= 65535:
+            raise ValueError("Labels must be between zero and 65535")
+        stamp = _brush_stroke_mask(tuple(session.frame_image().shape), options)
         plane = np.asarray(_plane(session, roi), dtype=np.uint16).copy()
         if options.get("label_only"):
             stamp &= plane == label if options.get("erase") else (plane == 0) | (plane == label)
