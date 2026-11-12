@@ -41,6 +41,9 @@ def test_arbitrary_sources_frames_and_overlays_survive_save_and_reopen(browser):
     w = workflow.new(client)
     original = workflow.pixels(client, w)
     w = workflow.view(client, w, frame=2)
+    w, _ = workflow.job(
+        client, w, "process", method="gaussian", input="image", parameters={"sigma": 1.0}
+    )
     other_frame = workflow.pixels(client, w)
     config = {
         **w["scene"]["comparison"],
@@ -59,7 +62,13 @@ def test_arbitrary_sources_frames_and_overlays_survive_save_and_reopen(browser):
         "opacity": 0.25,
     }
     w = workflow.view(client, w, scene={"comparison": config, "layers": [layer]})
+    session = client.app.state.records[w["id"]].workspace.session
+    working = session.current_experiment["mr_image"]
+    dataset = session.study.datasets[0].data
     arrays, metadata = comparison(client, w)
+    assert session.current_experiment["mr_image"] is working
+    assert session.study.datasets[0].data is dataset
+    np.testing.assert_array_equal(workflow.pixels(client, w), other_frame)
     np.testing.assert_array_equal(arrays[0], original)
     np.testing.assert_array_equal(arrays[1], other_frame)
     assert [plane["frame"] for plane in metadata["planes"]] == [0, 2]

@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 
 export function OpacityControl({
   label,
+  caption,
   value,
   disabled,
   preview,
   commit,
 }: {
   label: string;
+  caption?: string;
   value: number;
   disabled: boolean;
   preview: (value: number) => void;
@@ -28,7 +30,7 @@ export function OpacityControl({
   return (
     <label className="opacity-control">
       <span>
-        {label}
+        {caption ?? label}
         <output>{Math.round(draft * 100)}%</output>
       </span>
       <input

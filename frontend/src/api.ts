@@ -210,11 +210,11 @@ export function clearImageCache(workspaceId: string) {
     if (JSON.parse(key)[0] === workspaceId) comparisonMetadata.delete(key);
 }
 
-export function imageKey(workspace: Workspace, layer?: string) {
+export function imageKey(workspace: Workspace, layer?: string, withRevision = true) {
   const selectedLayer = layer ? workspace.scene.layers.find((entry) => entry.id === layer) : null;
   return JSON.stringify([
     workspace.id,
-    workspace.revision,
+    withRevision ? workspace.revision : null,
     workspace.experiment,
     workspace.view,
     workspace.plane,
@@ -243,6 +243,15 @@ export function imageKey(workspace: Workspace, layer?: string) {
         }
       : null,
   ]);
+}
+
+export function retainImagePlanes(previous: Workspace, next: Workspace, roisChanged = false) {
+  for (const layer of [undefined, ...next.scene.layers.map((entry) => entry.id)]) {
+    if (!layer && roisChanged && next.visual_state.mask_enabled) continue;
+    if (imageKey(previous, layer, false) !== imageKey(next, layer, false)) continue;
+    const values = imageCache.get(imageKey(previous, layer));
+    if (values) imageCache.set(imageKey(next, layer), values);
+  }
 }
 
 export function rememberImages(

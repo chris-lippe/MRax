@@ -2023,6 +2023,16 @@
             ],
             "title": "Color"
           },
+          "hidden_labels": {
+            "default": [],
+            "items": {
+              "maximum": 65535.0,
+              "minimum": 1.0,
+              "type": "integer"
+            },
+            "title": "Hidden Labels",
+            "type": "array"
+          },
           "label_colors": {
             "additionalProperties": {
               "pattern": "^#[0-9a-fA-F]{6}$",
@@ -2030,6 +2040,16 @@
             },
             "default": {},
             "title": "Label Colors",
+            "type": "object"
+          },
+          "label_opacities": {
+            "additionalProperties": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "default": {},
+            "title": "Label Opacities",
             "type": "object"
           },
           "opacity": {
@@ -2758,6 +2778,17 @@
               }
             ],
             "title": "Plot Axis"
+          },
+          "plot_whole_image": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plot Whole Image"
           },
           "reconstruction_component": {
             "anyOf": [

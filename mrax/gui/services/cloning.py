@@ -6,12 +6,26 @@ import dataclasses
 import numpy as np
 
 
-def clone_workspace(workspace, *, readonly_arrays=False):
+def clone_workspace(workspace, *, readonly_arrays=False, share_sources=False):
+    """Copy editable state, with shared inputs for display and ROI commands."""
     memo = {}
     visited = set()
+    if share_sources:
+        if readonly_arrays:
+            raise ValueError("Read-only snapshots require independent acquisition metadata")
+        for value in (
+            workspace.session.data,
+            workspace.session.study,
+            workspace.session.import_metadata,
+            workspace.pipelines,
+            workspace.registration_results,
+            workspace.drift_results,
+        ):
+            if value is not None:
+                memo[id(value)] = value
 
     def visit(value):
-        if id(value) in visited:
+        if id(value) in visited or id(value) in memo:
             return
         visited.add(id(value))
         if (

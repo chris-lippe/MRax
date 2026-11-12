@@ -125,7 +125,7 @@ test('Bruker packages retain their anatomical planes through viewing and lazy re
     await compare.getByRole('button', { name: 'Experiment', exact: true }).click();
   }
   await selectWorkflow(page, 'Segment');
-  await page.getByRole('button', { name: 'Draw rectangle', exact: true }).click();
+  await page.getByRole('button', { name: 'Rectangle tool', exact: true }).click();
   const surface = page.getByTestId('roi-surface');
   const box = (await surface.boundingBox())!;
   await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.25);
@@ -134,5 +134,6 @@ test('Bruker packages retain their anatomical planes through viewing and lazy re
   await page.mouse.up();
   await expect.poll(async () => (await selected()).rois.length).toBe(1);
   expect((await selected()).rois[0].pixels).toBeGreaterThan(0);
+  await expect(page.locator('.roi-mask .roi-outline')).toBeVisible();
   expect(errors).toEqual([]);
 });

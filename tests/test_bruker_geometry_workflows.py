@@ -146,6 +146,65 @@ def _scan(root, *, shape=(7, 5), counts=(3,), echoes=2, echo_first=True, reverse
     return scan, images, coordinates, np.asarray(positions), matrices, physical_slice
 
 
+
+def test_sampled_bruker_reconstruction_keeps_native_rectangular_axes(tmp_path):
+    shape = (9, 7)
+    scan, images, *_ = _scan(tmp_path, shape=shape, counts=(2,), echoes=1)
+    pdata = scan / "pdata" / "1"
+    (scan / "method").write_text(
+        "##$Method=<SPIRAL>\n##$PVM_EncNReceivers=1\n"
+        + _array("PVM_SPackArrNSlices", [2])
+    )
+    (scan / "acqp").write_text(
+        "##$ACQ_dim=1\n##$NI=2\n##$NR=1\n"
+        "##$GO_raw_data_format=GO_32BIT_FLOAT\n##$GO_block_size=continuous\n"
+        + _array("ACQ_size", [2 * np.prod(shape)])
+    )
+    (pdata / "reco").write_text(
+        "\n".join(
+            [
+                _array("RECO_size", shape),
+                _array("RecoRegridNFtSize", shape),
+                _array("RECO_rotate", [0.5, 0.5]),
+                "##$RecoRegridN=Yes",
+                f"##$RecoRegridNPoints={np.prod(shape)}",
+                "##$RecoRegridNInterleaves=1",
+                "##$RecoRegridNDim=2",
+                "##$RecoRegridNTrajType=<Spiral>",
+                "##$RecoRegridNDensCorr=<Pre>",
+            ]
+        )
+    )
+    coordinates = np.stack(
+        np.meshgrid(
+            *[np.fft.fftshift(np.fft.fftfreq(size)) for size in shape],
+            indexing="ij",
+        ),
+        axis=-1,
+    )
+    coordinates.astype("<f8").tofile(scan / "traj")
+    samples = np.fft.fftshift(
+        np.fft.fft2(np.fft.ifftshift(images, axes=(-2, -1)), norm="ortho"),
+        axes=(-2, -1),
+    ).ravel()
+    words = np.empty(samples.size * 2, dtype="<f4")
+    words[::2], words[1::2] = samples.real, samples.imag
+    words.tofile(scan / "fid")
+    _, dataset, _, _ = import_bruker_experiment(scan, load_raw_kspace=True)
+    assert dataset.acquisition is not None
+    result = reconstruct_acquisition(
+        dataset.acquisition, method="nufft", density_compensation=False
+    )
+    expected = np.moveaxis(images, 0, -1)[None, ...]
+    actual = np.abs(np.asarray(result.image))
+    assert actual.shape == expected.shape
+    np.testing.assert_allclose(
+        actual / np.linalg.norm(actual),
+        expected / np.linalg.norm(expected),
+        atol=2e-6,
+    )
+
+
 @pytest.mark.parametrize("echo_first", [True, False])
 def test_multiple_packages_import_on_one_axis_and_reconstruct_without_transpose(
     tmp_path, echo_first

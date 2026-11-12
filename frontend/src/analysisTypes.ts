@@ -7,7 +7,7 @@ export type AnalysisProps = {
   job: Job | null;
   action: (name: string, options?: Options) => Promise<void>;
   changeView: (command: Options) => Promise<void>;
-  previewRoiOpacity?: (name: string, value: number) => void;
+  previewRoiOpacity?: (name: string, value: number, label?: number) => void;
   run: (operation: string, options?: Options) => Promise<void>;
   save: () => Promise<void>;
   openWorkflows?: (kind: WorkflowKind, draft?: Options) => void;
@@ -16,11 +16,9 @@ export type AnalysisProps = {
 export type DrawingProps = {
   drawOptions: Options;
   setDrawOptions: (options: Options) => void;
-  drawing: boolean;
   tool: Tool;
   brushSize: number;
   label: number;
-  setDrawing: (drawing: boolean) => void;
   setTool: (tool: Tool) => void;
   setBrushSize: (size: number) => void;
   setLabel: (label: number) => void;

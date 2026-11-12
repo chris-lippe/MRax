@@ -947,6 +947,17 @@ class GuiSession:
     def imported_roi(self, roi: ROI) -> ROI:
         """Place a native mask in the selected package without altering its file."""
         mask = np.asarray(roi.mask)
+        metadata = dict(roi.metadata or {})
+        affine = metadata.pop("nifti_affine", None)
+        if affine is not None:
+            reference = self.image_geometry().affine_for_frame(self.active_frame)
+            if reference is not None and not np.allclose(
+                affine, reference, atol=1e-4, rtol=1e-5
+            ):
+                raise ValueError(
+                    "Mask geometry differs from the displayed image. "
+                    "Register or resample the mask onto this image grid."
+                )
         if self._package_for_experiment() and mask.shape != self.roi_shape:
             shape = tuple(self.view_dimensions[name] for name in self.spatial_dim_names)
             if mask.shape == shape[:2] and shape[-1] == 1:
@@ -959,7 +970,7 @@ class GuiSession:
             mask = complete
         if mask.shape != self.roi_shape:
             raise ValueError("ROI dimensions do not match the native grid")
-        return ROI(roi.name, mask, dims=tuple(self.roi_dim_names), metadata=roi.metadata)
+        return ROI(roi.name, mask, dims=tuple(self.roi_dim_names), metadata=metadata)
 
     def _crop_display_image(self, image):
         for axis, name in enumerate(self.image_plane_dims):
@@ -2298,6 +2309,31 @@ class GuiSession:
         roi = input_roi if input_roi is not None else (self.roi(roi_name) if use_roi else None)
         mask = roi.mask if roi is not None else None
         mask_dims = self._roi_mask_dims(roi, tuple(experiment.spatial_dim_names)) if roi is not None else None
+        spatial_geometry = dataset.spatial_geometry
+        output_shape = experiment.spatial_shape
+        fit_bounds = None
+        if (
+            mask is not None
+            and model.name in {"dti", "dki"}
+            and self.fit_settings.mask_fill_value is not None
+            and not any(self.fit_settings.regularizer_configs.values())
+            and not any(self.fit_settings.parameter_constant_dims.values())
+        ):
+            spatial_dims = tuple(experiment.spatial_dim_names)
+            spatial_mask = np.asarray(broadcast_mask(
+                mask, output_shape, mask_dims=mask_dims, target_dims=spatial_dims,
+            ))
+            support = np.nonzero(spatial_mask > 0)
+            if support and support[0].size:
+                bounds = tuple(slice(int(axis.min()), int(axis.max()) + 1) for axis in support)
+                sizes = {name: part.stop - part.start for name, part in zip(spatial_dims, bounds, strict=True)}
+                if any(sizes[name] != experiment.dims[name] for name in spatial_dims):
+                    fit_bounds = bounds
+                    selection = tuple(bounds[spatial_dims.index(name)] if name in spatial_dims else slice(None)
+                                      for name in experiment.dims)
+                    experiment = replace(experiment, dims={name: sizes.get(name, size) for name, size in experiment.dims.items()})
+                    dataset = replace(dataset, data=np.asarray(dataset.data)[selection], spatial_geometry=None)
+                    mask, mask_dims = spatial_mask[bounds], spatial_dims
         frame_mask = self.frame_mask.as_array() if self.frame_mask is not None else None
         initial_params, fit_notes = self._dti_initial_params(
             experiment,
@@ -2341,6 +2377,17 @@ class GuiSession:
             frame_mask=frame_mask,
         )
         fit_notes.extend(replacement_notes)
+        if fit_bounds is not None:
+            restored = {}
+            for name, value in fields.items():
+                array = _as_numpy(value)
+                complete = np.full(output_shape, self.fit_settings.mask_fill_value, dtype=array.dtype)
+                complete[fit_bounds] = array
+                restored[name] = (
+                    Quantity(complete, value.si_unit)
+                    if isinstance(value, Quantity) else complete
+                )
+            fields = restored
         if fit_info.regularization_mode == "smoothed_tv":
             fit_notes.append(f"Warning: {fit_info.optimizer_name} uses smoothed TV gradients. Choose auto, FISTA, or split_bregman for true TV proximal fitting.")
         return {
@@ -2353,8 +2400,8 @@ class GuiSession:
             "optimizer_name": fit_info.optimizer_name,
             "regularization_mode": fit_info.regularization_mode,
             "spatial_geometry": (
-                dataset.spatial_geometry.to_metadata()
-                if dataset.spatial_geometry is not None
+                spatial_geometry.to_metadata()
+                if spatial_geometry is not None
                 else None
             ),
         }
@@ -3359,6 +3406,10 @@ def _display_slice(
     plane_dims: Sequence[str] = ("x", "y"),
 ) -> np.ndarray:
     arr = _array_source(array)
+    if dims and kind == "map":
+        spatial = {name: dims[name] for name in spatial_names(dims)}
+        if tuple(arr.shape) == tuple(spatial.values()):
+            dims = spatial
     if dims and "slice_package" in dims and kind != "kspace":
         spatial = {name: dims[name] for name in spatial_names(dims)}
         shape = tuple(spatial.values())

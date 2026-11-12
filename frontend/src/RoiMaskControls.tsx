@@ -2,7 +2,6 @@ import { useState } from 'react';
 import type { AnalysisProps, DrawingProps } from './analysisTypes';
 import { NumberField } from './Controls';
 import { InspectorChoice, InspectorSection } from './InspectorSection';
-import { roiColor } from './scene';
 
 export function RoiMaskControls({
   workspace: w,
@@ -10,9 +9,8 @@ export function RoiMaskControls({
   action,
   mode,
   label,
-  setLabel,
 }: Pick<AnalysisProps, 'workspace' | 'busy' | 'action'> &
-  Pick<DrawingProps, 'label' | 'setLabel'> & { mode: 'labels' | 'volume' | 'combine' }) {
+  Pick<DrawingProps, 'label'> & { mode: 'labels' | 'volume' | 'combine' }) {
   const [targets, setTargets] = useState('');
   const [interpolation, setInterpolation] = useState('linear');
   const [extrapolation, setExtrapolation] = useState('none');
@@ -22,6 +20,7 @@ export function RoiMaskControls({
   const [name, setName] = useState('Combined ROI');
   const [output, setOutput] = useState('binary');
   const [overlap, setOverlap] = useState('first');
+  const [target, setTarget] = useState('');
   const selected = w?.selected_roi ?? w?.rois.find((r) => r.enabled)?.name;
   const roi = w?.rois.find((r) => r.name === selected);
   const blocked = busy || !w?.editable;
@@ -31,6 +30,15 @@ export function RoiMaskControls({
   const validTargets =
     !targetIndices || targetIndices.every((v) => Number.isInteger(v) && v >= 0 && v < sliceCount);
   const selectedSources = sources.filter((key) => w?.rois.some((r) => r.name === key));
+  const replacing = output === 'merge' || output === 'subtract';
+  const targetName = w?.rois.some((r) => r.name === target) ? target : (selected ?? '');
+  const operands = selectedSources.filter((name) => !replacing || name !== targetName);
+  const sourceLabel =
+    output === 'subtract'
+      ? 'ROIs to subtract'
+      : output === 'merge'
+        ? 'ROIs to merge'
+        : 'Source ROIs';
   const labelNames = roi?.metadata.label_names as Record<string, string> | undefined;
 
   if (mode === 'labels')
@@ -38,27 +46,12 @@ export function RoiMaskControls({
       <InspectorSection
         title="Mask labels"
         icon="layers"
-        help="Choose an existing label to paint or erase it. New label values can be entered in the drawing controls."
+        help="Select a label in ROI appearance to paint it. New label values can be entered in the drawing controls."
       >
-        <div className="roi-label-choices" role="group" aria-label="Mask labels">
-          {roi?.labels.map((value) => (
-            <button
-              key={value}
-              className="secondary roi-label-choice"
-              aria-label={'Use label ' + value}
-              aria-pressed={label === value}
-              disabled={blocked}
-              onClick={() => setLabel(value)}
-            >
-              <span
-                className="roi-label-swatch"
-                style={{ background: roiColor(roi.name, value, w!.scene.roi_styles[roi.name]) }}
-              />
-              {value}
-              {labelNames?.[String(value)] ? ' · ' + labelNames[String(value)] : ''}
-            </button>
-          ))}
-        </div>
+        <p className="control-note">
+          Selected label: {label}
+          {labelNames?.[String(label)] ? ' · ' + labelNames[String(label)] : ''}
+        </p>
         {!roi?.labels.length && (
           <p className="control-note">Paint a mask or select a labelled ROI.</p>
         )}
@@ -205,55 +198,78 @@ export function RoiMaskControls({
 
   return (
     <InspectorSection
-      title="Combined mask"
+      title="Combine ROIs"
       icon="layers"
-      className="control-wide"
-      help="Create a new mask from source ROIs on the same grid. Original source masks are retained. Indexed labels follow selection order."
+      help="Create a new mask, merge ROIs or subtract from a target ROI. Undo restores the previous masks. Indexed labels follow selection order."
     >
       <fieldset className="control-form" disabled={blocked}>
-        <div className="roi-source-list" role="group" aria-label="Source ROIs">
-          {w?.rois.map((source) => (
-            <label className="check-label" key={source.name}>
-              <input
-                type="checkbox"
-                aria-label={'Include ' + source.name}
-                checked={selectedSources.includes(source.name)}
-                onChange={(event) =>
-                  setSources(
-                    event.target.checked
-                      ? [...selectedSources, source.name]
-                      : selectedSources.filter((key) => key !== source.name),
-                  )
-                }
-              />
-              <span>{source.name}</span>
-              {output === 'indexed' && selectedSources.includes(source.name) && (
-                <span className="label-badge">
-                  Label {selectedSources.indexOf(source.name) + 1}
-                </span>
-              )}
-            </label>
-          ))}
+        <InspectorChoice
+          label="Combine method"
+          value={output}
+          choices={[
+            ['binary', 'Joint binary ROI'],
+            ['indexed', 'Indexed label mask'],
+            ['merge', 'Merge into an ROI'],
+            ['subtract', 'Subtract from an ROI'],
+          ]}
+          onChange={setOutput}
+        />
+        {replacing && (
+          <label>
+            {output === 'subtract' ? 'Subtract from' : 'Merge into'}
+            <select
+              aria-label={output === 'subtract' ? 'Subtract from' : 'Merge into'}
+              value={targetName}
+              onChange={(event) => setTarget(event.target.value)}
+            >
+              <option value="" disabled>
+                Choose target ROI
+              </option>
+              {w?.rois.map((item) => (
+                <option key={item.name}>{item.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        <p className="roi-source-heading">{sourceLabel}</p>
+        <div className="roi-source-list" role="group" aria-label={sourceLabel}>
+          {w?.rois
+            .filter((source) => !replacing || source.name !== targetName)
+            .map((source) => (
+              <label className="check-label" key={source.name}>
+                <input
+                  type="checkbox"
+                  aria-label={'Include ' + source.name}
+                  checked={selectedSources.includes(source.name)}
+                  onChange={(event) =>
+                    setSources(
+                      event.target.checked
+                        ? [...selectedSources, source.name]
+                        : selectedSources.filter((key) => key !== source.name),
+                    )
+                  }
+                />
+                <span>{source.name}</span>
+                {output === 'indexed' && selectedSources.includes(source.name) && (
+                  <span className="label-badge">
+                    Label {selectedSources.indexOf(source.name) + 1}
+                  </span>
+                )}
+              </label>
+            ))}
         </div>
         <div className="field-grid">
-          <label>
-            New ROI name
-            <input
-              aria-label="Combined ROI name"
-              value={name}
-              maxLength={80}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
-          <InspectorChoice
-            label="Combined mask type"
-            value={output}
-            choices={[
-              ['binary', 'Joint binary ROI'],
-              ['indexed', 'Indexed label mask'],
-            ]}
-            onChange={setOutput}
-          />
+          {!replacing && (
+            <label>
+              New ROI name
+              <input
+                aria-label="Combined ROI name"
+                value={name}
+                maxLength={80}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </label>
+          )}
           {output === 'indexed' && (
             <InspectorChoice
               label="Overlapping voxels"
@@ -268,49 +284,34 @@ export function RoiMaskControls({
           )}
         </div>
         <button
-          className="primary full"
+          className="primary full roi-combine-action"
           disabled={
-            selectedSources.length < 2 ||
-            !name.trim() ||
-            w?.rois.some((r) => r.name === name.trim())
+            replacing
+              ? !targetName || operands.length === 0
+              : operands.length < 2 || !name.trim() || w?.rois.some((r) => r.name === name.trim())
           }
           onClick={() =>
-            void action('roi.compose', {
-              name: name.trim(),
-              sources: selectedSources,
-              output,
-              overlap,
-            })
+            replacing
+              ? void action(output === 'subtract' ? 'roi.subtract' : 'roi.combine', {
+                  name: targetName,
+                  others: operands,
+                })
+              : void action('roi.compose', {
+                  name: name.trim(),
+                  sources: operands,
+                  output,
+                  overlap,
+                })
           }
         >
-          {output === 'binary' ? 'Create joint binary ROI' : 'Create indexed label mask'}
+          {output === 'subtract'
+            ? `Subtract ${operands.length ? operands.join(', ') : 'ROIs'} from ${targetName || 'target ROI'}`
+            : output === 'merge'
+              ? `Merge ${operands.length ? operands.join(', ') : 'ROIs'} into ${targetName || 'target ROI'}`
+              : output === 'binary'
+                ? 'Create joint binary ROI'
+                : 'Create indexed label mask'}
         </button>
-        <div className="button-row">
-          <button
-            className="secondary"
-            disabled={!roi || !selectedSources.some((name) => name !== roi.name)}
-            onClick={() =>
-              void action('roi.combine', {
-                name: roi?.name,
-                others: selectedSources.filter((name) => name !== roi?.name),
-              })
-            }
-          >
-            Merge into selected ROI
-          </button>
-          <button
-            className="secondary"
-            disabled={!roi || !selectedSources.some((name) => name !== roi.name)}
-            onClick={() =>
-              void action('roi.subtract', {
-                name: roi?.name,
-                others: selectedSources.filter((name) => name !== roi?.name),
-              })
-            }
-          >
-            Subtract
-          </button>
-        </div>
       </fieldset>
     </InspectorSection>
   );

@@ -34,6 +34,7 @@ async function study(page: Page) {
   await expect(
     page.getByRole('img', { name: 'Whole image mean signal', exact: true }),
   ).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Signal ROI', exact: true })).toHaveValue('');
   await selectWorkflow(page, 'Segment');
   await openRoiCoordinates(page);
   for (const [name, col] of [
@@ -57,7 +58,47 @@ test('scientific viewer inspects samples, customizes axes, summarizes ranges and
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await study(page);
+  const preview = page.locator('.signal-preview .curve-panel');
+  const axis = preview.getByRole('combobox', { name: 'Signal x-axis', exact: true });
+  const roi = preview.getByRole('combobox', { name: 'Signal ROI', exact: true });
+  const initialProfile = (await current(request)).timecourse!;
+  await expect(roi).toHaveValue('Posterior');
+  await roi.selectOption('Anterior');
+  await expect.poll(async () => (await current(request)).timecourse?.roi_name).toBe('Anterior');
+  await roi.selectOption('');
+  await expect.poll(async () => (await current(request)).timecourse?.roi_name).toBeNull();
+  await expect(
+    preview.getByRole('img', { name: 'Whole image mean signal', exact: true }),
+  ).toBeVisible();
+  const whole = await current(request);
+  expect(whole.selected_roi).toBe('Anterior');
+  expect(whole.rois).toHaveLength(2);
+  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await expect(roi).toHaveValue('');
+  await page.screenshot({ path: info.outputPath('quick-roi-selector.png') });
   await selectWorkflow(page, 'View', 'Signal curves');
+  await expect(page.getByRole('combobox', { name: 'Signal ROI', exact: true })).toHaveValue('');
+  await expect(
+    page.getByRole('img', { name: 'Scientific signal curve plot', exact: true }),
+  ).toContainText('Whole image');
+  await page.getByRole('combobox', { name: 'Signal ROI', exact: true }).selectOption('Posterior');
+  await expect.poll(async () => (await current(request)).timecourse?.roi_name).toBe('Posterior');
+  await selectWorkflow(page, 'Segment');
+  await expect(roi).toHaveValue('Posterior');
+  await axis.selectOption('x');
+  await expect.poll(async () => (await current(request)).timecourse?.dimension).toBe('x');
+  await preview.getByRole('button', { name: 'Data table', exact: true }).click();
+  await expect(preview.locator('tbody tr')).toHaveCount((await current(request)).dimensions.x);
+  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await expect(axis).toBeVisible();
+  await expect(axis).toHaveValue('x');
+  await axis.selectOption('auto');
+  await expect
+    .poll(async () => (await current(request)).timecourse?.dimension)
+    .toBe(initialProfile.dimension);
+  await preview.getByRole('button', { name: 'Chart', exact: true }).click();
+  await selectWorkflow(page, 'View', 'Signal curves');
+  await expect(page.getByLabel('Signal profile axis', { exact: true })).toHaveValue('auto');
   const plot = page.getByRole('img', { name: 'Scientific signal curve plot', exact: true });
   await expect(plot).toBeVisible();
   const before = await current(request),
@@ -81,6 +122,17 @@ test('scientific viewer inspects samples, customizes axes, summarizes ranges and
       .locator('td')
       .first(),
   ).toHaveText('4');
+  await selectWorkflow(page, 'Segment');
+  await axis.selectOption('x');
+  await expect.poll(async () => (await current(request)).timecourse?.dimension).toBe('x');
+  await axis.selectOption('auto');
+  await expect
+    .poll(async () => (await current(request)).timecourse?.dimension)
+    .toBe(initialProfile.dimension);
+  await page.screenshot({ path: info.outputPath('quick-signal-axis.png') });
+  await selectWorkflow(page, 'View', 'Signal curves');
+  await expect(page.getByLabel('Signal X min', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Signal X max', { exact: true })).toHaveValue('');
   await page.getByRole('tab', { name: 'Samples', exact: true }).click();
   await expect(
     page.getByRole('table', { name: 'Scientific signal samples', exact: true }).locator('tbody tr'),
@@ -197,6 +249,21 @@ session.save_imported_study(sys.argv[1])
   ) as Workspace;
   expect(spectrum.non_imaging).toBe(true);
   expect(spectrum.timecourse?.x).toHaveLength(65);
+  await page.getByLabel('Signal component', { exact: true }).selectOption('imag');
+  await expect
+    .poll(async () =>
+      (
+        await (await request.get('/api/workspaces/' + spectrum.id)).json()
+      ).timecourse.observed.every((value: number) => value === 0),
+    )
+    .toBe(true);
+  await page.getByLabel('Signal component', { exact: true }).selectOption('real');
+  await expect
+    .poll(
+      async () =>
+        (await (await request.get('/api/workspaces/' + spectrum.id)).json()).timecourse.observed[0],
+    )
+    .toBeCloseTo(spectrum.timecourse!.observed[0]!, 5);
   const first = spectrum.timecourse!.observed.map((v) => 2 * v!);
   await selectWorkflow(page, 'Preprocess', 'Denoising');
   await expect(plot).toBeVisible();

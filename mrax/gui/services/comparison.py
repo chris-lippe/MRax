@@ -188,8 +188,15 @@ def _plane(workspace, source, navigation):
     """Clone metadata only. Render one plane from the chosen immutable buffer."""
     from .scene import render_overlay
 
-    context = clone_workspace(workspace)
+    context = clone_workspace(workspace, share_sources=True)
     session = context.session
+    session.data = {
+        **session.data,
+        "experiments": {
+            name: dict(entry) for name, entry in session.data["experiments"].items()
+        },
+    }
+    session.study = None
     if source["experiment"] not in session.experiment_names:
         raise ValueError("This comparison experiment is unavailable")
     frame = source.get("frame")

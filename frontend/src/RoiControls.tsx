@@ -7,7 +7,7 @@ import { WorkbenchIcon } from './WorkbenchIcon';
 import { RoiMaskControls } from './RoiMaskControls';
 import { RoiAppearanceControls } from './RoiAppearanceControls';
 import { MaskPreviewDialog } from './MaskPreviewDialog';
-import { roiColor } from './scene';
+import { nextRoiName, roiColor } from './scene';
 
 export function RoiControls({
   workspace: w,
@@ -15,11 +15,9 @@ export function RoiControls({
   action,
   changeView,
   previewRoiOpacity,
-  drawing,
   tool,
   brushSize,
   label,
-  setDrawing,
   setTool,
   setBrushSize,
   setLabel,
@@ -37,15 +35,16 @@ export function RoiControls({
     [newName, setNewName] = useState('');
   const selected = w?.selected_roi ?? w?.rois.find((r) => r.enabled)?.name;
   const roi = w?.rois.find((r) => r.name === selected);
-  const geometric = !['brush', 'erase', 'pan'].includes(tool);
+  const geometric = !['brush', 'erase'].includes(tool);
   const mode = String(drawOptions.mode ?? 'new');
-  const coordinateTool = ['rect', 'ellipse', 'regular_polygon'].includes(tool);
+  const coordinateTool = ['pan', 'rect', 'ellipse', 'regular_polygon'].includes(tool);
   const coordinateShape =
-    tool === 'rect' ? 'rectangle' : tool === 'ellipse' ? 'ellipse' : 'polygon';
+    tool === 'rect' || tool === 'pan' ? 'rectangle' : tool === 'ellipse' ? 'ellipse' : 'polygon';
   const coordinateAction = mode === 'subtract' ? 'Subtract' : 'Add';
+  const defaultName = nextRoiName(w?.rois ?? []);
   const options = () => ({
     ...drawOptions,
-    name: name || `ROI ${(w?.rois.length ?? 0) + 1}`,
+    name: name || defaultName,
     tool: ['brush', 'erase', 'pan'].includes(tool) ? 'rect' : tool,
     bounds,
     angle,
@@ -61,7 +60,6 @@ export function RoiControls({
     }
     setMaskPreview(false);
     setTool('brush');
-    setDrawing(true);
   };
   const create = (value: Options = options()) =>
     action(mode === 'new' ? 'roi.create' : 'roi.draw', {
@@ -73,7 +71,7 @@ export function RoiControls({
       <InspectorSection
         title="Draw and paint"
         icon="rois"
-        help="Choose a tool, then activate drawing on the image. Labels are positive integers. Label 0 is background."
+        help="Click a tool to draw. Click it again to return to panning and shape handles. Alt-drag or the middle mouse button pans with any tool. Label 0 is background."
       >
         {geometric && (
           <label>
@@ -84,10 +82,22 @@ export function RoiControls({
               onChange={(event) => setDrawOptions({ ...drawOptions, mode: event.target.value })}
             >
               <option value="new">Create a new ROI</option>
-              <option value="add">Add round to selected ROI</option>
-              <option value="subtract">Subtract round from selected ROI</option>
+              <option value="add" disabled={!roi}>
+                Add drawn region to {selected ?? 'selected ROI'}
+              </option>
+              <option value="subtract" disabled={!roi}>
+                Subtract drawn region from {selected ?? 'selected ROI'}
+              </option>
             </select>
           </label>
+        )}
+        {geometric && mode !== 'new' && !roi && (
+          <p className="control-note">Select an ROI or choose Create a new ROI.</p>
+        )}
+        {geometric && mode === 'subtract' && roi && (
+          <p className="control-note">
+            Draw the region to remove from <strong>{roi.name}</strong>.
+          </p>
         )}
         <div className="roi-tool-palette" role="group" aria-label="ROI tool">
           {(
@@ -100,7 +110,6 @@ export function RoiControls({
               ['brush', 'Brush', 'brush'],
               ['erase', 'Eraser', 'eraser'],
               ['wand', 'Magic wand', 'wand'],
-              ['pan', 'Pan image', 'pan'],
             ] as const
           ).map(([value, title, icon]) => (
             <button
@@ -110,31 +119,38 @@ export function RoiControls({
               aria-label={title + ' tool'}
               title={title}
               aria-pressed={tool === value}
+              data-tutorial={value === 'rect' ? 'roi-start' : undefined}
               disabled={!w?.editable || busy}
-              onClick={() => setTool(value as Tool)}
+              onClick={() => setTool(tool === value ? 'pan' : (value as Tool))}
             >
               <WorkbenchIcon name={icon} />
               <span>{title}</span>
             </button>
           ))}
+          <button
+            type="button"
+            className="secondary"
+            aria-label="Otsu threshold"
+            title={
+              mode === 'subtract'
+                ? `Subtract Otsu selection from ${selected ?? 'selected ROI'}`
+                : 'Select a region using Otsu thresholding'
+            }
+            disabled={!w?.editable || busy || (mode !== 'new' && !roi)}
+            onClick={() => {
+              setTool('pan');
+              void create({ ...options(), tool: 'otsu', name: defaultName });
+            }}
+          >
+            <WorkbenchIcon name="threshold" />
+            <span>Otsu</span>
+          </button>
         </div>
-        <button
-          className={`${drawing ? 'primary' : 'secondary'} full`}
-          aria-pressed={drawing}
-          data-tutorial="roi-start"
-          disabled={!w?.editable || busy || (geometric && mode !== 'new' && !roi)}
-          onClick={() => setDrawing(!drawing)}
-        >
-          {drawing
-            ? `Drawing ${tool === 'rect' ? 'rectangle' : tool}…`
-            : tool === 'brush'
-              ? 'Paint labels'
-              : tool === 'erase'
-                ? 'Erase labels'
-                : tool === 'rect'
-                  ? 'Draw rectangle'
-                  : `Draw ${tool.replace('_', ' ')}`}
-        </button>
+        <p className="control-note">
+          {tool === 'pan'
+            ? 'Drag to pan. Select a tool to draw.'
+            : 'Click the selected tool again to pan.'}
+        </p>
         <div className="bounds-grid">
           <NumberField label="Label value" value={label} min={1} step="1" onChange={setLabel} />
           <NumberField
@@ -145,57 +161,6 @@ export function RoiControls({
             onChange={setBrushSize}
           />
         </div>
-        <details className="control-advanced" hidden={!coordinateTool}>
-          <summary>Coordinates</summary>
-          <form
-            aria-label="ROI coordinate editor"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void create();
-            }}
-          >
-            {mode === 'new' ? (
-              <label>
-                New ROI name
-                <input
-                  aria-label="New ROI name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder={`ROI ${(w?.rois.length ?? 0) + 1}`}
-                  maxLength={80}
-                />
-              </label>
-            ) : (
-              <p className="control-note">Selected ROI: {selected ?? 'Select an enabled ROI'}</p>
-            )}
-            <div className="bounds-grid">
-              {['Column', 'Row', 'Width', 'Height'].map((l, index) => (
-                <label key={l}>
-                  {l}
-                  <input
-                    aria-label={`ROI ${l.toLowerCase()}`}
-                    type="number"
-                    min={index < 2 ? 0 : 0.5}
-                    step=".5"
-                    value={bounds[index]}
-                    onChange={(e) =>
-                      setBounds(
-                        bounds.map((v, i) => (index === i ? Number(e.target.value) : v)) as Bounds,
-                      )
-                    }
-                    required
-                  />
-                </label>
-              ))}
-            </div>
-            <button
-              className="secondary full"
-              disabled={!w?.editable || busy || (mode !== 'new' && !roi?.enabled)}
-            >
-              {coordinateAction} {coordinateShape} {mode === 'new' ? 'by coordinates' : 'round'}
-            </button>
-          </form>
-        </details>
         {tool === 'lasso' && (
           <label className="check-label">
             <input
@@ -210,13 +175,14 @@ export function RoiControls({
           <input
             type="checkbox"
             checked={Boolean(drawOptions.auto_subtract)}
+            aria-label="Auto subtract from other ROIs"
             disabled={
               busy || !w?.editable || tool === 'erase' || (geometric && mode === 'subtract')
             }
             onChange={(e) => setDrawOptions({ ...drawOptions, auto_subtract: e.target.checked })}
           />
           <span title="Remove newly drawn voxels from other enabled ROIs. Undo restores the whole edit.">
-            Auto subtract
+            Auto subtract from other ROIs
           </span>
         </label>
         {(tool === 'brush' || tool === 'erase' || (geometric && mode === 'subtract')) && (
@@ -228,7 +194,9 @@ export function RoiControls({
                 setDrawOptions({ ...drawOptions, label_only: event.target.checked })
               }
             />
-            Erase only label {label}
+            {tool === 'brush'
+              ? 'Keep other labels when painting ' + label
+              : 'Erase only label ' + label}
           </label>
         )}
         {tool === 'wand' && (
@@ -287,6 +255,31 @@ export function RoiControls({
                 busy={busy}
                 changeView={changeView}
                 previewOpacity={previewRoiOpacity}
+                activeLabel={label}
+                editLabel={async (value) => {
+                  const style = w.scene.roi_styles[roi.name];
+                  if (!roi.visible || style?.hidden_labels?.includes(value)) {
+                    await changeView({
+                      scene: {
+                        hidden_rois: w.rois
+                          .filter((item) => !item.visible && item.name !== roi.name)
+                          .map((item) => item.name),
+                        roi_styles: {
+                          ...w.scene.roi_styles,
+                          [roi.name]: {
+                            ...style,
+                            hidden_labels: (style?.hidden_labels ?? []).filter(
+                              (label) => label !== value,
+                            ),
+                          },
+                        },
+                      },
+                    });
+                  }
+                  setLabel(value);
+                  setDrawOptions({ ...drawOptions, label_only: true });
+                  await editMask();
+                }}
               />
               <div className="button-row">
                 <button
@@ -317,82 +310,11 @@ export function RoiControls({
             )}
           </>
         )}
-        <div className="button-row">
-          <button
-            className="secondary"
-            disabled={!w?.roi_undo || busy}
-            onClick={() => void action('roi.undo')}
-          >
-            Undo ROI edit
-          </button>
-          <button
-            className="secondary"
-            disabled={!w?.rois.length || busy}
-            onClick={() => void action('roi.apply_all')}
-          >
-            Apply to all experiments
-          </button>
-        </div>
-      </InspectorSection>
-      {roi && (roi.metadata.consolidated || roi.metadata.kind === 'mask' || !geometric) && (
-        <RoiMaskControls
-          workspace={w}
-          busy={busy}
-          action={action}
-          mode="labels"
-          label={label}
-          setLabel={(value) => {
-            setLabel(value);
-            setTool('brush');
-          }}
-        />
-      )}
-      <InspectorGroup title="3D expansion" icon="layers">
-        <RoiMaskControls
-          workspace={w}
-          busy={busy}
-          action={action}
-          mode="volume"
-          label={label}
-          setLabel={setLabel}
-        />
-      </InspectorGroup>
-      <InspectorGroup title="Combine ROIs" icon="layers">
-        <RoiMaskControls
-          workspace={w}
-          busy={busy}
-          action={action}
-          mode="combine"
-          label={label}
-          setLabel={setLabel}
-        />
-      </InspectorGroup>
-      <details className="control-advanced control-wide">
-        <summary>Geometry and ROI management</summary>
-        <div className="bounds-grid">
-          <NumberField label="Rotation (degrees)" value={angle} onChange={setAngle} />
-          <NumberField label="Polygon sides" value={sides} min={3} step="1" onChange={setSides} />
-        </div>
-        <div className="button-row">
-          <button
-            className="secondary"
-            disabled={!roi || Boolean(roi.metadata.consolidated) || busy}
-            onClick={() => void command('geometry', { ...options(), name: selected })}
-          >
-            Update selected geometry
-          </button>
-        </div>
-        <button
-          className="secondary full"
-          disabled={!w?.editable || busy}
-          onClick={() => void create({ ...options(), tool: 'otsu' })}
-        >
-          Create Otsu selection
-        </button>
         <label>
           Rename selected ROI
           <input
             aria-label="Rename selected ROI"
+            disabled={busy || !roi}
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
           />
@@ -411,6 +333,107 @@ export function RoiControls({
             onClick={() => void command('remove')}
           >
             Delete ROI
+          </button>
+        </div>
+        <div className="button-row">
+          <button
+            className="secondary"
+            disabled={!w?.roi_undo || busy}
+            onClick={() => void action('roi.undo')}
+          >
+            Undo ROI edit
+          </button>
+          <button
+            className="secondary"
+            disabled={!w?.rois.length || busy}
+            onClick={() => void action('roi.apply_all')}
+          >
+            Apply to all experiments
+          </button>
+        </div>
+        <div className="button-row">
+          <button
+            className="secondary"
+            disabled={!w || busy}
+            onClick={() => void action('roi.enable_all')}
+          >
+            Enable all
+          </button>
+          <button
+            className="secondary"
+            disabled={!w || busy}
+            onClick={() => void action('roi.disable_all')}
+          >
+            Disable all
+          </button>
+        </div>
+      </InspectorSection>
+      {roi && (roi.metadata.consolidated || roi.metadata.kind === 'mask' || !geometric) && (
+        <RoiMaskControls workspace={w} busy={busy} action={action} mode="labels" label={label} />
+      )}
+      <RoiMaskControls workspace={w} busy={busy} action={action} mode="volume" label={label} />
+      <RoiMaskControls workspace={w} busy={busy} action={action} mode="combine" label={label} />
+      <InspectorGroup title="Geometry edits" icon="rois" wide={false}>
+        <form
+          aria-label="ROI coordinate editor"
+          hidden={!coordinateTool}
+          onSubmit={(e) => {
+            e.preventDefault();
+            void create();
+          }}
+        >
+          {mode === 'new' ? (
+            <label>
+              New ROI name
+              <input
+                aria-label="New ROI name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={defaultName}
+                maxLength={80}
+              />
+            </label>
+          ) : (
+            <p className="control-note">Selected ROI: {selected ?? 'Select an enabled ROI'}</p>
+          )}
+          <div className="bounds-grid">
+            {['Column', 'Row', 'Width', 'Height'].map((l, index) => (
+              <label key={l}>
+                {l}
+                <input
+                  aria-label={`ROI ${l.toLowerCase()}`}
+                  type="number"
+                  min={index < 2 ? 0 : 0.5}
+                  step=".5"
+                  value={bounds[index]}
+                  onChange={(e) =>
+                    setBounds(
+                      bounds.map((v, i) => (index === i ? Number(e.target.value) : v)) as Bounds,
+                    )
+                  }
+                  required
+                />
+              </label>
+            ))}
+          </div>
+          <button
+            className="secondary full"
+            disabled={!w?.editable || busy || (mode !== 'new' && !roi?.enabled)}
+          >
+            {coordinateAction} {coordinateShape} {mode === 'new' ? 'by coordinates' : 'round'}
+          </button>
+        </form>
+        <div className="bounds-grid">
+          <NumberField label="Rotation (degrees)" value={angle} onChange={setAngle} />
+          <NumberField label="Polygon sides" value={sides} min={3} step="1" onChange={setSides} />
+        </div>
+        <div className="button-row">
+          <button
+            className="secondary"
+            disabled={!roi || Boolean(roi.metadata.consolidated) || busy}
+            onClick={() => void command('geometry', { ...options(), name: selected })}
+          >
+            Update selected geometry
           </button>
         </div>
         <label>
@@ -452,23 +475,7 @@ export function RoiControls({
           disabled={!w?.editable || busy}
           onApply={(value) => create({ ...options(), ...value })}
         />
-        <div className="button-row">
-          <button
-            className="secondary"
-            disabled={!w || busy}
-            onClick={() => void action('roi.enable_all')}
-          >
-            Enable all
-          </button>
-          <button
-            className="secondary"
-            disabled={!w || busy}
-            onClick={() => void action('roi.disable_all')}
-          >
-            Disable all
-          </button>
-        </div>
-      </details>
+      </InspectorGroup>
     </div>
   );
 }

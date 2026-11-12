@@ -41,6 +41,7 @@ export function WorkflowDialog({
   const [device, setDevice] = useState('cpu');
   const [devices, setDevices] = useState<{ id: string; label: string }[]>([]);
   const [busy, setBusy] = useState(true);
+  const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [report, setReport] = useState<string[]>([]);
@@ -59,10 +60,16 @@ export function WorkflowDialog({
 
   useEffect(() => {
     let stopped = false;
+    const controller = new AbortController();
     void Promise.all([
-      api<WorkflowEntry[]>('/api/workflows'),
-      api<WorkflowTarget[]>('/api/workflow-targets'),
-      api<{ devices: { id: string; label: string }[] }>('/api/catalog'),
+      api<WorkflowEntry[]>('/api/workflows', 'GET', undefined, controller.signal),
+      api<WorkflowTarget[]>('/api/workflow-targets', 'GET', undefined, controller.signal),
+      api<{ devices: { id: string; label: string }[] }>(
+        '/api/catalog',
+        'GET',
+        undefined,
+        controller.signal,
+      ),
     ])
       .then(([library, targets, catalog]) => {
         if (!stopped) {
@@ -79,6 +86,7 @@ export function WorkflowDialog({
       });
     return () => {
       stopped = true;
+      controller.abort();
     };
   }, []);
 
@@ -95,6 +103,7 @@ export function WorkflowDialog({
   }
   async function operation(action: () => Promise<void>) {
     setBusy(true);
+    setWorking(true);
     setError('');
     setMessage('');
     try {
@@ -103,6 +112,7 @@ export function WorkflowDialog({
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
       setBusy(false);
+      setWorking(false);
       setJob(null);
     }
   }
@@ -294,7 +304,7 @@ export function WorkflowDialog({
     <Dialog.Root
       open
       onOpenChange={(open) => {
-        if (!open && !busy) {
+        if (!open && !working) {
           if (dirty) setError('Keep or discard your workflow edits before closing.');
           else onClose();
         }
@@ -305,7 +315,7 @@ export function WorkflowDialog({
         <Dialog.Content
           className="workflow-dialog"
           onEscapeKeyDown={(event) => {
-            if (busy) event.preventDefault();
+            if (working) event.preventDefault();
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
@@ -319,7 +329,7 @@ export function WorkflowDialog({
               <WorkbenchIcon name="pipeline" />
               Reusable workflows
             </Dialog.Title>
-            <Dialog.Close className="icon-button" aria-label="Close workflows" disabled={busy}>
+            <Dialog.Close className="icon-button" aria-label="Close workflows" disabled={working}>
               <WorkbenchIcon name="close" />
             </Dialog.Close>
           </div>
@@ -716,7 +726,7 @@ export function WorkflowDialog({
                 Remove from session
               </button>
             )}
-            <Dialog.Close className="secondary" disabled={busy || dirty}>
+            <Dialog.Close className="secondary" disabled={working || dirty}>
               Done
             </Dialog.Close>
           </div>

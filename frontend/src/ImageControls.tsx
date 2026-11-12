@@ -23,7 +23,7 @@ export function ImageControls({
   comparisonControlsRef: (element: HTMLDivElement | null) => void;
   action: (name: string, options?: Options) => Promise<void>;
   previewOpacity: (id: string | null, value: number) => void;
-  previewRoiOpacity?: (name: string, value: number) => void;
+  previewRoiOpacity?: (name: string, value: number, label?: number) => void;
 }) {
   const reconstruction = workspace?.view === 'MRax reconstruction';
   const kspace = workspace?.view === 'K-space';

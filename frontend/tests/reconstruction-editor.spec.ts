@@ -190,4 +190,15 @@ test('variational settings run and a changed regularizer recomputes a cached rec
     regularizer: 'l2',
     regularizer_weight: 0.1,
   });
+  const compare = page.getByRole('button', { name: 'Vendor comparison', exact: true });
+  if ((await compare.getAttribute('aria-pressed')) !== 'true') await compare.click();
+  const navigation = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/navigate') && response.request().postDataJSON()?.commit === true,
+  );
+  await page.getByRole('slider', { name: 'Frame', exact: true }).fill('1');
+  expect((await navigation).ok()).toBe(true);
+  expect((await opened(request))[0].scene.comparison.frame).toBe(1);
+  await compare.click();
+  expect((await opened(request))[0].scene.comparison.frame).toBe(1);
 });

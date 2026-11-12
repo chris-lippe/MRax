@@ -26,7 +26,8 @@ async function saveWorkflow(page: Page, info: TestInfo, filename: string) {
 
 async function drawRoi(page: Page) {
   await selectWorkflow(page, 'Segment');
-  await page.getByRole('button', { name: 'Draw rectangle', exact: true }).click();
+  const rectangle = page.getByRole('button', { name: 'Rectangle tool', exact: true });
+  if ((await rectangle.getAttribute('aria-pressed')) !== 'true') await rectangle.click();
   const surface = page.getByTestId('roi-surface');
   await surface.scrollIntoViewIfNeeded();
   const box = (await surface.boundingBox())!;
@@ -34,7 +35,11 @@ async function drawRoi(page: Page) {
   await page.mouse.down();
   await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.65, { steps: 6 });
   await page.mouse.up();
-  await expect(page.getByRole('button', { name: 'Drawing rectangle…', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Rectangle tool', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(page.locator('.roi-mask .roi-outline')).toBeVisible();
 }
 
 test.afterEach(async ({ request }) => {
@@ -60,6 +65,20 @@ test('processing workflows save, edit, share across studies and batch experiment
   await page.goto('/');
   await loadExample(page);
   await selectWorkflow(page, 'Preprocess', 'Denoising');
+  let releaseTargets = () => {};
+  await page.route('**/api/workflow-targets', async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseTargets = resolve;
+    });
+    await route.continue().catch(() => {});
+  });
+  const loadingTargets = page.waitForRequest('**/api/workflow-targets');
+  await page.getByRole('button', { name: 'Processing workflows', exact: true }).click();
+  await loadingTargets;
+  await page.keyboard.press('Escape');
+  await expect(dialog(page)).not.toBeVisible();
+  releaseTargets();
+  await page.unroute('**/api/workflow-targets');
   await page.getByRole('button', { name: 'Apply denoising', exact: true }).click();
   await page.getByRole('button', { name: 'Processing workflows', exact: true }).click();
   const modal = dialog(page);

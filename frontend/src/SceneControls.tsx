@@ -17,7 +17,7 @@ export function SceneControls({
   busy: boolean;
   changeView: (command: Options) => Promise<void>;
   previewOpacity: (id: string | null, value: number) => void;
-  previewRoiOpacity?: (name: string, value: number) => void;
+  previewRoiOpacity?: (name: string, value: number, label?: number) => void;
 }) {
   const [source, setSource] = useState('');
   const layers = w.scene.layers;

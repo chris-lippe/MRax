@@ -9,10 +9,16 @@ export const Curve = memo(function Curve({
   workspace,
   hidden = false,
   onOpen,
+  onAxisChange,
+  onRoiChange,
+  busy = false,
 }: {
   workspace: Workspace | null;
   hidden?: boolean;
   onOpen?: () => void;
+  onAxisChange: (axis: string) => void;
+  onRoiChange: (roi: string) => void;
+  busy?: boolean;
 }) {
   const [table, setTable] = useState(false);
   const curve = workspace?.preview ?? workspace?.timecourse;
@@ -28,7 +34,7 @@ export const Curve = memo(function Curve({
   useEffect(() => closeMenu(false), [workspace?.id, workspace?.view_revision, hidden, closeMenu]);
   if (hidden) return <section className="curve-panel" hidden aria-label="ROI signal" />;
   const predicted = workspace?.preview?.predicted;
-  const region = curve?.roi_name ?? workspace?.selected_roi;
+  const region = curve ? curve.roi_name : workspace?.selected_roi;
   const heading = region ? 'ROI signal' : 'Image signal';
   const label = curve ? signalAxisLabel(curve.x_name, curve.x_unit) : '';
   return (
@@ -39,13 +45,40 @@ export const Curve = memo(function Curve({
       onContextMenu={menu.onContextMenu}
       onKeyDown={menu.onKeyDown}
     >
-      <div className="section-heading">
-        <h2 title={workspace?.selected_roi ?? undefined}>
-          {heading}
-          {workspace?.selected_roi && (
-            <span className="signal-preview-roi"> · {workspace.selected_roi}</span>
-          )}
-        </h2>
+      <div className="section-heading curve-heading">
+        <h2 title={region ?? undefined}>{heading}</h2>
+        <div className="curve-selectors">
+          <label className="curve-axis">
+            X axis
+            <select
+              aria-label="Signal x-axis"
+              value={String(workspace?.display.plot_axis ?? 'auto')}
+              disabled={!workspace?.loaded || busy}
+              onChange={(event) => onAxisChange(event.target.value)}
+            >
+              <option value="auto">Automatic</option>
+              {Object.keys(workspace?.dimensions ?? {}).map((dimension) => (
+                <option key={dimension}>{dimension}</option>
+              ))}
+            </select>
+          </label>
+          <label className="curve-axis curve-roi">
+            ROI
+            <select
+              aria-label="Signal ROI"
+              value={region ?? ''}
+              disabled={!workspace?.loaded || busy}
+              onChange={(event) => onRoiChange(event.target.value)}
+            >
+              <option value="">Whole image mean</option>
+              {workspace?.rois
+                .filter((roi) => roi.enabled)
+                .map((roi) => (
+                  <option key={roi.name}>{roi.name}</option>
+                ))}
+            </select>
+          </label>
+        </div>
         <div className="curve-key">
           <span className="dot observed" />
           Observed

@@ -11,6 +11,7 @@ export const metadataCategories = [
 export type MetadataCategory = (typeof metadataCategories)[number]['id'];
 export type ExportObject = {
   id: string;
+  kind: string;
   label: string;
   shape: number[];
   unit: string;

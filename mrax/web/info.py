@@ -122,6 +122,8 @@ def workspace_info(record):
             }
         )
     preview = workspace.preview_results_by_experiment.get(session.selected_experiment or "")
+    if settings.get("plot_whole_image", False):
+        preview = None
     selected_roi = session.roi(session.fit_settings.selected_roi) if session.rois else None
     if (
         preview
@@ -143,6 +145,8 @@ def workspace_info(record):
     curve_key = (
         session.selected_experiment,
         session.fit_settings.selected_roi,
+        settings.get("plot_whole_image", False),
+        settings.get("component", "auto"),
         axis,
         tuple(sorted(profile_indices.items())),
         repr(session.visual_state),

@@ -47,14 +47,14 @@ export function Viewer({
   busy: boolean;
   brushSize: number;
   label: number;
-  onRectangle: (bounds: Bounds) => void;
-  onShape: (options: Options) => void;
+  onRectangle: (bounds: Bounds) => Promise<void>;
+  onShape: (options: Options) => Promise<void>;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const masks = useMemo(
-    () => workspace.rois.map((roi) => ({ roi, paths: roiMaskPaths(roi.runs) })),
-    [workspace.rois],
+    () => workspace.rois.map((roi) => ({ roi, paths: roiMaskPaths(roi.runs, editingEnabled) })),
+    [workspace.rois, editingEnabled],
   );
   useImageNavigation(viewport, display);
   const [available, setAvailable] = useState({ width: 680, height: 400 });
@@ -118,8 +118,19 @@ export function Viewer({
     setDraft([]);
     editing.current = null;
     setEditNodes(null);
-  }, [workspace.id, workspace.view_revision, drawing, tool]);
+  }, [workspace.id, workspace.revision, workspace.view_revision, drawing, tool]);
   const canvasPixels = useRef<ImageData | null>(null);
+  const layerAppearance = JSON.stringify([
+    workspace.scene.layers.map(({ id, visible, unavailable, window, colormap, opacity }) => ({
+      id,
+      visible,
+      unavailable,
+      window,
+      colormap,
+      opacity,
+    })),
+    scenePreview.layers,
+  ]);
   useEffect(() => {
     const context = canvas.current?.getContext('2d');
     if (!context) return;
@@ -191,13 +202,14 @@ export function Viewer({
     level.center,
     level.width,
     layerValues,
-    workspace.scene.layers,
-    scenePreview.layers,
+    layerAppearance,
   ]);
   const finishPolygon = () => {
-    if (points.current.length >= 3) onShape({ tool, points: points.current, label });
+    if (busy) return;
+    if (points.current.length >= 3)
+      void onShape({ tool, points: [...points.current], label }).finally(() => setDraft([]));
+    else setDraft([]);
     points.current = [];
-    setDraft([]);
   };
   return (
     <>
@@ -299,7 +311,7 @@ export function Viewer({
                   return;
                 }
                 if (tool === 'wand') {
-                  onShape({ tool, seed: point, label });
+                  void onShape({ tool, seed: point, label });
                   return;
                 }
                 e.currentTarget.setPointerCapture(e.pointerId);
@@ -352,7 +364,7 @@ export function Viewer({
                   const updated = editing.current.points;
                   editing.current = null;
                   setEditNodes(null);
-                  onShape({
+                  void onShape({
                     edit: true,
                     name: selectedGeometry.name,
                     tool: geometricKind,
@@ -376,21 +388,23 @@ export function Viewer({
                 const stroke = [...points.current, end];
                 start.current = null;
                 points.current = [];
-                setDraft([]);
-                if (tool === 'brush' || tool === 'erase')
-                  onShape({
+                if (tool === 'brush' || tool === 'erase') {
+                  void onShape({
                     tool: 'brush',
                     points: stroke,
                     size: brushSize,
                     label,
                     erase: tool === 'erase',
-                  });
-                else if (tool === 'lasso') {
-                  if (stroke.length >= 3) onShape({ tool, points: stroke, label });
+                  }).finally(() => setDraft([]));
+                } else if (tool === 'lasso') {
+                  if (stroke.length >= 3)
+                    void onShape({ tool, points: stroke, label }).finally(() => setDraft([]));
+                  else setDraft([]);
                 } else if (bounds[2] >= 0.5 && bounds[3] >= 0.5) {
-                  if (tool === 'rect' && label === 1) onRectangle(bounds);
-                  else onShape({ tool, bounds, label });
-                }
+                  if (tool === 'rect' && label === 1)
+                    void onRectangle(bounds).finally(() => setDraft([]));
+                  else void onShape({ tool, bounds, label }).finally(() => setDraft([]));
+                } else setDraft([]);
               }}
             >
               {masks
@@ -401,7 +415,7 @@ export function Viewer({
                     className="roi-mask"
                     style={{
                       fill: roiColor(roi.name, 1, workspace.scene.roi_styles[roi.name]),
-                      opacity:
+                      fillOpacity:
                         (scenePreview.rois?.[roi.name] ??
                           workspace.scene.roi_styles[roi.name]?.opacity ??
                           scenePreview.roiOpacity ??
@@ -409,21 +423,57 @@ export function Viewer({
                         (editingEnabled && !roi.visible ? 0.55 : 1),
                     }}
                   >
-                    {paths.map(({ value, path }) => (
-                      <path
-                        key={value}
-                        d={path}
-                        role="img"
-                        aria-label={`${roi.name} · label ${value}`}
-                        style={{
-                          fill: roiColor(roi.name, value, workspace.scene.roi_styles[roi.name]),
-                        }}
-                      >
-                        <title>
-                          {roi.name} · label {value}
-                        </title>
-                      </path>
-                    ))}
+                    {paths
+                      .filter(
+                        ({ value }) =>
+                          !workspace.scene.roi_styles[roi.name]?.hidden_labels?.includes(value),
+                      )
+                      .map(({ value, path, outline }) => (
+                        <g
+                          key={value}
+                          style={{
+                            fillOpacity:
+                              (scenePreview.labels?.[roi.name]?.[String(value)] ??
+                                workspace.scene.roi_styles[roi.name]?.label_opacities?.[
+                                  String(value)
+                                ] ??
+                                scenePreview.rois?.[roi.name] ??
+                                workspace.scene.roi_styles[roi.name]?.opacity ??
+                                scenePreview.roiOpacity ??
+                                workspace.scene.roi_opacity) *
+                              (editingEnabled && !roi.visible ? 0.55 : 1),
+                          }}
+                        >
+                          <path
+                            d={path}
+                            role="img"
+                            aria-label={`${roi.name} · label ${value}`}
+                            style={{
+                              fill: roiColor(roi.name, value, workspace.scene.roi_styles[roi.name]),
+                            }}
+                          >
+                            <title>
+                              {roi.name} · label {value}
+                            </title>
+                          </path>
+                          {outline && (
+                            <path
+                              className="roi-outline"
+                              d={outline}
+                              fill="none"
+                              stroke={roiColor(
+                                roi.name,
+                                value,
+                                workspace.scene.roi_styles[roi.name],
+                              )}
+                              strokeWidth={roi.name === workspace.selected_roi ? 1.5 : 1}
+                              strokeOpacity={roi.name === workspace.selected_roi ? 1 : 0.8}
+                              vectorEffect="non-scaling-stroke"
+                              aria-hidden="true"
+                            />
+                          )}
+                        </g>
+                      ))}
                   </g>
                 ))}
               {(editNodes ?? handles).map((node, index) => (
@@ -489,7 +539,8 @@ export function Viewer({
         <div className="image-readout">
           <span>{pixel}</span>
           <span>
-            {workspace.spacing.join(' × ')} {workspace.spacing_unit} / voxel
+            {workspace.spacing.map((value) => Number(value.toPrecision(6))).join(' × ')}{' '}
+            {workspace.spacing_unit} / voxel
           </span>
         </div>
       </div>

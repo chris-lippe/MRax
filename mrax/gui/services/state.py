@@ -556,7 +556,7 @@ def _preview_result_to_json(result: dict[str, Any]) -> dict[str, Any]:
     out = {key: _json_array(result.get(key)) for key in keys if key in result}
     out["x_name"] = result.get("x_name")
     out["model"] = result.get("model")
-    for key in ("parameters", "relative_rmse", "x_unit"):
+    for key in ("parameters", "relative_rmse", "x_unit", "roi_name", "pipeline_signature"):
         if key in result:
             out[key] = _metadata_to_jsonable(result[key])
     return out

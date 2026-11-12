@@ -353,8 +353,8 @@ def _native_roi_command(workspace, action, options, image=None):
             ):
                 stamp |= _brush_mask(stamp.shape, (int(y), int(x)), _brush_radius_from_size(size))
         plane = np.asarray(_plane(session, roi), dtype=np.uint16).copy()
-        if options.get("erase") and options.get("label_only"):
-            stamp &= plane == label
+        if options.get("label_only"):
+            stamp &= plane == label if options.get("erase") else (plane == 0) | (plane == label)
         plane[stamp] = 0 if options.get("erase") else label
         remember_rois(workspace)
         mask = np.asarray(roi.mask, dtype=np.uint16).copy()

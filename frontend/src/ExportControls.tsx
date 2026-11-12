@@ -16,12 +16,16 @@ export function ExportControls({
   onExportDraftChange,
   job,
   onJobChange,
+  scope = 'data',
+  active = true,
 }: Pick<AnalysisProps, 'workspace' | 'busy' | 'run' | 'job'> & {
   timecourse?: TimecourseResult | null;
   signalExport?: { csv: () => string; svg: () => string } | null;
   exportDraft?: ExportDraft;
   onExportDraftChange?: (draft: ExportDraft) => void;
   onJobChange?: (job: Job) => void;
+  scope?: 'data' | 'rois';
+  active?: boolean;
 }) {
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const choose = useFileSystem();
@@ -32,6 +36,7 @@ export function ExportControls({
   const updateExport = (patch: Partial<ExportDraft>) =>
     onExportDraftChange?.({ ...draft, ...patch });
   useEffect(() => {
+    if (!active) return;
     let cancelled = false;
     if (w)
       void api<Inspection>('/api/workspaces/' + w.id + '/inspect')
@@ -45,8 +50,12 @@ export function ExportControls({
     return () => {
       cancelled = true;
     };
-  }, [w?.id, w?.revision, w?.experiment]);
-  const object = inspection?.objects.find((item) => item.id === selected);
+  }, [active, w?.id, w?.revision, w?.experiment]);
+  const objects =
+    inspection?.objects.filter((item) =>
+      scope === 'rois' ? item.kind === 'roi' : item.kind !== 'roi',
+    ) ?? [];
+  const object = objects.find((item) => item.id === selected);
   const pending =
     job?.workspace_id === w?.id &&
     job?.status === 'completed' &&
@@ -77,7 +86,14 @@ export function ExportControls({
         (kind === 'object' && ['nifti', 'dicom', 'roi_set'].includes(format));
       const suffix = kind === 'object' ? '.' + format : kind === 'timecourse' ? '.csv' : '.json';
       const destination = await choose({
-        title: kind === 'timecourse' ? 'Save timecourse CSV' : 'Export data',
+        title:
+          kind === 'timecourse'
+            ? 'Save timecourse CSV'
+            : kind === 'rois'
+              ? 'Save ROI set'
+              : scope === 'rois'
+                ? 'Export ROI mask'
+                : 'Export data',
         mode: folder ? 'folder' : 'save-file',
         writable: true,
         allowOverwrite:
@@ -180,8 +196,8 @@ export function ExportControls({
           </div>
         </section>
       )}
-      <h3>Export an object</h3>
-      {signalExport && (
+      {scope === 'data' && <h3>Export an object</h3>}
+      {scope === 'data' && signalExport && (
         <section className="signal-export" aria-label="Signal curve exports">
           <h4>Signal curves</h4>
           <div className="button-row">
@@ -206,26 +222,31 @@ export function ExportControls({
           </p>
         </section>
       )}
-      <button
-        className="secondary full"
-        disabled={!timecourse || busy || selecting}
-        onClick={() => {
-          void saveExport('timecourse');
-        }}
-      >
-        Save timecourse CSV
-      </button>
-      <label>
-        Export object
-        <select
-          aria-label="Export object"
-          value={selected}
-          onChange={(e) => {
-            updateExport({ selected: e.target.value, format: 'npz' });
+      {scope === 'data' && (
+        <button
+          className="secondary full"
+          disabled={!timecourse || busy || selecting}
+          onClick={() => {
+            void saveExport('timecourse');
           }}
         >
-          <option value="">Choose array, map or ROI</option>
-          {inspection?.objects.map((o) => (
+          Save timecourse CSV
+        </button>
+      )}
+      <label>
+        {scope === 'rois' ? 'ROI mask' : 'Export object'}
+        <select
+          aria-label={scope === 'rois' ? 'Export ROI' : 'Export object'}
+          value={selected}
+          onChange={(e) => {
+            updateExport({
+              selected: e.target.value,
+              format: scope === 'rois' ? 'roi_set' : 'npz',
+            });
+          }}
+        >
+          <option value="">{scope === 'rois' ? 'Choose ROI mask' : 'Choose array or map'}</option>
+          {objects.map((o) => (
             <option key={o.id} value={o.id}>
               {o.label}
               {o.unit ? ` [${o.unit}]` : ''}
@@ -252,29 +273,38 @@ export function ExportControls({
         disabled={!object || busy || selecting}
         onClick={() => void saveExport('object')}
       >
-        Export selected object
+        {scope === 'rois' ? 'Export selected mask' : 'Export selected object'}
       </button>
-      <details>
-        <summary>Packages, ROI sets and reports</summary>
-        <div className="button-stack">
-          {[
-            ['package', 'Export workspace files'],
-            ['state', 'Export portable study and view state'],
-            ['rois', 'Save ROI set'],
-            ['fit', 'Save full-fit results'],
-            ['diagnostics', 'Save diagnostics report'],
-          ].map(([kind, label]) => (
-            <button
-              key={kind}
-              className="secondary full"
-              disabled={!w?.loaded || busy || selecting}
-              onClick={() => void saveExport(kind)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </details>
+      {scope === 'rois' ? (
+        <button
+          className="secondary full"
+          disabled={!w?.rois.length || busy || selecting}
+          onClick={() => void saveExport('rois')}
+        >
+          Save ROI set
+        </button>
+      ) : (
+        <details>
+          <summary>Packages and reports</summary>
+          <div className="button-stack">
+            {[
+              ['package', 'Export workspace files'],
+              ['state', 'Export portable study and view state'],
+              ['fit', 'Save full-fit results'],
+              ['diagnostics', 'Save diagnostics report'],
+            ].map(([kind, label]) => (
+              <button
+                key={kind}
+                className="secondary full"
+                disabled={!w?.loaded || busy || selecting}
+                onClick={() => void saveExport(kind)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

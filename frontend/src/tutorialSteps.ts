@@ -88,7 +88,7 @@ export const tutorialSteps: readonly TutorialStep[] = [
     title: 'Create an ROI',
     action: 'Open Segment',
     context: { section: 'rois', task: 'roi-edit' },
-    text: 'Activate Draw rectangle and drag over the phantom. Segment supports multiple ROIs, drawing rounds, 3D expansion and mask combinations. Use the same ROIs in overlays, fitting and analysis.',
+    text: 'Choose Rectangle and drag over the phantom. Click Rectangle again to pan. Use the same ROIs in overlays, fitting and analysis.',
   },
   {
     id: 'mask',

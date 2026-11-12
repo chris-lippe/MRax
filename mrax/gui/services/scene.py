@@ -44,7 +44,7 @@ def experiment_catalog(workspace, names=None):
     """Metadata from each experiment's own state. Never change the active experiment."""
     from .reconstruction import reconstruction_label
 
-    session = clone_workspace(workspace).session
+    session = clone_workspace(workspace, share_sources=True).session
     result = []
     for name in session.experiment_names:
         if names is not None and name not in names:
@@ -158,7 +158,7 @@ def render_overlay(workspace, layer):
         if result is None:
             raise ValueError("This registration is unavailable")
         meta = result["metadata"]
-        reference = clone_workspace(workspace).session
+        reference = clone_workspace(workspace, share_sources=True).session
         reference.select_experiment(meta["reference_experiment"])
         require_common_grid(
             reference.spatial_dim_names,
@@ -208,7 +208,7 @@ def render_overlay(workspace, layer):
                 "This earlier registration is available at its recorded frame. Rerun it for the current sequence"
             )
         else:
-            source = clone_workspace(workspace).session
+            source = clone_workspace(workspace, share_sources=True).session
             source.select_experiment(meta["moving_experiment"])
             if not 0 <= frame < source.frame_count:
                 raise ValueError(
@@ -238,7 +238,7 @@ def render_overlay(workspace, layer):
             raise ValueError("The registered grid does not match the base image")
         return np.asarray(scalar_component(data, layer["component"]), dtype=np.float64)
 
-    context = clone_workspace(workspace)
+    context = clone_workspace(workspace, share_sources=True)
     context.session.select_experiment(layer["experiment"])
     source = display_session(context, fitted=True, map_name=layer.get("map_name")) if layer["kind"] == "map" else context.session
 
@@ -349,7 +349,9 @@ def update_scene(workspace, changes):
     if not isinstance(styles, dict) or set(styles) - names:
         raise ValueError("Choose available ROIs for display appearance")
     for style in styles.values():
-        if not isinstance(style, dict) or set(style) - {"color", "opacity", "label_colors"}:
+        if not isinstance(style, dict) or set(style) - {
+            "color", "opacity", "label_colors", "label_opacities", "hidden_labels"
+        }:
             raise ValueError("Unknown ROI appearance setting")
         color = style.get("color")
         colors = style.get("label_colors", {})
@@ -367,6 +369,26 @@ def update_scene(workspace, changes):
             for key, value in colors.items()
         ):
             raise ValueError("Label colors require positive label values and hexadecimal colors")
+        alphas = style.get("label_opacities", {})
+        if not isinstance(alphas, dict) or any(
+            not isinstance(key, str)
+            or not key.isdecimal()
+            or not 1 <= int(key) <= 65535
+            or key != str(int(key))
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or not 0 <= value <= 1
+            for key, value in alphas.items()
+        ):
+            raise ValueError("Label opacities require positive labels and values from zero to one")
+        hidden = style.get("hidden_labels", [])
+        if (
+            not isinstance(hidden, list)
+            or any(type(value) is not int or not 1 <= value <= 65535 for value in hidden)
+            or len(hidden) != len(set(hidden))
+        ):
+            raise ValueError("Choose positive label values once each for hidden labels")
         alpha = style.get("opacity")
         if alpha is not None and (
             isinstance(alpha, bool)

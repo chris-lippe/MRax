@@ -135,7 +135,22 @@ def profile_selection(experiment, dimension, indices):
     return tuple(selected), frame_ids
 
 
-def image_profile(data, experiment, dimension, indices, *, roi=None, plane_dims=("x", "y")):
+def scalar_component(array, component="auto"):
+    array = np.asarray(array)
+    if component == "phase":
+        return np.angle(array)
+    if component == "imag":
+        return np.imag(array)
+    if component == "real":
+        return np.real(array)
+    if component == "magnitude" or (component == "auto" and np.iscomplexobj(array)):
+        return np.abs(array)
+    return array
+
+
+def image_profile(
+    data, experiment, dimension, indices, *, roi=None, plane_dims=("x", "y"), component="auto"
+):
     arr = np.asarray(reshape_frames_to_dims(data, experiment.dims))
     selection = []
     retained = []
@@ -146,8 +161,7 @@ def image_profile(data, experiment, dimension, indices, *, roi=None, plane_dims=
         else:
             index = indices.get(name, indices.get("frame", 0) if name in ("t", "frame") else 0)
             selection.append(max(0, min(int(index), experiment.dims[name] - 1)))
-    sliced = arr[tuple(selection)]
-    sliced = np.abs(sliced) if np.iscomplexobj(sliced) else sliced
+    sliced = scalar_component(arr[tuple(selection)], component)
     if roi is not None:
         # Select the ROI before broadcasting: a plane/curve must not allocate a
         # mask the size of the entire multi-frame acquisition.

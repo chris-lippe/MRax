@@ -8,7 +8,13 @@ import numpy as np
 
 from mrax.data_struct.dimensions import reshape_dims_to_frames
 from mrax.gui.masks import mask_slice_for_display
-from mrax.gui.plotting import axis_coordinates, image_profile, profile_dimension, profile_selection
+from mrax.gui.plotting import (
+    axis_coordinates,
+    image_profile,
+    profile_dimension,
+    profile_selection,
+    scalar_component,
+)
 from mrax.gui.registration import (
     apply_transform_to_image,
     inverse_transform,
@@ -59,19 +65,6 @@ def json_value(value):
 
 def display_options(workspace):
     return workspace.display_settings.setdefault(workspace.session.selected_experiment or "", {})
-
-
-def scalar_component(array, component="auto"):
-    array = np.asarray(array)
-    if component == "phase":
-        return np.angle(array)
-    if component == "imag":
-        return np.imag(array)
-    if component == "real":
-        return np.real(array)
-    if component == "magnitude" or (component == "auto" and np.iscomplexobj(array)):
-        return np.abs(array)
-    return array
 
 
 def registration_plane(array, session):
@@ -268,7 +261,11 @@ def displayed_roi(workspace, roi, image, editable):
 
 def curve_for_workspace(workspace):
     session = workspace.session
-    selected = session.roi(session.fit_settings.selected_roi) if session.rois else None
+    selected = (
+        session.roi(session.fit_settings.selected_roi)
+        if session.rois and not display_options(workspace).get("plot_whole_image", False)
+        else None
+    )
     if not session.experiment_dims:
         return None
     if selected is not None and session.selected_experiment in workspace.pipelines:
@@ -303,6 +300,7 @@ def curve_for_workspace(workspace):
         session.active_indices,
         roi=selected,
         plane_dims=session.image_plane_dims,
+        component=display_options(workspace).get("component", "auto"),
     )
     _selection, frame_ids = profile_selection(experiment, dimension, session.active_indices)
     included = (
@@ -312,6 +310,7 @@ def curve_for_workspace(workspace):
     )
     if len(axis) != len(values):
         raise ValueError("Curve coordinates do not match its selected dimension")
+    elapsed_time = label == "Elapsed time (s)"
     observable = next(
         (
             (key, value)
@@ -323,7 +322,7 @@ def curve_for_workspace(workspace):
     if observable is None and session.is_non_imaging:
         observable = next(((key, value) for key, value in experiment.observables.items()
                            if label in {key, f"{key} ({value.si_unit})"}), None)
-    if observable is None and not session.is_non_imaging and dimension not in session.spatial_dim_names:
+    if observable is None and not elapsed_time and not session.is_non_imaging and dimension not in session.spatial_dim_names:
         from mrax.gui.session import frame_axis_values
 
         frame_label, frame_axis = frame_axis_values(experiment)
@@ -333,8 +332,8 @@ def curve_for_workspace(workspace):
     return {
         "x": json_value(np.asarray(axis)),
         "observed": json_value(values),
-        "x_name": label,
-        "x_unit": getattr(observable[1], "si_unit", None) if observable else None,
+        "x_name": "Elapsed time" if elapsed_time else label,
+        "x_unit": "s" if elapsed_time else getattr(observable[1], "si_unit", None) if observable else None,
         "included": included.tolist(),
         "dimension": dimension,
         "roi_name": selected.name if selected is not None else None,

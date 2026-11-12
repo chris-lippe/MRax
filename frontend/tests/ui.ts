@@ -74,7 +74,7 @@ export async function openSettings(page: Page) {
 
 export async function openRoiCoordinates(page: Page) {
   const form = page.getByRole('form', { name: 'ROI coordinate editor', exact: true });
-  if (!(await form.isVisible())) await page.getByText('Coordinates', { exact: true }).click();
+  if (!(await form.isVisible())) await openControlGroup(page, 'Geometry edits');
   await expect(form).toBeVisible();
 }
 

@@ -212,7 +212,7 @@ def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), pro
         checkerboard="RecoPhasCorrFilter" in stages,
         elliptical_support="RecoMaskFilter" in stages,
         coil_combine="rss" if "RecoSumOfSquaresFilter" in stages else "sum",
-        stack_slices=slices, output_permutation=(1, 0) if ndim == 2 else ())
+        stack_slices=slices)
     return image_layout((AcquisitionData(samples, output, tuple(f"encoding_{i}" for i in range(ndim)),
         kind="sampled", trajectory=trajectory, density=density, geometry=geometry,
         readout_model=readout_model, auxiliary_samples=auxiliary,

@@ -106,11 +106,18 @@ export function signalData(
   const name =
     options.source === 'fit'
       ? (w.preview?.roi_name ?? w.selected_roi ?? 'ROI')
-      : (curve.roi_name ?? w.selected_roi ?? 'Whole image');
+      : (curve.roi_name ?? 'Whole image');
   const result: SignalData = {
     x: curve.x,
     xLabel: signalAxisLabel(curve.x_name, curve.x_unit),
-    yLabel: 'Signal',
+    yLabel:
+      options.source === 'profile' && w.display.component === 'phase'
+        ? 'Phase (rad)'
+        : options.source === 'profile' && w.display.component === 'imag'
+          ? 'Imaginary signal'
+          : options.source === 'profile' && w.display.component === 'real'
+            ? 'Real signal'
+            : 'Signal',
     included: curve.x.map((_, i) => curve.included?.[i] !== false),
     traces: [{ id: 'observed', name: name + ' · Observed', values: curve.observed }],
     description:

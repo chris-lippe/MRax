@@ -174,6 +174,14 @@ def test_growth_and_selective_label_edits_keep_labels_and_image_values(browser):
     assert np.sum(expanded == 7) == 7 and np.sum(expanded == 9) == 7
     np.testing.assert_array_equal(expanded[before != 0], before[before != 0])
     w = action(
+        client, w, "roi.brush", name="Labels", points=[[8, 8], [12, 8]],
+        size=8, label=7, label_only=True,
+    )
+    painted = roi_array(client, w, "Labels")
+    np.testing.assert_array_equal(painted[expanded == 9], expanded[expanded == 9])
+    assert np.sum(painted == 7) > np.sum(expanded == 7)
+    w = action(client, w, "roi.undo")
+    w = action(
         client,
         w,
         "roi.brush",
@@ -194,3 +202,43 @@ def test_growth_and_selective_label_edits_keep_labels_and_image_values(browser):
     w = action(client, w, "roi.undo")
     np.testing.assert_array_equal(roi_array(client, w, "Labels"), expanded)
     np.testing.assert_array_equal(pixels(client, w), original)
+
+
+def test_label_appearance_preserves_masks_and_survives_workspace_save(browser):
+    client, _ = browser
+    w = new(client)
+    w = action(client, w, "roi.create", name="Labels", tool="rect", bounds=[2, 2, 4, 4], label=7)
+    w = action(
+        client, w, "roi.draw", name="Labels", tool="rect", bounds=[8, 2, 4, 4], label=9, mode="add"
+    )
+    mask = roi_array(client, w, "Labels")
+    image = pixels(client, w)
+    style = {
+        "color": "#fbbf24", "opacity": 0.4,
+        "label_colors": {"7": "#cc3355"}, "label_opacities": {"7": 0.75, "9": 0.0},
+        "hidden_labels": [9],
+    }
+    w = view(client, w, scene={"roi_styles": {"Labels": style}})
+    assert w["scene"]["roi_styles"]["Labels"] == style
+    assert w["rois"][0]["labels"] == [7, 9]
+    np.testing.assert_array_equal(roi_array(client, w, "Labels"), mask)
+    np.testing.assert_array_equal(pixels(client, w), image)
+    preview = client.get(f"/api/workspaces/{w['id']}/roi-mask", params={"name": "Labels"})
+    assert preview.status_code == 200 and preview.json()["labels"] == [7, 9]
+    saved = client.post(f"/api/workspaces/{w['id']}/save")
+    restored = client.post("/api/workspaces/upload", content=saved.content)
+    assert restored.status_code == 200, restored.text
+    loaded = restored.json()
+    assert loaded["scene"]["roi_styles"]["Labels"] == style
+    np.testing.assert_array_equal(roi_array(client, loaded, "Labels"), mask)
+    for invalid in [
+        {"label_opacities": {"01": 0.5}}, {"label_opacities": {"7": -0.1}},
+        {"label_opacities": {"0": 0.5}}, {"hidden_labels": [9, 9]},
+        {"hidden_labels": [0]}, {"hidden_labels": [True]},
+    ]:
+        response = client.patch(
+            f"/api/workspaces/{w['id']}/view",
+            json={"revision": w["revision"], "scene": {"roi_styles": {"Labels": invalid}}},
+        )
+        assert response.status_code in {400, 422}
+    np.testing.assert_array_equal(roi_array(client, w, "Labels"), mask)

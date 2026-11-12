@@ -55,6 +55,7 @@ def wait_job(client, key):
 
 def test_native_roi_and_binary_slice_are_numerically_correct(client):
     workspace = new_workspace(client)
+    previous = client.app.state.records[workspace["id"]].workspace
     assert workspace["experiment_catalog"][0]["exp_type"] == "t2_se"
     response = client.get(f"/api/workspaces/{workspace['id']}/slice")
     image = np.frombuffer(response.content, dtype="<f4").reshape((24, 32))
@@ -69,6 +70,11 @@ def test_native_roi_and_binary_slice_are_numerically_correct(client):
     expected[3:9, 4:12] = 1
     np.testing.assert_array_equal(loaded["rois"][0]["mask"], expected)
     assert loaded["rois"][0]["pixels"] == 48
+    current = client.app.state.records[workspace["id"]].workspace
+    assert current.session.data is previous.session.data
+    assert current.session.study is previous.session.study
+    assert previous.session.shared_rois == []
+    assert current.session.shared_rois is not previous.session.shared_rois
     assert loaded["timecourse"]["x_unit"] == "ms"
     observed = loaded["timecourse"]["observed"]
     assert observed[4] / observed[0] == pytest.approx(np.exp(-70 / 80), rel=1e-6)
@@ -102,6 +108,8 @@ def test_real_spawned_fit_matches_known_t2_and_round_trips(client):
     assert job["result"]["parameters"]["t2"] == pytest.approx(80, abs=0.05)
     assert job["result"]["relative_rmse"] < 1e-4
     assert job["result"]["x_unit"] == "ms"
+    preview = client.get(path).json()["preview"]
+    assert preview["roi_name"] == "ROI 1"
     saved = client.post(path + "/save")
     assert saved.status_code == 200
     with zipfile.ZipFile(io.BytesIO(saved.content)) as archive:
@@ -115,6 +123,7 @@ def test_real_spawned_fit_matches_known_t2_and_round_trips(client):
     assert restored["rois"] == workspace["rois"]
     assert restored["spacing"] == workspace["spacing"]
     assert restored["preview"]["parameters"]["t2"] == job["result"]["parameters"]["t2"]
+    assert restored["preview"]["roi_name"] == "ROI 1"
     assert restored["id"] != workspace["id"]
     assert restored["label"] == workspace["label"]
 

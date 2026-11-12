@@ -247,7 +247,9 @@ export function FitControls({
               <div key={name}>
                 <span>{name === 't2' ? 'T2' : name}</span>
                 <strong aria-label={name === 't2' ? 'Fitted T2' : `Fitted ${name}`}>
-                  {value.toFixed(2)}
+                  {Math.abs(value) > 0 && Math.abs(value) < 0.01
+                    ? value.toExponential(3)
+                    : value.toFixed(2)}
                 </strong>
                 <small>{specs[name]?.unit ?? ''}</small>
               </div>

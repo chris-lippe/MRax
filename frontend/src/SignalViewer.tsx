@@ -324,15 +324,33 @@ export function SignalSourceControls({
             ROI
             <select
               aria-label="Signal ROI"
-              value={rois.some((r) => r.name === w?.selected_roi) ? w!.selected_roi! : ''}
-              onChange={(event) => void changeView({ selected_roi: event.target.value })}
+              value={(options.source === 'fit' ? w?.preview : w?.timecourse)?.roi_name ?? ''}
+              onChange={(event) => {
+                const roi = event.target.value;
+                update({ source: 'profile', ...automaticSignalAxes });
+                void changeView(roi ? { selected_roi: roi } : { plot_whole_image: true });
+              }}
             >
-              <option value="" disabled>
-                Whole image
-              </option>
+              <option value="">Whole image mean</option>
               {rois.map((roi) => (
                 <option key={roi.name}>{roi.name}</option>
               ))}
+            </select>
+          </label>
+        )}
+        {options.source === 'profile' && (
+          <label>
+            Component
+            <select
+              aria-label="Signal component"
+              value={String(w?.display.component ?? 'auto')}
+              onChange={(event) => void changeView({ component: event.target.value })}
+            >
+              <option value="auto">Automatic</option>
+              <option value="magnitude">Magnitude</option>
+              <option value="real">Real</option>
+              <option value="imag">Imaginary</option>
+              <option value="phase">Phase</option>
             </select>
           </label>
         )}

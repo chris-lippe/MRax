@@ -77,7 +77,7 @@ export async function completeTutorialWorkflow(
   await advance('Create an ROI');
   await open('Open Segment');
   await expect(next).toBeDisabled();
-  await page.getByRole('button', { name: 'Draw rectangle', exact: true }).click();
+  await page.getByRole('button', { name: 'Rectangle tool', exact: true }).click();
   const surface = page.getByTestId('roi-surface');
   await surface.scrollIntoViewIfNeeded();
   const box = (await surface.boundingBox())!;

@@ -15,6 +15,7 @@ import {
   api,
   image,
   rememberImages,
+  retainImagePlanes,
   clearImageCache,
   originalComparison,
   type Bounds,
@@ -41,7 +42,13 @@ import { TimecoursePlot } from './TimecoursePlot';
 import { SignalPreview } from './SignalPreview';
 import { ResizablePreview } from './ResizablePreview';
 import { serializeSignalFigure } from './signalExport';
-import { defaultSignalOptions, signalData, signalCsv, type SignalOptions } from './signal';
+import {
+  automaticSignalAxes,
+  defaultSignalOptions,
+  signalData,
+  signalCsv,
+  type SignalOptions,
+} from './signal';
 import { Viewer } from './Viewer';
 import { ViewerControls } from './ViewerControls';
 import {
@@ -73,7 +80,7 @@ import { tutorialSteps } from './tutorialSteps';
 import type { WorkflowKind } from './reusableWorkflows';
 import { NewStudyDialog, type NewStudyKind } from './NewStudyDialog';
 import { useImageDisplay } from './useImageDisplay';
-import type { ScenePreview } from './scene';
+import { nextRoiName, type ScenePreview } from './scene';
 
 type Panel = 'tools' | null;
 const WorkflowDialog = lazy(() =>
@@ -131,6 +138,18 @@ export function App() {
   const [values, setValues] = useState<Pixels | null>(null);
   const [layerValues, setLayerValues] = useState<Record<string, Pixels>>({});
   const [scenePreview, setScenePreview] = useState<ScenePreview>({ layers: {} });
+  const previewRoiOpacity = (name: string, value: number, label?: number) =>
+    setScenePreview((previous) =>
+      label === undefined
+        ? { ...previous, rois: { ...previous.rois, [name]: value } }
+        : {
+            ...previous,
+            labels: {
+              ...previous.labels,
+              [name]: { ...previous.labels?.[name], [label]: value },
+            },
+          },
+    );
   const [connected, setConnected] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
   const [navigating, setNavigating] = useState(false);
@@ -156,8 +175,7 @@ export function App() {
   const busy = taskBusy || navigating;
   const [error, setError] = useState('');
   const [message, setMessage] = useState('No study open');
-  const [drawing, setDrawing] = useState(false);
-  const [tool, setTool] = useState<Tool>('rect'),
+  const [tool, setTool] = useState<Tool>('pan'),
     [brushSize, setBrushSize] = useState(5),
     [label, setLabel] = useState(1);
   const [importOpen, setImportOpen] = useState(false),
@@ -176,6 +194,18 @@ export function App() {
   const [workflowTasks, setWorkflowTasks] = useState(initialWorkflowTasks);
   const [signalOpened, setSignalOpened] = useState(false);
   const workflowTask = workflowTasks[workflow];
+  const requiresRoi =
+    !['brush', 'erase', 'pan'].includes(tool) &&
+    ['add', 'subtract'].includes(String(drawOptions.mode));
+  const drawing =
+    workflowTask === 'roi-edit' &&
+    tool !== 'pan' &&
+    Boolean(workspace?.editable) &&
+    (!requiresRoi || Boolean(workspace?.selected_roi));
+  const previousDrawingTool = useRef<Tool>('rect');
+  useEffect(() => {
+    if (tool !== 'pan') previousDrawingTool.current = tool;
+  }, [tool]);
   const viewingContext = useRef<ViewingContext>({ section: 'image', task: 'display' });
   const displayedContext = useRef<string | null>(null);
   const savedViews = useRef(new Map<string, SavedView>());
@@ -364,7 +394,7 @@ export function App() {
     if (name === 'drawing') {
       if (busy || active(job) || !current.current?.editable || workflowTask !== 'roi-edit')
         return false;
-      setDrawing((value) => !value);
+      setTool(tool === 'pan' ? previousDrawingTool.current : 'pan');
       return true;
     }
     if (!current.current?.loaded) return false;
@@ -398,7 +428,7 @@ export function App() {
       setWorkflow('image');
       setWorkflowTasks({ ...initialWorkflowTasks });
       setViewerControlsOpen(true);
-      setTool('rect');
+      setTool('pan');
       setBrushSize(5);
       setLabel(1);
       setDrawOptions({ angle: 0, sides: 6, snap: false, tolerance: 0.08, auto_subtract: false });
@@ -429,8 +459,7 @@ export function App() {
     const step = tutorialSteps[tutorial.step];
     if (step.context) selectWorkflow(step.context.section, step.context.task);
     if (step.id === 'roi') {
-      setTool('rect');
-      setDrawing(false);
+      setTool('pan');
     }
     if (step.id === 'pipeline')
       document.querySelector('.pipeline-panel')?.scrollIntoView({ block: 'start' });
@@ -441,7 +470,6 @@ export function App() {
     const finished = tutorial;
     setTutorial(null);
     setSettingsOpen(false);
-    setDrawing(false);
     setTool(finished.previousTool);
     setBrushSize(finished.previousBrushSize);
     setLabel(finished.previousLabel);
@@ -460,8 +488,9 @@ export function App() {
     preserveImage = false,
     completedOperation?: string,
     keepRequestedView = false,
-    preserveDrawing = false,
+    unchangedPixels?: 'display' | 'roi',
   ) {
+    const previousImage = current.current;
     navigationVersion.current += 1;
     navigationRun.current = null;
     stopPrefetch();
@@ -496,6 +525,8 @@ export function App() {
       if (request !== imageRequest.current) return;
       displayedContext.current = context;
     }
+    if (previousImage && unchangedPixels)
+      retainImagePlanes(previousImage, next, unchangedPixels === 'roi');
     current.current = next;
     if (!preserveImage || selected.current !== next.id) {
       current.current = next;
@@ -504,7 +535,6 @@ export function App() {
       setLayerValues({});
     }
     selected.current = next.id;
-    if (!preserveDrawing) setDrawing(false);
     let pixels: Pixels | null;
     let layers: (readonly [string, Pixels])[];
     try {
@@ -530,7 +560,13 @@ export function App() {
       current.current = next;
       setWorkspace(next);
       setValues(pixels);
-      setLayerValues(Object.fromEntries(layers));
+      setLayerValues((previous) => {
+        const nextLayers = Object.fromEntries(layers);
+        return Object.keys(previous).length === layers.length &&
+          layers.every(([id, data]) => previous[id] === data)
+          ? previous
+          : nextLayers;
+      });
       setScenePreview({ layers: {} });
       if (next.loaded) savedViews.current.set(context, captureView(next));
       setWorkspaces((previous) =>
@@ -650,10 +686,10 @@ export function App() {
       const next = await api<Workspace>(`/api/workspaces/${workspace.id}/rois`, 'POST', {
         revision: workspace.revision,
         view_revision: workspace.view_revision,
-        name: `ROI ${workspace.rois.length + 1}`,
+        name: nextRoiName(workspace.rois),
         bounds: rectangle,
       });
-      await show(next, false, undefined, true, true);
+      await show(next, true, undefined, true, 'roi');
       setMessage('ROI added on the native image grid');
     });
   }
@@ -708,7 +744,7 @@ export function App() {
           revision: currentWorkspace.revision,
           ...command,
         });
-        if (request === viewRequest.current) await show(next, true);
+        if (request === viewRequest.current) await show(next, true, undefined, false, 'display');
       } catch (failure) {
         if (request === viewRequest.current) {
           setWorkspace(current.current);
@@ -848,10 +884,10 @@ export function App() {
           action: name,
           options,
         }),
-        false,
+        name.startsWith('roi.'),
         undefined,
         true,
-        ['roi.empty', 'roi.create', 'roi.draw', 'roi.brush', 'roi.undo'].includes(name),
+        name.startsWith('roi.') ? 'roi' : undefined,
       );
       setMessage('Workspace updated');
     });
@@ -954,12 +990,12 @@ export function App() {
       delete edited.edit;
       await action('roi.geometry', edited);
     } else if (options.tool === 'brush') {
-      const name = w.selected_roi || `ROI ${w.rois.length + 1}`;
+      const name = w.selected_roi || nextRoiName(w.rois);
       if (!w.selected_roi) await action('roi.empty', { name });
       await action('roi.brush', { name, ...options });
     } else if (['add', 'subtract'].includes(String(options.mode))) {
       await action('roi.draw', { ...options, name: w.selected_roi });
-    } else await action('roi.create', { name: `ROI ${w.rois.length + 1}`, ...options });
+    } else await action('roi.create', { name: nextRoiName(w.rois), ...options });
   }
 
   function openImport() {
@@ -1015,7 +1051,6 @@ export function App() {
         setWorkflow('image');
         setWorkflowTasks((previous) => ({ ...previous, image: 'display' }));
         setPanel(null);
-        setDrawing(false);
         setMessage(
           kind === 'multimodal'
             ? 'Synthetic multimodal study loaded'
@@ -1029,7 +1064,6 @@ export function App() {
     setWorkflow(value);
     setWorkflowTasks((previous) => ({ ...previous, [value]: selectedTask }));
     if (value !== 'image') viewingContext.current = { section: value, task: selectedTask };
-    if (selectedTask !== 'roi-edit') setDrawing(false);
     const w = current.current;
     if (selectedTask === 'overlays' && w?.scene.comparison.enabled)
       void changeView({ scene: { comparison: { ...w.scene.comparison, enabled: false } } });
@@ -1207,6 +1241,7 @@ export function App() {
         setWorkflowRequest({ kind, draft });
       }}
       task={workflowTask}
+      onJobChange={setJob}
       onTimecourseResult={setTimecourse}
       signalPrimary={primarySignal}
       signalComparison={
@@ -1238,9 +1273,7 @@ export function App() {
       }
       jobStudyLabel={jobStudyLabel}
       editingStep={editingStep}
-      previewRoiOpacity={(name, value) =>
-        setScenePreview((previous) => ({ ...previous, rois: { ...previous.rois, [name]: value } }))
-      }
+      previewRoiOpacity={previewRoiOpacity}
       displayControls={
         <ImageControls
           workspace={workspace}
@@ -1249,12 +1282,7 @@ export function App() {
           changeView={changeView}
           comparisonControlsRef={setComparisonControlsHost}
           action={action}
-          previewRoiOpacity={(name, value) =>
-            setScenePreview((previous) => ({
-              ...previous,
-              rois: { ...previous.rois, [name]: value },
-            }))
-          }
+          previewRoiOpacity={previewRoiOpacity}
           previewOpacity={(id, value) =>
             setScenePreview((previous) =>
               id === null
@@ -1271,19 +1299,17 @@ export function App() {
       changeView={changeView}
       run={run}
       save={save}
-      drawing={drawing}
       tool={tool}
       brushSize={brushSize}
       label={label}
       drawOptions={drawOptions}
       setDrawOptions={setDrawOptions}
-      setTool={setTool}
+      setTool={(value) => {
+        setTool(value);
+        setPanel(null);
+      }}
       setBrushSize={setBrushSize}
       setLabel={setLabel}
-      setDrawing={(value) => {
-        setDrawing(value);
-        if (value) setPanel(null);
-      }}
     />
   );
 
@@ -1481,9 +1507,9 @@ export function App() {
                       tool={tool}
                       brushSize={brushSize}
                       label={label}
-                      onShape={(options) => void shape(options)}
+                      onShape={shape}
                       busy={busy}
-                      onRectangle={(bounds) => void addRectangle(bounds)}
+                      onRectangle={addRectangle}
                     />
                   )}
                   {!primarySignal && dimensionControls}
@@ -1513,6 +1539,15 @@ export function App() {
             />
             <Curve
               workspace={workspace}
+              busy={busy}
+              onAxisChange={(axis) => {
+                updateSignal(automaticSignalAxes);
+                void changeView({ plot_axis: axis });
+              }}
+              onRoiChange={(roi) => {
+                updateSignal({ source: 'profile', ...automaticSignalAxes });
+                void changeView(roi ? { selected_roi: roi } : { plot_whole_image: true });
+              }}
               hidden={
                 (workflowTask === 'timecourse' && Boolean(currentTimecourse)) ||
                 workflowTask === 'metadata' ||

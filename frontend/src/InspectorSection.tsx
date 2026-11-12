@@ -37,12 +37,14 @@ export function InspectorGroup({
   children,
   revealKey,
   onOpenChange,
+  wide = true,
 }: {
   title: string;
   icon: ComponentProps<typeof WorkbenchIcon>['name'];
   children: ReactNode;
   revealKey?: string;
   onOpenChange?: (open: boolean) => void;
+  wide?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {
@@ -50,7 +52,7 @@ export function InspectorGroup({
   }, [revealKey]);
   return (
     <details
-      className="control-advanced control-wide control-group"
+      className={'control-advanced control-group' + (wide ? ' control-wide' : '')}
       open={expanded}
       onToggle={(event) => {
         setExpanded(event.currentTarget.open);

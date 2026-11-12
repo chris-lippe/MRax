@@ -234,9 +234,12 @@ def register_routes(app, get_record, check_revision, add_record):
         record = get_record(key)
         with record.lock:
             check_revision(record, command.revision, command.view_revision)
-            workspace = clone_workspace(record.workspace)
-            session = workspace.session
             name, options = command.action, command.options
+            workspace = clone_workspace(
+                record.workspace,
+                share_sources=name.startswith("roi.") or name in {"fit.settings", "frames.exclude"},
+            )
+            session = workspace.session
             if name.startswith("roi."):
                 operation = name.removeprefix("roi.")
                 if operation in {"create", "geometry", "brush", "draw"}:

@@ -1558,11 +1558,23 @@ export interface components {
             /** Color */
             color?: string | null;
             /**
+             * Hidden Labels
+             * @default []
+             */
+            hidden_labels: number[];
+            /**
              * Label Colors
              * @default {}
              */
             label_colors: {
                 [key: string]: string;
+            };
+            /**
+             * Label Opacities
+             * @default {}
+             */
+            label_opacities: {
+                [key: string]: number;
             };
             /** Opacity */
             opacity?: number | null;
@@ -1799,6 +1811,8 @@ export interface components {
             plane?: ("axial" | "coronal" | "sagittal") | null;
             /** Plot Axis */
             plot_axis?: string | null;
+            /** Plot Whole Image */
+            plot_whole_image?: boolean | null;
             /** Reconstruction Component */
             reconstruction_component?: ("magnitude" | "phase") | null;
             /** Revision */

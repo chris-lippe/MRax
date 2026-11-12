@@ -325,10 +325,19 @@ def normalized_cross_correlation(
     moving_mean = jnp.sum(moving_values) / jnp.maximum(sample_count, 1.0)
     fixed_centered = (fixed_values - fixed_mean) * weights
     moving_centered = (moving_values - moving_mean) * weights
-    denominator = jnp.linalg.norm(fixed_centered) * jnp.linalg.norm(moving_centered)
+    fixed_power = jnp.sum(jnp.square(fixed_centered))
+    moving_power = jnp.sum(jnp.square(moving_centered))
+    tiny = jnp.finfo(fixed_values.dtype).tiny
+    epsilon = jnp.finfo(fixed_values.dtype).eps
+    denominator = jnp.sqrt(jnp.maximum(fixed_power, tiny)) * jnp.sqrt(
+        jnp.maximum(moving_power, tiny)
+    )
     return jnp.where(
-        (sample_count >= 2.0) & (denominator > jnp.finfo(fixed_values.dtype).eps),
-        jnp.sum(fixed_centered * moving_centered) / denominator,
+        (sample_count >= 2.0)
+        & (fixed_power > 0)
+        & (moving_power > 0)
+        & (denominator > epsilon),
+        jnp.sum(fixed_centered * moving_centered) / jnp.maximum(denominator, epsilon),
         jnp.asarray(-1.0, dtype=fixed_values.dtype),
     )
 

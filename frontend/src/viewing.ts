@@ -41,6 +41,14 @@ export function captureView(workspace: Workspace): SavedView {
 }
 
 export function reconstructionComparison(workspace: Workspace): ComparisonSettings {
+  const current = workspace.scene.comparison;
+  if (
+    current.enabled &&
+    current.left.kind === 'original' &&
+    current.right.kind === 'reconstruction' &&
+    [current.left, current.right].every((source) => source.experiment === workspace.experiment)
+  )
+    return { ...current, mode: 'split' };
   const pair = originalComparison(workspace);
   return {
     ...pair,

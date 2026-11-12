@@ -46,7 +46,10 @@ export const workflows = [
   {
     id: 'rois',
     label: 'Segment',
-    tasks: [{ id: 'roi-edit', label: 'ROIs and masks', icon: 'rois' }],
+    tasks: [
+      { id: 'roi-edit', label: 'Edit ROIs and masks', icon: 'rois' },
+      { id: 'roi-files', label: 'Import and export ROIs', icon: 'open' },
+    ],
   },
   { id: 'fit', label: 'Fit', tasks: [{ id: 'model-fit', label: 'Model fitting', icon: 'fit' }] },
   {

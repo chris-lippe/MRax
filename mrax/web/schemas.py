@@ -72,6 +72,8 @@ class RoiAppearance(BaseModel):
     color: Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")] | None = None
     opacity: Annotated[FiniteFloat, Field(ge=0, le=1)] | None = None
     label_colors: dict[str, Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]] = {}
+    label_opacities: dict[str, Annotated[FiniteFloat, Field(ge=0, le=1)]] = {}
+    hidden_labels: list[Annotated[int, Field(strict=True, ge=1, le=65535)]] = []
 
 
 class SceneUpdate(Command):
@@ -146,6 +148,7 @@ class ViewCommand(Command):
     kspace_mode: str | None = None
     kspace_centering: Literal["auto", "none", "fftshift"] | None = None
     plot_axis: str | None = None
+    plot_whole_image: bool | None = None
     colormap: Literal["gray", "viridis", "diverging", "hot"] | None = None
     scene: SceneUpdate | None = None
     selected_roi: str | None = None

@@ -7,12 +7,13 @@ import { ProcessControls } from './ProcessControls';
 import { ReconstructionControls } from './ReconstructionControls';
 import { RoiStatistics } from './RoiStatistics';
 import { JobStatus, isFileJob } from './JobStatus';
-import { MaskImportControls } from './MaskImportControls';
+import { RoiFileControls } from './RoiFileControls';
 import { TimecourseControls } from './TimecourseControls';
-import type { TimecourseResult } from './api';
+import type { Job, TimecourseResult } from './api';
 import { workflows, type Workflow, type WorkflowTask } from './WorkflowNav';
 import { WorkbenchIcon } from './WorkbenchIcon';
 import { InspectorGroup } from './InspectorSection';
+import { useControlLayout } from './useControlLayout';
 
 export function AnalysisPanel(
   props: AnalysisProps &
@@ -25,10 +26,12 @@ export function AnalysisPanel(
       signalComparison: boolean;
       signalPrimary: boolean;
       jobStudyLabel?: string;
+      onJobChange: (job: Job) => void;
       onTimecourseResult: (result: TimecourseResult | null) => void;
     },
 ) {
   const body = useRef<HTMLDivElement>(null);
+  useControlLayout(body);
   const [analysisProcessingOpen, setAnalysisProcessingOpen] = useState(false);
   useEffect(() => {
     body.current?.scrollTo({ top: 0 });
@@ -125,13 +128,15 @@ export function AnalysisPanel(
             />
           )}
         </div>
-        <div className="control-layout" hidden={section !== 'rois'}>
-          <div className="control-wide">
-            <RoiControls {...blocked} />
-          </div>
-          <InspectorGroup title="Import masks and ROI sets" icon="import">
-            <MaskImportControls {...blocked} />
-          </InspectorGroup>
+        <div hidden={task !== 'roi-edit'}>
+          <RoiControls {...blocked} />
+        </div>
+        <div hidden={task !== 'roi-files'}>
+          <RoiFileControls
+            {...blocked}
+            active={task === 'roi-files'}
+            onJobChange={props.onJobChange}
+          />
         </div>
         <div hidden={task !== 'reconstruction'}>
           <ReconstructionControls {...blocked} active={task === 'reconstruction'} />
@@ -143,7 +148,7 @@ export function AnalysisPanel(
           <RegistrationControls {...blocked} task={props.task} />
         </div>
       </div>
-      {!isFileJob(props.job) && (
+      {(!isFileJob(props.job) || task === 'roi-files') && (
         <JobStatus
           workspace={props.workspace}
           job={props.job}

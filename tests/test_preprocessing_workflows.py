@@ -1,5 +1,6 @@
 """Synthetic preprocessing contracts and numerical references."""
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -12,7 +13,24 @@ from mrax.analysis.timecourse_processing import (
 from mrax.preprocessing.drift import (
     linear_drift_correct_framestack,
     negative_mean_squared_error,
+    normalized_cross_correlation,
 )
+
+
+def test_normalized_correlation_has_finite_gradients_for_constant_frames():
+    fixed = jnp.arange(12, dtype=jnp.float32).reshape(3, 4)
+    moving = fixed**2
+    reference = np.corrcoef(np.asarray(fixed).ravel(), np.asarray(moving).ravel())[0, 1]
+    np.testing.assert_allclose(normalized_cross_correlation(fixed, moving), reference, rtol=1e-6)
+    gradient = jax.grad(normalized_cross_correlation, argnums=1)
+    for first, second in (
+        (fixed, moving),
+        (fixed, jnp.zeros_like(fixed)),
+        (jnp.ones_like(fixed), moving),
+    ):
+        assert np.isfinite(np.asarray(gradient(first, second))).all()
+    np.testing.assert_array_equal(gradient(fixed, jnp.zeros_like(fixed)), 0)
+    assert normalized_cross_correlation(fixed, jnp.zeros_like(fixed)) == -1
 
 
 def test_dce_group_and_statistics_workflow():

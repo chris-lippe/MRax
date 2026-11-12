@@ -140,6 +140,9 @@ def update_view(workspace, command, *, navigation=False):
         if session.roi(command.selected_roi) is None:
             raise ValueError("Select an enabled ROI")
         session.fit_settings.selected_roi = command.selected_roi
+        display_options(workspace)["plot_whole_image"] = False
+    if command.plot_whole_image is not None:
+        display_options(workspace)["plot_whole_image"] = command.plot_whole_image
     display_options(workspace)["base_view"] = workspace.view_label
     display_options(workspace)["plot_axis"] = workspace.plot_x_axis_key
     if navigation:
@@ -580,7 +583,7 @@ def create_app(
                     candidate.display_settings.get(active, {})
                 )
             else:
-                candidate = clone_workspace(record.workspace)
+                candidate = clone_workspace(record.workspace, share_sources=True)
             update_view(candidate, command, navigation=navigation)
             candidate.dirty = True
             payload = WorkspaceInfo.model_validate(
@@ -647,7 +650,7 @@ def create_app(
         record = get_record(key)
         with record.lock:
             check_revision(record, command.revision, command.view_revision)
-            candidate = clone_workspace(record.workspace)
+            candidate = clone_workspace(record.workspace, share_sources=True)
             _, editable = render_image(candidate)
             if not editable:
                 raise ValueError("Draw ROIs on a native image or map grid")

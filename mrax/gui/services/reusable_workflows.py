@@ -37,7 +37,7 @@ def _json_settings(value):
 
 def resource_choices(workspace):
     """Metadata-only choices. No images, masks, transforms or acquisition values."""
-    context = clone_workspace(workspace, readonly_arrays=True)
+    context = clone_workspace(workspace, share_sources=True)
     choices = []
     for name in context.session.experiment_names:
         context.session.select_experiment(name)

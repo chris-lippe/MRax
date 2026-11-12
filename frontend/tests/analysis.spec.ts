@@ -66,7 +66,6 @@ test('complex views, planes, integer labels, brush, and undo use the real backen
   const count = await page.locator('.roi-card').first().locator('button span').textContent();
   await page.getByRole('button', { name: 'Brush tool', exact: true }).click();
   await page.getByLabel('Label value', { exact: true }).fill('9');
-  await page.getByRole('button', { name: 'Paint labels', exact: true }).click();
   const box = (await page.getByTestId('roi-surface').boundingBox())!;
   await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.4);
   await page.mouse.down();
