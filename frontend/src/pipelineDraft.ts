@@ -163,12 +163,7 @@ export function processDraftStep(w: Workspace, catalog: PipelineCatalog, methodI
   const method = catalog.methods.find((method) => method.id === methodId);
   if (!method || method.id === 'dti' || method.unavailable)
     throw Error('Choose an available image processing method.');
-  const family =
-    method.group === 'Denoise'
-      ? 'denoise'
-      : ['normalize', 'dilution'].includes(method.id)
-        ? 'normalize'
-        : method.id;
+  const family = method.group === 'Denoise' ? 'denoise' : method.id;
   return insertedStep(
     'process',
     {

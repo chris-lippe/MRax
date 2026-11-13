@@ -459,7 +459,7 @@ class ProcessingMethod(BaseModel):
     fields: list[ProcessingField]
     axes: Literal["filter", "series", "none"]
     axis_count: Literal[2, 3] | None = None
-    reference: Literal["frame", "series"] | None
+    reference: Literal["frame"] | None
     unavailable: str | None
 
 

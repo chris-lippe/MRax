@@ -207,8 +207,6 @@ def _family(method):
 
     if method in FILTERS:
         return "denoise"
-    if method in {"normalize", "dilution"}:
-        return "normalize"
     return method
 
 

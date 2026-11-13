@@ -81,6 +81,9 @@ save_workspace_bundle(StudyWorkspace('test', 'Independent packages', session), s
     await page.getByLabel('Filter axis x', { exact: true }).uncheck();
     await expect(page.getByLabel('Filter axis y', { exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Apply denoising', exact: true })).toBeDisabled();
+    await expect(page.locator('.processing-axes').getByRole('status')).toContainText(
+      'Select exactly 2 dimensions (1 selected).',
+    );
     await page.getByLabel('Filter axis x', { exact: true }).check();
     await expect(page.getByLabel('Filter axis y', { exact: true })).toBeDisabled();
   }
@@ -88,6 +91,12 @@ save_workspace_bundle(StudyWorkspace('test', 'Independent packages', session), s
     await denoiser.selectOption('bm4d');
     await expect(dims.locator('input:checked')).toHaveCount(3);
     await expect(page.getByLabel('Filter axis frame', { exact: true })).toBeDisabled();
+    await page.getByLabel('Filter axis x', { exact: true }).uncheck();
+    await expect(page.getByRole('button', { name: 'Apply denoising', exact: true })).toBeDisabled();
+    await expect(page.locator('.processing-axes').getByRole('status')).toContainText(
+      'Select exactly 3 dimensions (2 selected).',
+    );
+    await page.getByLabel('Filter axis x', { exact: true }).check();
     await scope.selectOption('image');
     await expect(scope).toHaveValue('image');
     await expect(page.getByRole('button', { name: 'Apply denoising', exact: true })).toBeDisabled();

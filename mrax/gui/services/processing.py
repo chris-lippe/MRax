@@ -14,7 +14,6 @@ import numpy as np
 from mrax.analysis import (
     ROI,
     apply_baseline,
-    apply_dilution_correction,
     compute_dti_maps,
     compute_z_spectra,
     nan_gaussian_filter,
@@ -292,31 +291,6 @@ def processing_methods(session):
                 ],
             },
             {
-                "id": "dilution",
-                "label": "Dilution correction",
-                "group": "Normalize",
-                "axes": "none",
-                "reference": "series",
-                "unavailable": unavailable,
-                "fields": [
-                    baseline,
-                    _field(
-                        "clip_min",
-                        "Minimum dilution ratio",
-                        apply_dilution_correction,
-                        minimum=1e-12,
-                        maximum=1e6,
-                    ),
-                    _field(
-                        "smooth_sigma",
-                        "Dilution smoothing (samples)",
-                        apply_dilution_correction,
-                        minimum=0,
-                        maximum=100,
-                    ),
-                ],
-            },
-            {
                 "id": "dti",
                 "label": "Diffusion tensor metrics",
                 "group": "Derived maps",
@@ -522,7 +496,7 @@ def _source(workspace, key, component):
     return data, dims, observables, model, unit, geometry, rois
 
 
-def _same_grid(source, dims, spatial_dims, geometry, *, series, reference_frame):
+def _same_grid(source, dims, spatial_dims, geometry, *, reference_frame):
     count = math.prod(size for name, size in dims.items() if name not in spatial_dims)
     for frame in range(count):
         require_common_grid(
@@ -532,12 +506,12 @@ def _same_grid(source, dims, spatial_dims, geometry, *, series, reference_frame)
             spatial_dims,
             tuple(dims[name] for name in spatial_dims),
             geometry,
-            source_frame=frame if series else reference_frame,
+            source_frame=reference_frame,
             target_frame=frame,
         )
 
 
-def _reference(workspace, options, dims, unit, geometry, *, series):
+def _reference(workspace, options, dims, unit, geometry):
     name = options.get("reference_experiment")
     if name not in workspace.session.experiment_names:
         raise ValueError("Choose a reference experiment")
@@ -550,16 +524,13 @@ def _reference(workspace, options, dims, unit, geometry, *, series):
         or not 0 <= index < context.frame_count
     ):
         raise ValueError("Reference frame is out of range")
-    package_reference = (
-        not series and "slice_package" in dims and "slice_package" in context.experiment_dims
-    )
+    package_reference = "slice_package" in dims and "slice_package" in context.experiment_dims
     if not package_reference:
         _same_grid(
             context,
             dims,
             workspace.session.spatial_dim_names,
             geometry,
-            series=series,
             reference_frame=index,
         )
     array = np.asarray(context.image_array)
@@ -603,20 +574,6 @@ def _reference(workspace, options, dims, unit, geometry, *, series):
                 )
             references.append(frames[reference_index])
         return np.stack(references)
-    if series:
-        if context.experiment_dims != dims:
-            raise ValueError("Dilution reference dimensions must match the input series")
-        original_observables = workspace.session.build_experiment().observables
-        references = context.build_experiment().observables
-        for key, value in original_observables.items():
-            if np.asarray(value.values).size > 1 and (
-                key not in references
-                or value.si_unit != references[key].si_unit
-                or np.asarray(value.values).shape != np.asarray(references[key].values).shape
-                or not np.allclose(value.values, references[key].values, equal_nan=True)
-            ):
-                raise ValueError("Dilution reference acquisition coordinates must match the input")
-        return reshape_dims_to_frames(array, dims)
     return np.asarray(reshape_dims_to_frames(array, context.experiment_dims))[index]
 
 
@@ -921,29 +878,23 @@ def apply_processing(workspace, options, progress):
             result = np.moveaxis(
                 replace_isolated_spikes(np.moveaxis(data, axis, 0), **parameters), 0, axis
             )
-        else:
+        elif key == "normalize":
             frames = reshape_dims_to_frames(data, dims)
-            if key == "normalize":
-                options.setdefault("reference_frame", 0)
-            reference = _reference(
-                workspace, options, dims, context[4], context[5], series=key == "dilution"
-            )
-            if key == "normalize":
-                if "slice_package" in dims:
-                    groups = frames.reshape((dims["slice_package"], -1) + frames.shape[1:])
-                    result = np.concatenate(
-                        [
-                            np.asarray(compute_z_spectra(group, ref, **parameters))
-                            for group, ref in zip(groups, reference, strict=True)
-                        ]
-                    )
-                else:
-                    result = compute_z_spectra(frames, reference, **parameters)
-            elif key == "dilution":
-                result = apply_dilution_correction(frames, reference, **parameters)
+            options.setdefault("reference_frame", 0)
+            reference = _reference(workspace, options, dims, context[4], context[5])
+            if "slice_package" in dims:
+                groups = frames.reshape((dims["slice_package"], -1) + frames.shape[1:])
+                result = np.concatenate(
+                    [
+                        np.asarray(compute_z_spectra(group, ref, **parameters))
+                        for group, ref in zip(groups, reference, strict=True)
+                    ]
+                )
             else:
-                raise ValueError("Unsupported processing method")
+                result = compute_z_spectra(frames, reference, **parameters)
             result = reshape_frames_to_dims(np.asarray(result), dims)
+        else:
+            raise ValueError("Unsupported processing method")
         progress(1, 1, "Processing complete")
     result = np.asarray(result)
     if roi is not None:

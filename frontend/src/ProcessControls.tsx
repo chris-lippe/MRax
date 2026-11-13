@@ -48,7 +48,6 @@ const choiceLabels: Record<string, string> = {
 
 const actionLabels: Record<string, string> = {
   normalize: 'Normalize signal',
-  dilution: 'Apply dilution correction',
   baseline: 'Apply baseline correction',
   temporal_gaussian: 'Apply temporal smoothing',
   despike: 'Remove spikes',
@@ -220,7 +219,7 @@ export function ProcessControls({
     method?.unavailable ??
     (axisCount && availableAxes.length < axisCount
       ? `${method?.label} requires ${axisCount} filter dimensions. ${scope === 'image' ? 'Choose the active slice package or whole dataset to use a 3D block.' : 'This input has too few dimensions.'}`
-      : (method?.axes === 'series' || method?.reference === 'series') && !seriesAxes.length
+      : method?.axes === 'series' && !seriesAxes.length
         ? 'Choose image data with an acquisition series.'
         : null);
   const parameters = Object.fromEntries(
@@ -304,14 +303,10 @@ export function ProcessControls({
     );
   });
 
-  const primary = (index: number) =>
-    method?.id === 'dilution'
-      ? ['baseline_frames', 'smooth_sigma'].includes(method.fields[index].key)
-      : index < 2;
-  const primaryFields = fieldControls?.filter((_field, index) => primary(index));
+  const primaryFields = fieldControls?.slice(0, 2);
   const advancedFields = fieldControls?.filter(
     (_field, index) =>
-      !primary(index) && !['noise_model', 'noise_coils'].includes(method!.fields[index].key),
+      index >= 2 && !['noise_model', 'noise_coils'].includes(method!.fields[index].key),
   );
   const noiseOptions = {
     ...scopeOptions,
@@ -345,7 +340,7 @@ export function ProcessControls({
             noise_roi_names:
               ['bm3d', 'bm4d'].includes(method.id) && parameters.sigma == null ? noiseRois : null,
             reference_experiment: method.reference ? reference : undefined,
-            reference_frame: method.reference === 'frame' ? (draft.referenceFrame ?? 0) : undefined,
+            reference_frame: method.reference ? (draft.referenceFrame ?? 0) : undefined,
           });
         }}
       >
@@ -435,7 +430,9 @@ export function ProcessControls({
             >
               {method?.axes === 'filter' && (
                 <fieldset className="processing-axes">
-                  <legend>Filter dimensions{axisCount ? ` · select ${axisCount}` : ''}</legend>
+                  <legend>
+                    Filter dimensions{axisCount ? ` · select exactly ${axisCount}` : ''}
+                  </legend>
                   <label>
                     Apply to
                     <select
@@ -509,9 +506,13 @@ export function ProcessControls({
                       </label>
                     ))}
                   </div>
-                  <p className="control-note" id={axesHelpId}>
+                  <p
+                    className="control-note"
+                    id={axesHelpId}
+                    role={axisCount ? 'status' : undefined}
+                  >
                     {axisCount
-                      ? `${method.label.split(' ')[0]} denoises one ${axisCount === 2 ? '2D plane' : '3D block'} at a time. `
+                      ? `${method.label.split(' ')[0]} filters a ${axisCount === 2 ? '2D plane' : '3D block'}. Select exactly ${axisCount} dimensions (${axes.length} selected). `
                       : 'Choose one to three data dimensions to filter jointly. '}
                     {scope === 'image'
                       ? 'Applies to the current image. Other frames and slices are retained.'
@@ -585,21 +586,19 @@ export function ProcessControls({
                     ))}
                   </select>
                 </label>
-                {method.reference === 'frame' && (
-                  <label>
-                    Reference frame (zero-based)
-                    <input
-                      aria-label="Processing reference frame"
-                      type="number"
-                      value={draft.referenceFrame ?? 0}
-                      min={0}
-                      max={referenceCount - 1}
-                      step={1}
-                      required
-                      onChange={(event) => update({ referenceFrame: Number(event.target.value) })}
-                    />
-                  </label>
-                )}
+                <label>
+                  Reference frame (zero-based)
+                  <input
+                    aria-label="Processing reference frame"
+                    type="number"
+                    value={draft.referenceFrame ?? 0}
+                    min={0}
+                    max={referenceCount - 1}
+                    step={1}
+                    required
+                    onChange={(event) => update({ referenceFrame: Number(event.target.value) })}
+                  />
+                </label>
               </div>
             </InspectorSection>
           )}

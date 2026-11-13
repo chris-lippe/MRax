@@ -1533,7 +1533,7 @@ export interface components {
             /** Label */
             label: string;
             /** Reference */
-            reference: ("frame" | "series") | null;
+            reference: "frame" | null;
             /** Unavailable */
             unavailable: string | null;
         };

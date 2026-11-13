@@ -227,28 +227,6 @@ def apply_baseline(
     raise ValueError("mode must be 'subtract' or 'divide'")
 
 
-def apply_dilution_correction(
-    image_series: ArrayLike,
-    dilution: ArrayLike,
-    *,
-    baseline_frames: int = 50,
-    clip_min: float = 1e-2,
-    smooth_sigma: float = 4.0,
-) -> np.ndarray:
-    """Apply dilution correction using a baseline-normalized dilution map."""
-
-    xp = _array_module(image_series, dilution)
-    series = xp.asarray(image_series, dtype=float)
-    dil = xp.asarray(dilution, dtype=float)
-    dil = apply_baseline(dil, baseline_frames=baseline_frames, mode="divide", axis=0)
-    dil = xp.clip(dil, clip_min, None)
-    if smooth_sigma and smooth_sigma > 0:
-        dil = _gaussian_filter1d(xp, dil, sigma=smooth_sigma, axis=0, mode="reflect", truncate=4.0)
-    corrected = series / dil
-    corrected = xp.where(xp.isfinite(corrected), corrected, xp.nan)
-    return corrected
-
-
 def mean_timecourses_by_label(
     image_series: ArrayLike,
     label_mask: ArrayLike,
@@ -260,8 +238,6 @@ def mean_timecourses_by_label(
     baseline_reference_time: float | None = None,
     baseline_tail_frames: int = 3,
     smooth_sigma: float = 2.0,
-    dilution: ArrayLike | None = None,
-    dilation_baseline_frames: int = 50,
 ) -> tuple[np.ndarray, list[int]]:
     """Compute mean ROI timecourses for each label in the mask."""
 
@@ -269,14 +245,6 @@ def mean_timecourses_by_label(
     series = xp.asarray(image_series, dtype=float)
     if smooth_sigma and smooth_sigma > 0:
         series = _gaussian_filter1d(xp, series, sigma=smooth_sigma, axis=0, mode="reflect", truncate=4.0)
-
-    if dilution is not None:
-        series = apply_dilution_correction(
-            series,
-            dilution,
-            baseline_frames=dilation_baseline_frames,
-            smooth_sigma=max(0.0, smooth_sigma * 2.0),
-        )
 
     mask = xp.asarray(label_mask)
     if mask.ndim != series.ndim - 1:
@@ -382,7 +350,6 @@ def stack_timecourses_by_group(
 
 __all__ = [
     "apply_baseline",
-    "apply_dilution_correction",
     "estimate_timecourse_baseline",
     "interpolate_timecourses",
     "mean_timecourses_by_label",
