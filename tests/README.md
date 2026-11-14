@@ -5,7 +5,7 @@
 | Models and fitting | Known signals and parameter recovery, observables, units, weighting, masks, bounds, checkpoint resume and cancellation |
 | Solvers and reconstruction | Independent solver references, Fourier/NUFFT adjoints, measured samples, reconstruction stages and quantitative import-to-fit agreement |
 | Import and geometry | Bruker, DICOM, Pulseq/MRD and NIfTI dimensions, timing, orientation and multiple slice packages |
-| Processing and analysis | Denoising, noise estimates, normalization, drift, ROIs, timecourses and retained fit results |
+| Processing and analysis | Denoising, noise estimates, drift, ROIs, timecourses and retained fit results |
 | Workspaces and files | Editable/reusable pipelines, bundles, image exports, source immutability, overwrite confirmation and atomic failure handling |
 | Browser | Complete data, viewing, segmentation, processing, reconstruction, fitting, metadata, analysis and save/load workflows |
 

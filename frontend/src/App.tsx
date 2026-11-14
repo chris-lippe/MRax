@@ -240,8 +240,7 @@ export function App() {
     else if (step.kind === 'register' || step.kind === 'stored_registration')
       selectWorkflow('registration', 'alignment');
     else if (step.kind === 'drift') selectWorkflow('registration', 'drift');
-    else if (step.family === 'denoise') selectWorkflow('preprocess', 'denoising');
-    else if (step.family === 'normalize') selectWorkflow('preprocess', 'normalization');
+    else if (step.family === 'denoise') selectWorkflow('denoise', 'denoising');
     else selectWorkflow('analyze', step.family === 'analyze' ? 'statistics' : 'timecourse');
   }
   useEffect(() => {
@@ -381,7 +380,7 @@ export function App() {
     const sections: Partial<Record<ShortcutAction, Workflow>> = {
       view: 'image',
       reconstruct: 'reconstruct',
-      preprocess: 'preprocess',
+      denoise: 'denoise',
       register: 'registration',
       segment: 'rois',
       fit: 'fit',

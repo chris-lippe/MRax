@@ -16,8 +16,6 @@ type Draft = {
   axis?: string;
   axes?: Record<string, string[]>;
   parameters?: Record<string, Options>;
-  reference?: string;
-  referenceFrame?: number;
   limited?: boolean;
   rois?: string[];
   noiseRois?: string[] | null;
@@ -47,7 +45,6 @@ const choiceLabels: Record<string, string> = {
 };
 
 const actionLabels: Record<string, string> = {
-  normalize: 'Normalize signal',
   baseline: 'Apply baseline correction',
   temporal_gaussian: 'Apply temporal smoothing',
   despike: 'Remove spikes',
@@ -56,7 +53,6 @@ const actionLabels: Record<string, string> = {
 
 const methodLabels: Record<ProcessingSection, string> = {
   denoise: 'Denoiser',
-  normalize: 'Normalization method',
   series: 'Time-series correction',
   analyze: 'Map calculation',
 };
@@ -97,8 +93,6 @@ export function ProcessControls({
         axis: String(options.axis ?? ''),
         axes: { [method]: (options.axes as string[]) ?? [] },
         parameters: { [method]: (options.parameters as Options) ?? {} },
-        reference: String(options.reference_experiment ?? ''),
-        referenceFrame: Number(options.reference_frame ?? 0),
         limited: options.roi_names !== null && options.roi_names !== undefined,
         rois: (options.roi_names as string[]) ?? [],
         noiseRois: (options.noise_roi_names as string[] | null) ?? null,
@@ -206,8 +200,6 @@ export function ProcessControls({
     method?.axes === 'filter'
       ? { scope, indices: selectedIndices, plane_dims: scope === 'image' ? planeDims : undefined }
       : {};
-  const reference = draft.reference ?? w?.experiment ?? '';
-  const referenceCount = w?.experiment_catalog.find((e) => e.name === reference)?.frames ?? 1;
   const rois =
     draft.rois ?? w?.rois.filter((r) => r.enabled && r.pixels > 0).map((r) => r.name) ?? [];
   const scopedRois = rois.filter((name) =>
@@ -339,23 +331,13 @@ export function ProcessControls({
             roi_names: limited ? scopedRois : null,
             noise_roi_names:
               ['bm3d', 'bm4d'].includes(method.id) && parameters.sigma == null ? noiseRois : null,
-            reference_experiment: method.reference ? reference : undefined,
-            reference_frame: method.reference ? (draft.referenceFrame ?? 0) : undefined,
           });
         }}
       >
         <fieldset className="control-form" disabled={busy || !w?.loaded || !catalog}>
           <InspectorSection
             title={methodLabel + ' and input'}
-            icon={
-              section === 'denoise'
-                ? 'denoise'
-                : section === 'normalize'
-                  ? 'normalize'
-                  : section === 'analyze'
-                    ? 'maps'
-                    : 'series'
-            }
+            icon={section === 'denoise' ? 'denoise' : section === 'analyze' ? 'maps' : 'series'}
           >
             <div className="field-grid">
               <label className="field-wide">
@@ -565,43 +547,6 @@ export function ProcessControls({
               )}
             </InspectorSection>
           )}
-          {method?.reference && (
-            <InspectorSection
-              title="Reference"
-              icon="image"
-              help="Reference grids must match. Register mismatched experiments first."
-            >
-              <div className="field-grid">
-                <label>
-                  Reference experiment
-                  <select
-                    aria-label="Processing reference experiment"
-                    value={reference}
-                    onChange={(event) =>
-                      update({ reference: event.target.value, referenceFrame: 0 })
-                    }
-                  >
-                    {w?.experiments.map((name) => (
-                      <option key={name}>{name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Reference frame (zero-based)
-                  <input
-                    aria-label="Processing reference frame"
-                    type="number"
-                    value={draft.referenceFrame ?? 0}
-                    min={0}
-                    max={referenceCount - 1}
-                    step={1}
-                    required
-                    onChange={(event) => update({ referenceFrame: Number(event.target.value) })}
-                  />
-                </label>
-              </div>
-            </InspectorSection>
-          )}
           <InspectorSection title="Region" icon="rois">
             <label className="check-label">
               <input
@@ -642,13 +587,11 @@ export function ProcessControls({
             {limited && !scopedRois.length && (
               <p className="control-note">Select a nonempty mask, or process the entire image.</p>
             )}
-            {limited &&
-              (method?.id === 'normalize' ||
-                (method?.id === 'baseline' && parameters.mode === 'divide')) && (
-                <p className="control-note">
-                  Normalized results have missing values outside the selected masks.
-                </p>
-              )}
+            {limited && method?.id === 'baseline' && parameters.mode === 'divide' && (
+              <p className="control-note">
+                Normalized results have missing values outside the selected masks.
+              </p>
+            )}
           </InspectorSection>
           <div className="inspector-actionbar">
             <button
@@ -658,13 +601,7 @@ export function ProcessControls({
             >
               <WorkbenchIcon name="apply" />
               {editing
-                ? 'Stage ' +
-                  (section === 'denoise'
-                    ? 'denoising'
-                    : section === 'normalize'
-                      ? 'normalization'
-                      : 'time-series') +
-                  ' settings'
+                ? 'Stage ' + (section === 'denoise' ? 'denoising' : 'time-series') + ' settings'
                 : section === 'denoise'
                   ? 'Apply denoising'
                   : (actionLabels[method?.id ?? ''] ?? 'Apply processing')}

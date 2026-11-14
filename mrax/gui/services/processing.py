@@ -15,18 +15,16 @@ from mrax.analysis import (
     ROI,
     apply_baseline,
     compute_dti_maps,
-    compute_z_spectra,
     nan_gaussian_filter,
     replace_isolated_spikes,
 )
 from mrax.analysis.roi import broadcast_mask
 from mrax.data_struct import Quantity
-from mrax.data_struct.dimensions import reshape_dims_to_frames, reshape_frames_to_dims
 from mrax.gui.registration import inverse_transform, resample_mask_with_transform
 from mrax.preprocessing import denoise_bm3d, denoise_bm4d, denoise_filter, regularized_denoise
 
 from .cloning import clone_workspace
-from .scene import fitting_roi, require_common_grid
+from .scene import fitting_roi
 from .view_data import scalar_component
 from .view_state import WorkspaceFitInputs
 
@@ -108,8 +106,7 @@ def processing_methods(session):
                 "group": "Denoise",
                 "fields": [*fields, boundary, complex_mode],
                 "axes": "filter",
-                "reference": None,
-                "unavailable": None,
+                    "unavailable": None,
             }
         )
     methods.append(
@@ -118,7 +115,6 @@ def processing_methods(session):
             "label": "Regularized denoising",
             "group": "Denoise",
             "axes": "filter",
-            "reference": None,
             "unavailable": None,
             "fields": [
                 _field(
@@ -165,8 +161,7 @@ def processing_methods(session):
                 "group": "Denoise",
                 "axes": "filter",
                 "axis_count": 2 if key == "bm3d" else 3,
-                "reference": None,
-                "unavailable": None
+                    "unavailable": None
                 if importlib.util.find_spec(key)
                 else f"Requires the optional {key} package (mrax[denoise-external]).",
                 "fields": [
@@ -232,8 +227,7 @@ def processing_methods(session):
                 "label": "Baseline correction",
                 "group": "Time series",
                 "axes": "series",
-                "reference": None,
-                "unavailable": unavailable,
+                    "unavailable": unavailable,
                 "fields": [
                     baseline,
                     _field(
@@ -250,8 +244,7 @@ def processing_methods(session):
                 "label": "Temporal Gaussian smoothing",
                 "group": "Time series",
                 "axes": "series",
-                "reference": None,
-                "unavailable": unavailable,
+                    "unavailable": unavailable,
                 "fields": [_field("sigma", "Sigma (samples)", value=1.0, minimum=0, maximum=100)],
             },
             {
@@ -259,8 +252,7 @@ def processing_methods(session):
                 "label": "Isolated-spike correction",
                 "group": "Time series",
                 "axes": "series",
-                "reference": None,
-                "unavailable": unavailable
+                    "unavailable": unavailable
                 if count >= 3
                 else "Requires at least three samples on the acquisition axis.",
                 "fields": [
@@ -274,29 +266,11 @@ def processing_methods(session):
                 ],
             },
             {
-                "id": "normalize",
-                "label": "Reference normalization / Z spectra",
-                "group": "Normalize",
-                "axes": "none",
-                "reference": "frame",
-                "unavailable": None,
-                "fields": [
-                    _field(
-                        "epsilon",
-                        "Minimum reference magnitude",
-                        compute_z_spectra,
-                        minimum=1e-15,
-                        maximum=1e6,
-                    )
-                ],
-            },
-            {
                 "id": "dti",
                 "label": "Diffusion tensor metrics",
                 "group": "Derived maps",
                 "axes": "none",
-                "reference": None,
-                "unavailable": None
+                    "unavailable": None
                 if all(name in session.map_names for name in TENSOR_FIELDS)
                 else "Requires fitted dxx, dyy, dzz, dxy, dxz and dyz maps.",
                 "fields": [],
@@ -496,87 +470,6 @@ def _source(workspace, key, component):
     return data, dims, observables, model, unit, geometry, rois
 
 
-def _same_grid(source, dims, spatial_dims, geometry, *, reference_frame):
-    count = math.prod(size for name, size in dims.items() if name not in spatial_dims)
-    for frame in range(count):
-        require_common_grid(
-            source.spatial_dim_names,
-            source.spatial_shape,
-            source.build_dataset().spatial_geometry,
-            spatial_dims,
-            tuple(dims[name] for name in spatial_dims),
-            geometry,
-            source_frame=reference_frame,
-            target_frame=frame,
-        )
-
-
-def _reference(workspace, options, dims, unit, geometry):
-    name = options.get("reference_experiment")
-    if name not in workspace.session.experiment_names:
-        raise ValueError("Choose a reference experiment")
-    context = clone_workspace(workspace).session
-    context.select_experiment(name)
-    index = options.get("reference_frame", 0)
-    if (
-        not isinstance(index, int)
-        or isinstance(index, bool)
-        or not 0 <= index < context.frame_count
-    ):
-        raise ValueError("Reference frame is out of range")
-    package_reference = "slice_package" in dims and "slice_package" in context.experiment_dims
-    if not package_reference:
-        _same_grid(
-            context,
-            dims,
-            workspace.session.spatial_dim_names,
-            geometry,
-            reference_frame=index,
-        )
-    array = np.asarray(context.image_array)
-    component = options.get("component", "auto")
-    reference_unit = (context.current_experiment.get("extra_metadata") or {}).get("image_unit", "")
-    if np.iscomplexobj(array) and component == "auto":
-        raise ValueError("Choose an input component explicitly for complex reference normalization")
-    if component != "auto":
-        array = scalar_component(array, component)
-        if component == "phase":
-            reference_unit = "rad"
-    if unit != reference_unit:
-        raise ValueError("Input and reference data must have matching units")
-    if package_reference:
-        count = dims["slice_package"]
-        if context.experiment_dims["slice_package"] != count:
-            raise ValueError("Input and reference must have the same slice packages")
-        source_frames = (
-            math.prod(size for name, size in dims.items() if name not in context.spatial_dim_names)
-            // count
-        )
-        reference_frames = context.frame_count // count
-        if index >= reference_frames:
-            raise ValueError("Choose a reference frame within one slice package")
-        frames = reshape_dims_to_frames(array, context.experiment_dims)
-        reference_geometry = context.build_dataset().spatial_geometry
-        references = []
-        for package in range(count):
-            reference_index = package * reference_frames + index
-            for frame in range(source_frames):
-                target_index = package * source_frames + frame
-                require_common_grid(
-                    context.spatial_dim_names,
-                    reference_geometry.shape_for_frame(reference_index),
-                    reference_geometry,
-                    workspace.session.spatial_dim_names,
-                    geometry.shape_for_frame(target_index),
-                    geometry,
-                    source_frame=reference_index,
-                    target_frame=target_index,
-                )
-            references.append(frames[reference_index])
-        return np.stack(references)
-    return np.asarray(reshape_dims_to_frames(array, context.experiment_dims))[index]
-
-
 def _filter(
     data, axes, method, parameters, progress, *, reports=None, roi_estimate=None, measured=None
 ):
@@ -647,9 +540,7 @@ def _create_result(workspace, data, context, options, method, parameters, source
 
     session = workspace.session
     _original, dims, observables, model, unit, geometry, _rois = context
-    if method["id"] == "normalize" or (
-        method["id"] == "baseline" and parameters["mode"] == "divide"
-    ):
+    if method["id"] == "baseline" and parameters["mode"] == "divide":
         unit, model = "1", "identity"
     if data.shape != tuple(dims.values()) or not np.any(np.isfinite(data)):
         raise ValueError("Processing must produce finite samples on the declared input grid")
@@ -878,28 +769,13 @@ def apply_processing(workspace, options, progress):
             result = np.moveaxis(
                 replace_isolated_spikes(np.moveaxis(data, axis, 0), **parameters), 0, axis
             )
-        elif key == "normalize":
-            frames = reshape_dims_to_frames(data, dims)
-            options.setdefault("reference_frame", 0)
-            reference = _reference(workspace, options, dims, context[4], context[5])
-            if "slice_package" in dims:
-                groups = frames.reshape((dims["slice_package"], -1) + frames.shape[1:])
-                result = np.concatenate(
-                    [
-                        np.asarray(compute_z_spectra(group, ref, **parameters))
-                        for group, ref in zip(groups, reference, strict=True)
-                    ]
-                )
-            else:
-                result = compute_z_spectra(frames, reference, **parameters)
-            result = reshape_frames_to_dims(np.asarray(result), dims)
         else:
             raise ValueError("Unsupported processing method")
         progress(1, 1, "Processing complete")
     result = np.asarray(result)
     if roi is not None:
         mask = broadcast_mask(roi.mask, data.shape, mask_dims=roi.dims, target_dims=tuple(dims))
-        changes_unit = key == "normalize" or (key == "baseline" and parameters["mode"] == "divide")
+        changes_unit = key == "baseline" and parameters["mode"] == "divide"
         result = np.where(mask, result, np.nan if changes_unit else data)
     summary = _create_result(
         workspace,

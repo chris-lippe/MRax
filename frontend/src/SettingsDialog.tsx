@@ -281,7 +281,7 @@ export function SettingsDialog({
                     <section aria-label="Workflow tutorial preferences">
                       <h3>Guided workflow</h3>
                       <p>
-                        Follow a synthetic T2 study through reconstruction, preprocessing, editable
+                        Follow a synthetic T2 study through reconstruction, denoising, editable
                         pipelines, ROI masks, fitting, signal analysis and reusable workflows. Steps
                         can be skipped or revisited.
                       </p>

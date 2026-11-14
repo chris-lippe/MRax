@@ -54,7 +54,7 @@ save_workspace_bundle(StudyWorkspace('test', 'Independent packages', session), s
   await openWorkspace(page, source);
   const workspace = async () =>
     (await (await request.get('/api/workspaces')).json())[0] as Workspace;
-  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await selectWorkflow(page, 'Denoise');
   const scope = page.getByRole('combobox', { name: 'Denoising scope', exact: true });
   await expect(scope).toHaveValue('package');
   const packages = page.getByRole('combobox', { name: 'Slice package', exact: true });

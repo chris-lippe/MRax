@@ -5,7 +5,6 @@ import { WorkbenchIcon } from './WorkbenchIcon';
 export const processingGroups = {
   denoise: 'Denoise',
   series: 'Time series',
-  normalize: 'Normalize',
   analyze: 'Derived maps',
 } as const;
 
@@ -28,12 +27,9 @@ export const workflows = [
     tasks: [{ id: 'reconstruction', label: 'Image reconstruction', icon: 'reconstruct' }],
   },
   {
-    id: 'preprocess',
-    label: 'Preprocess',
-    tasks: [
-      { id: 'denoising', label: 'Denoising', icon: 'denoise' },
-      { id: 'normalization', label: 'Signal normalization', icon: 'normalize' },
-    ],
+    id: 'denoise',
+    label: 'Denoise',
+    tasks: [{ id: 'denoising', label: 'Denoising', icon: 'denoise' }],
   },
   {
     id: 'registration',

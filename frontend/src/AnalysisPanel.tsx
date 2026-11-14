@@ -47,11 +47,9 @@ export function AnalysisPanel(
       ? 'denoise'
       : task === 'timecourse'
         ? 'series'
-        : task === 'normalization'
-          ? 'normalize'
-          : task === 'statistics'
-            ? 'analyze'
-            : null;
+        : task === 'statistics'
+          ? 'analyze'
+          : null;
   const workflow = workflows.find((item) => item.id === section)!;
   return (
     <aside
@@ -72,7 +70,7 @@ export function AnalysisPanel(
         {props.workspace?.loaded && (
           <span className="inspector-context">{props.workspace.experiment}</span>
         )}
-        {['preprocess', 'registration', 'analyze'].includes(section) && (
+        {['denoise', 'registration', 'analyze'].includes(section) && (
           <button
             className="secondary small workflow-library-trigger"
             data-tutorial="processing-workflows"

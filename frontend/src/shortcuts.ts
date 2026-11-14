@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 export const shortcutDefinitions = [
   { id: 'view', label: 'View', context: 'app', binding: 'Ctrl+Shift+1' },
   { id: 'reconstruct', label: 'Reconstruct', context: 'app', binding: 'Ctrl+Shift+2' },
-  { id: 'preprocess', label: 'Preprocess', context: 'app', binding: 'Ctrl+Shift+3' },
+  { id: 'denoise', label: 'Denoise', context: 'app', binding: 'Ctrl+Shift+3' },
   { id: 'register', label: 'Register', context: 'app', binding: 'Ctrl+Shift+4' },
   { id: 'segment', label: 'Segment', context: 'app', binding: 'Ctrl+Shift+5' },
   { id: 'fit', label: 'Fit', context: 'app', binding: 'Ctrl+Shift+6' },

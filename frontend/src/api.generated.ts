@@ -484,6 +484,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workspaces/{key}/fit-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fit Check */
+        post: operations["fit_check_api_workspaces__key__fit_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workspaces/{key}/fit-frames": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fit Frames */
+        get: operations["fit_frames_api_workspaces__key__fit_frames_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workspaces/{key}/fit-options": {
         parameters: {
             query?: never;
@@ -1063,6 +1097,54 @@ export interface components {
             /** Root */
             root: string;
         };
+        /** FitCheckCommand */
+        FitCheckCommand: {
+            /**
+             * Device
+             * @default cpu
+             */
+            device: string;
+            /** Excluded Frames */
+            excluded_frames?: number[] | null;
+            /** Revision */
+            revision: number;
+            /**
+             * Roi Names
+             * @default []
+             */
+            roi_names: string[];
+            /**
+             * Settings
+             * @default {}
+             */
+            settings: {
+                [key: string]: unknown;
+            };
+            /**
+             * Use Roi
+             * @default true
+             */
+            use_roi: boolean;
+            /** View Revision */
+            view_revision?: number | null;
+        };
+        /** FitReadinessResult */
+        FitReadinessResult: {
+            /** Errors */
+            errors: string[];
+            /** Model */
+            model: string | null;
+            /** Name */
+            name: string;
+            /** Notes */
+            notes: string[];
+            /** Ok */
+            ok: boolean;
+            /** Report */
+            report: string;
+            /** Warnings */
+            warnings: string[];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1532,8 +1614,6 @@ export interface components {
             id: string;
             /** Label */
             label: string;
-            /** Reference */
-            reference: "frame" | null;
             /** Unavailable */
             unavailable: string | null;
         };
@@ -3121,6 +3201,75 @@ export interface operations {
     comparison_api_workspaces__key__comparison_get: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fit_check_api_workspaces__key__fit_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FitCheckCommand"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FitReadinessResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fit_frames_api_workspaces__key__fit_frames_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
             header?: never;
             path: {
                 key: string;

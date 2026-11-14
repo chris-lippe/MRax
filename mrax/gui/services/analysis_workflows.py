@@ -45,6 +45,8 @@ from .view_state import WorkspaceFitInputs
 
 
 def set_fit_settings(workspace, values):
+    from .fit_setup import fitting_dimensions
+
     session = workspace.session
     allowed = {field.name for field in dataclasses.fields(FitSettings)}
     if set(values) - allowed:
@@ -78,6 +80,8 @@ def set_fit_settings(workspace, values):
             lo, hi = override["bounds"]
             if not np.isfinite([lo, hi]).all() or lo >= hi:
                 raise ValueError("Parameter lower bounds must be below upper bounds")
+    dimensions = fitting_dimensions(session, model)
+    dimension_names = [dimension["name"] for dimension in dimensions]
     for name, entries in proposed.regularizer_configs.items():
         if name not in specs:
             raise ValueError("A regularizer references an unknown parameter")
@@ -88,6 +92,22 @@ def set_fit_settings(workspace, values):
                 or float(entry.get("weight", 0)) < 0
             ):
                 raise ValueError("Invalid regularization type or weight")
+            if entry.get("axes") is not None:
+                axes = []
+                for axis in entry["axes"]:
+                    if isinstance(axis, str) and axis in dimension_names:
+                        axis = dimension_names.index(axis)
+                    elif isinstance(axis, (int, np.integer)) and not isinstance(axis, bool):
+                        axis = int(axis) if axis >= 0 else len(dimensions) + int(axis)
+                    else:
+                        raise ValueError("Choose detected regularization dimensions")
+                    if not 0 <= axis < len(dimensions):
+                        raise ValueError("Choose detected regularization dimensions")
+                    if axis not in axes:
+                        axes.append(axis)
+                if not axes and entry.get("weight", 0) > 0:
+                    raise ValueError("Select at least one regularization dimension")
+                entry["axes"] = axes
     session.fit_settings = proposed
     session._save_current_view_state()
 
@@ -512,6 +532,10 @@ def run_operation(workspace, operation, options, progress):
     if operation in {"preview", "full_fit"}:
         if options.get("settings") is not None:
             set_fit_settings(workspace, options["settings"])
+        if "excluded_frames" in options:
+            from .fit_setup import apply_fit_exclusions
+
+            apply_fit_exclusions(session, options["excluded_frames"])
         roi_name = options.get("roi_name") or session.fit_settings.selected_roi
         selected_mask = None
         use_roi = bool(options.get("use_roi", True))

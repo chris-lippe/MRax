@@ -58,7 +58,7 @@ test('processing stays in one experiment and an editable pipeline preserves sour
   await selectWorkflow(page, 'View', 'Image and ROI overlays');
   await page.getByLabel('Show Tissue', { exact: true }).uncheck();
 
-  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await selectWorkflow(page, 'Denoise');
   await expect(page.getByLabel('Filter axis frame', { exact: true })).not.toBeChecked();
   await expect(page.getByLabel('Filter axis x', { exact: true })).toBeChecked();
   await page.getByLabel('Sigma (voxels)', { exact: true }).fill('1.2');
@@ -127,7 +127,7 @@ test('processing stays in one experiment and an editable pipeline preserves sour
   const gaussian = pipeline.getByRole('listitem', { name: 'Gaussian denoising', exact: true });
   await gaussian.getByRole('button', { name: 'Edit', exact: true }).click();
   await pipeline.getByRole('button', { name: 'Use action controls', exact: true }).click();
-  await expect(page.getByRole('tab', { name: 'Preprocess', exact: true })).toHaveAttribute(
+  await expect(page.getByRole('tab', { name: 'Denoise', exact: true })).toHaveAttribute(
     'aria-selected',
     'true',
   );

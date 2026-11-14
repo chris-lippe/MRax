@@ -64,7 +64,7 @@ test('processing workflows save, edit, share across studies and batch experiment
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/');
   await loadExample(page);
-  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await selectWorkflow(page, 'Denoise');
   let releaseTargets = () => {};
   await page.route('**/api/workflow-targets', async (route) => {
     await new Promise<void>((resolve) => {
@@ -98,7 +98,7 @@ test('processing workflows save, edit, share across studies and batch experiment
   await modal.getByRole('button', { name: 'Done', exact: true }).click();
   await loadExample(page, 'multimodal');
   const before = await workspaces(request);
-  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await selectWorkflow(page, 'Denoise');
   await page.getByRole('button', { name: 'Processing workflows', exact: true }).click();
   await modal.getByRole('button', { name: /Shared Gaussian/ }).click();
   await modal

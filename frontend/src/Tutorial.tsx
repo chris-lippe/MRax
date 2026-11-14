@@ -99,7 +99,7 @@ export function Tutorial({
     if (step.id === 'reconstruct')
       selector = inContext ? '[data-tutorial="reconstruct-apply"]' : '#workflow-reconstruct';
     if (step.id === 'denoise')
-      selector = inContext ? '[data-tutorial="denoise-apply"]' : '#workflow-preprocess';
+      selector = inContext ? '[data-tutorial="denoise-apply"]' : '#workflow-denoise';
     if (step.id === 'pipeline')
       selector = pipelineChanged
         ? '[data-tutorial="pipeline-discard"]'
@@ -132,7 +132,7 @@ export function Tutorial({
     if (step.id === 'signal')
       selector = inContext ? '[aria-label="Scientific signal viewer"]' : '#workflow-image';
     if (step.id === 'workflows')
-      selector = inContext ? '[data-tutorial="processing-workflows"]' : '#workflow-preprocess';
+      selector = inContext ? '[data-tutorial="processing-workflows"]' : '#workflow-denoise';
     if (step.id === 'files') selector = '[aria-label="Workspace files"]';
   }
   const [geometry, setGeometry] = useState<{

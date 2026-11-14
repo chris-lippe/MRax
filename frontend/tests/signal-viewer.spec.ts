@@ -73,7 +73,7 @@ test('scientific viewer inspects samples, customizes axes, summarizes ranges and
   const whole = await current(request);
   expect(whole.selected_roi).toBe('Anterior');
   expect(whole.rois).toHaveLength(2);
-  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await selectWorkflow(page, 'Denoise');
   await expect(roi).toHaveValue('');
   await selectWorkflow(page, 'View', 'Signal curves');
   await expect(page.getByRole('combobox', { name: 'Signal ROI', exact: true })).toHaveValue('');
@@ -88,7 +88,7 @@ test('scientific viewer inspects samples, customizes axes, summarizes ranges and
   await expect.poll(async () => (await current(request)).timecourse?.dimension).toBe('x');
   await preview.getByRole('button', { name: 'Data table', exact: true }).click();
   await expect(preview.locator('tbody tr')).toHaveCount((await current(request)).dimensions.x);
-  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await selectWorkflow(page, 'Denoise');
   await expect(axis).toBeVisible();
   await expect(axis).toHaveValue('x');
   await axis.selectOption('auto');
@@ -249,7 +249,7 @@ session.save_imported_study(sys.argv[1])
         (await (await request.get('/api/workspaces/' + spectrum.id)).json()).timecourse.observed[0],
     )
     .toBeCloseTo(spectrum.timecourse!.observed[0]!, 5);
-  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await selectWorkflow(page, 'Denoise');
   await expect(plot).toBeVisible();
   const frame = page.locator('.signal-navigation input[type="range"]');
   await expect(frame).toHaveCount(1);

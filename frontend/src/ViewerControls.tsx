@@ -107,7 +107,7 @@ export function ViewerControls({
             </button>
           </div>
         )}
-        {context.section === 'preprocess' && (
+        {context.section === 'denoise' && (
           <button
             className="secondary"
             aria-pressed={comparison.enabled}

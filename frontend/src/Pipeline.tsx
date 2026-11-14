@@ -54,9 +54,7 @@ function icon(step: PipelineStep) {
           ? 'drift'
           : step.family === 'denoise'
             ? 'denoise'
-            : step.family === 'normalize'
-              ? 'normalize'
-              : 'series';
+            : 'series';
 }
 
 export function Pipeline({
@@ -221,7 +219,7 @@ export function Pipeline({
             )
           : insertion === 'drift'
             ? insertedStep('drift', { settings: {}, roi_name: w.selected_roi }, 'Drift correction')
-            : processDraftStep(w, catalog, insertion);
+            : processDraftStep(catalog, insertion);
       const next = [...current.steps];
       const minimum = next[0]?.kind === 'reconstruct' ? 1 : 0;
       next.splice(

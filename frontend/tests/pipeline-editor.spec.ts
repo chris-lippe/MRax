@@ -29,7 +29,7 @@ async function expand(page: Page) {
 async function setup(page: Page, request: APIRequestContext, baseline = true) {
   await page.goto('/');
   await loadExample(page);
-  await selectWorkflow(page, 'Preprocess', 'Denoising');
+  await selectWorkflow(page, 'Denoise');
   await page.getByLabel('Sigma (voxels)', { exact: true }).fill('0.6');
   await page.getByRole('button', { name: 'Apply denoising', exact: true }).click();
   await expect.poll(async () => (await current(request)).pipeline.steps.length).toBe(1);

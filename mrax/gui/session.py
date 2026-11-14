@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from copy import copy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
@@ -24,6 +25,7 @@ from mrax.data_struct import (
     save_study_results,
 )
 from mrax.data_struct.dimensions import (
+    expand_observables_to_frames,
     frame_count_from_dims,
     non_spatial_names,
     reshape_dims_to_frames,
@@ -35,7 +37,7 @@ from mrax.data_struct.storage import load_study_results
 from mrax.devices import DeviceLike
 from mrax.reco.components import reconstruction_variant
 
-from .models import make_model, normalize_model_key
+from .models import make_model, model_fit_inputs, normalize_model_key
 
 _LOG = logging.getLogger(__name__)
 
@@ -2170,6 +2172,8 @@ class GuiSession:
             if (
                 self.fit_settings.param_overrides
                 or self.fit_settings.selected_pools
+                or self.fit_settings.pool_overrides
+                or self.fit_settings.parameter_constant_dims
                 or (
                     selected
                     and normalize_model_key(selected)
@@ -2195,7 +2199,8 @@ class GuiSession:
                 parameter_constant_dims=self.fit_settings.parameter_constant_dims or None,
             )
             dataset = self.build_dataset()
-        if experiment.exp_type == "sat_trans":
+        inputs = model_fit_inputs(getattr(model, "name", None))
+        if experiment.exp_type == "sat_trans" and inputs.reference_scan:
             source_study = self.fit_study()
             if source_study is None or self.selected_experiment is None:
                 raise RuntimeError("A loaded study is required to normalize saturation-transfer scans")
@@ -2204,7 +2209,7 @@ class GuiSession:
                 self.selected_experiment,
                 reference=self.fit_settings.sat_trans_reference_scan,
             )
-        if normalize_model_key(getattr(model, "name", None)) in {"ab_mt_n", "zaiss_full"}:
+        if inputs.prior_maps:
             experiment = self._insert_ab_mt_prior_maps(experiment)
         study = Study(
             [experiment],
@@ -2533,10 +2538,18 @@ class GuiSession:
         model_name: str | None = None,
         input_experiment: Experiment | None = None,
         input_dataset: DataSet | None = None,
+        input_roi: ROI | None = None,
+        use_roi: bool = False,
     ) -> dict[str, Any]:
         """Run the core MRax pre-fit sanity check for current GUI fit inputs."""
 
         try:
+            from mrax.core.loss_builder import (
+                _field_metadata,
+                _frame_mask_from_observables,
+                _normalize_constant_dims,
+            )
+
             experiment, model, dataset, _study = self.build_fit_inputs(model_name)
             if input_experiment is not None or input_dataset is not None:
                 if input_experiment is None or input_dataset is None:
@@ -2548,16 +2561,80 @@ class GuiSession:
                 dataset,
                 study_globals=dict((self.data or {}).get("study_globals") or {}),
             )
+            errors, warnings, notes = report.errors, report.warnings, report.notes
+            errors.extend("Missing observable: " + name for name in report.missing_observables)
+            errors.extend(
+                "Provide one of: " + ", ".join(group) for group in report.missing_any_of
+            )
+            report.missing_observables.clear()
+            report.missing_any_of.clear()
+            field_shape, field_names, _ = _field_metadata(experiment, model=model)
+            _normalize_constant_dims(model.parameter_constant_dims, field_names, field_shape)
+            params, unpack = model.parametrization_factory((1, 1))
+            for name, value in unpack(params).items():
+                if not np.isfinite(np.asarray(value)).all():
+                    errors.append("Initial parameter values must be finite: " + name)
+            count = frame_count_from_dims(experiment.dims)
+            included = (
+                np.asarray(self.frame_mask.as_array(), dtype=bool)
+                if self.frame_mask is not None else np.ones(count, dtype=bool)
+            )
+            observables = {
+                **dict((self.data or {}).get("study_globals") or {}),
+                **dict(experiment.observables),
+            }
+            arrays = expand_observables_to_frames(
+                observables, experiment.dims, getattr(experiment, "_mrax_dim_observables", None),
+            )
+            if self.fit_settings.auto_mask_nan_observables:
+                observable_mask = _frame_mask_from_observables(arrays, experiment)
+                if observable_mask is not None and included.shape == (count,):
+                    usable = np.asarray(observable_mask, dtype=bool)
+                    removed = int(np.count_nonzero(included & ~usable))
+                    if removed:
+                        warnings.append(f"Excluded {removed} frames with non-finite observables.")
+                    included = included & usable
+            for name, values in arrays.items():
+                values = np.asarray(values)
+                if (values.ndim == 0 or not self.fit_settings.auto_mask_nan_observables) and not np.isfinite(values).all():
+                    errors.append("Observable must be finite: " + name)
+            if included.shape != (count,) or not included.any():
+                errors.append("Keep at least one valid included frame")
+            else:
+                roi = input_roi if input_roi is not None else (self.roi() if use_roi else None)
+                if use_roi and roi is None:
+                    errors.append("Select at least one nonempty ROI, or choose Whole image")
+                data = np.asarray(dataset.data)
+                frames = reshape_dims_to_frames(data, experiment.dims)
+                masks = None
+                if roi is not None:
+                    mask = broadcast_mask(
+                        roi.mask, data.shape,
+                        mask_dims=self._roi_mask_dims(roi, tuple(experiment.spatial_dim_names)),
+                        target_dims=tuple(experiment.dims),
+                    )
+                    masks = reshape_dims_to_frames(mask, experiment.dims)
+                if not any(
+                    np.any(np.isfinite(frames[index]) & (masks[index] != 0))
+                    if masks is not None else np.isfinite(frames[index]).any()
+                    for index in np.flatnonzero(included)
+                ):
+                    errors.append("No finite image samples remain in the selected region and frames")
+                notes.append(f"Included frames: {int(included.sum())} of {count}.")
             text = report.explain()
             ok = bool(report.ok)
         except Exception as exc:
             text = "Fit sanity check\nerrors:\n  - " + str(exc) + "\nstatus: fix required items before running run_fit"
             ok = False
+            errors, warnings, notes = [str(exc)], [], []
         return {
             "name": self.selected_experiment or "gui_fit",
             "model": model_name or self.fit_settings.model_name or self.current_model_name,
             "ok": ok,
             "report": text,
+            "errors": errors,
+            "warnings": warnings,
+            "notes": notes,
         }
 
     def run_preview_fit(
@@ -2596,6 +2673,36 @@ class GuiSession:
             observables=dict(experiment.observables),
             exp_type=experiment.exp_type,
         )
+        if getattr(experiment, "_mrax_dim_observables", None) is not None:
+            preview_exp._mrax_dim_observables = dict(experiment._mrax_dim_observables)
+        from mrax.core.loss_builder import _field_metadata, _normalize_constant_dims
+
+        field_shape, field_names, _ = _field_metadata(experiment, model=model)
+        _, preview_names, _ = _field_metadata(preview_exp, model=model)
+        retained = {
+            axis: preview_names.index(name) for axis, name in enumerate(field_names)
+            if name not in experiment.spatial_dim_names and name in preview_names
+        }
+        model = copy(model)
+        constants = _normalize_constant_dims(model.parameter_constant_dims, field_names, field_shape)
+        model.parameter_constant_dims = {
+            name: tuple(retained[axis] for axis in axes if axis in retained)
+            for name, axes in constants.items()
+        }
+        regularizers = {}
+        for name, entries in (self.fit_settings.regularizer_configs or model.regularizer_configs or {}).items():
+            for entry in entries:
+                axes = entry.get("axes")
+                axes = list(range(len(field_names))) if axes is None else axes
+                axes = [field_names.index(axis) if isinstance(axis, str) else int(axis)
+                        for axis in axes]
+                axes = [axis if axis >= 0 else len(field_names) + axis for axis in axes]
+                if any(not 0 <= axis < len(field_names) for axis in axes):
+                    raise ValueError("Choose detected regularization dimensions")
+                axes = [retained[axis] for axis in axes if axis in retained]
+                if axes:
+                    regularizers.setdefault(name, []).append({**entry, "axes": axes})
+        model.reg_weights = {}
         preview_ds = DataSet(data=jnp.asarray(preview_data), name="roi_preview")
         frame_mask = self.frame_mask.as_array() if self.frame_mask is not None else None
         fields, losses, model_fn = run_fit(
@@ -2607,7 +2714,7 @@ class GuiSession:
             frame_mask=frame_mask,
             study_globals=dict((self.data or {}).get("study_globals") or {}),
             auto_mask_nan_observables=self.fit_settings.auto_mask_nan_observables,
-            regularizer_configs=self.fit_settings.regularizer_configs or None,
+            regularizer_configs=regularizers,
             return_model_callable=True,
             progress_callback=progress_callback,
             device=device,

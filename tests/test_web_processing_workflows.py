@@ -126,15 +126,8 @@ def test_denoise_fit_statistics_and_save_form_one_workflow(client):
         name="Normalized",
     )
     assert w["model"] == "identity" and w["unit"] == "1"
-    before = np.asarray(client.app.state.records[w["id"]].workspace.session.image_array).copy()
-    w, _ = job(
-        client, w, "process", method="normalize", input="image",
-        reference_experiment="Noisy", reference_frame=0,
-    )
-    normalized = np.asarray(client.app.state.records[w["id"]].workspace.session.image_array)
-    np.testing.assert_allclose(normalized, before / before[0], rtol=1e-6)
     catalog = client.get(f"/api/workspaces/{w['id']}/processing").json()
-    assert [row["method"] for row in catalog["history"]] == ["gaussian", "baseline", "normalize"]
+    assert [row["method"] for row in catalog["history"]] == ["gaussian", "baseline"]
     bundle = client.post(f"/api/workspaces/{w['id']}/save")
     restored = client.post("/api/workspaces/upload", content=bundle.content)
     assert restored.status_code == 200, restored.text

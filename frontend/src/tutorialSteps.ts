@@ -58,14 +58,14 @@ export const tutorialSteps: readonly TutorialStep[] = [
     id: 'denoise',
     title: 'Denoise the current images',
     action: 'Open Denoising',
-    context: { section: 'preprocess', task: 'denoising' },
-    text: 'Choose Gaussian in Preprocess → Denoising, then Apply denoising. It uses the image at this point in the pipeline. Preprocess also contains signal normalization.',
+    context: { section: 'denoise', task: 'denoising' },
+    text: 'Choose Gaussian in Denoise, then Apply denoising. It uses the current pipeline images.',
   },
   {
     id: 'pipeline',
     title: 'Edit the processing pipeline',
     action: 'Show pipeline controls',
-    context: { section: 'preprocess', task: 'denoising' },
+    context: { section: 'denoise', task: 'denoising' },
     text: 'Expand Processing pipeline. Edit the Gaussian block, change a setting, then Apply pipeline or Discard changes. Insert, copy, move or remove blocks as needed. Images update when you apply the draft.',
   },
   {
@@ -102,7 +102,7 @@ export const tutorialSteps: readonly TutorialStep[] = [
     title: 'Fit parameter maps',
     action: 'Open Fit',
     context: { section: 'fit', task: 'model-fit' },
-    text: 'Select T2 spin-echo and your ROI, then Run full map fit. Fitting uses the current pipeline output. Rerun fitting after processing changes to update the retained maps. The reference T2 is 80 ms.',
+    text: 'Select T2 spin echo and your ROI. Click Check fit readiness, then Run full map fit. Fitting uses the current pipeline output. Rerun fitting after processing changes to update the retained maps. The reference T2 is 80 ms.',
   },
   {
     id: 'statistics',
@@ -123,7 +123,7 @@ export const tutorialSteps: readonly TutorialStep[] = [
     title: 'Reuse a workflow',
     action: 'Show processing workflows',
     optional: true,
-    context: { section: 'preprocess', task: 'denoising' },
+    context: { section: 'denoise', task: 'denoising' },
     text: 'Processing workflows captures the pipeline as .mpip. Insert reconstruction (.mrec) and fitting (.mfit) plans as blocks. Reuse workflows in this session or save them for later. Saving is optional.',
   },
   {

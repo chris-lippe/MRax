@@ -5,11 +5,20 @@ import { JsonEditor, NumberField, Report } from './Controls';
 import { fitRois, roiColor } from './scene';
 import { InspectorSection } from './InspectorSection';
 import { WorkbenchIcon } from './WorkbenchIcon';
+import { PoolEditor } from './PoolEditor';
+import { FitReadiness } from './FitReadiness';
+import { FitParameterEditor, type ParameterSpec } from './FitParameterEditor';
+import type { FitDimension } from './FitDimensionSelector';
+import { FitFrameSelector } from './FitFrameSelector';
 
-type Spec = { initial: number; bounds: [number, number] | null; unit: string };
 type FitChoices = {
+  workspace_id: string;
+  experiment: string;
+  model: string;
+  inputs: { reference_scan: boolean; prior_maps: string[]; derived_maps: boolean };
   pools: string[];
   default_pools: string[];
+  field_dimensions: FitDimension[];
   reference_scans: string[];
   prior_maps: Record<string, { ref: string; label: string }[]>;
 };
@@ -22,12 +31,17 @@ export function FitControls({
   openWorkflows,
 }: AnalysisProps) {
   const [choices, setChoices] = useState<FitChoices | null>(null);
+  const [loadedSetup, setLoadedSetup] = useState('');
+  const setupContext = JSON.stringify([w?.id, w?.revision, w?.experiment, w?.model]);
+  const setupLoading = Boolean(w?.loaded && loadedSetup !== setupContext);
   const [regularizers, setRegularizers] = useState<Record<string, Options[]>>({}),
-    [constants, setConstants] = useState<Record<string, string[]>>({});
+    [constants, setConstants] = useState<Record<string, (string | number)[]>>({});
+  const [settingsDraft, setSettingsDraft] = useState<Options>({});
+  const [framesExpanded, setFramesExpanded] = useState(false);
   const [previewSteps, setPreviewSteps] = useState(600);
-  const [specs, setSpecs] = useState<Record<string, Spec>>({}),
+  const [specs, setSpecs] = useState<Record<string, ParameterSpec>>({}),
     [overrides, setOverrides] = useState<Record<string, Options>>({}),
-    [excluded, setExcluded] = useState('');
+    [excluded, setExcluded] = useState<number[]>([]);
   const [steps, setSteps] = useState(Number(w?.fit_settings.num_steps ?? 600)),
     [rate, setRate] = useState(Number(w?.fit_settings.step_size ?? 0.02));
   const [device, setDevice] = useState('cpu'),
@@ -42,59 +56,122 @@ export function FitControls({
   }, []);
   useEffect(() => {
     let cancelled = false;
-    if (w?.loaded)
-      void api<FitChoices>(`/api/workspaces/${w.id}/fit-options`)
-        .then((value) => {
-          if (!cancelled) setChoices(value);
+    setError('');
+    if (w?.loaded) {
+      void Promise.all([
+        api<FitChoices>('/api/workspaces/' + w.id + '/fit-options'),
+        api<Record<string, ParameterSpec>>('/api/workspaces/' + w.id + '/parameters'),
+      ])
+        .then(([options, parameters]) => {
+          if (cancelled) return;
+          setChoices(options);
+          setSpecs(parameters);
+          setLoadedSetup(setupContext);
         })
-        .catch((e) => {
-          if (!cancelled) setError(String(e));
+        .catch((error) => {
+          if (!cancelled) setError(String(error));
         });
-    if (w?.loaded)
-      void api<Record<string, Spec>>(`/api/workspaces/${w.id}/parameters`)
-        .then((value) => {
-          if (!cancelled) setSpecs(value);
-        })
-        .catch((e) => {
-          if (!cancelled) setError(String(e));
-        });
+    } else {
+      setChoices(null);
+      setSpecs({});
+    }
     setSteps(Number(w?.fit_settings.num_steps ?? 600));
     setRate(Number(w?.fit_settings.step_size ?? 0.02));
     const values = { ...(w?.fit_settings.param_overrides ?? {}) } as Record<string, Options>;
     for (const [pool, parameters] of Object.entries(
       (w?.fit_settings.pool_overrides ?? {}) as Record<string, Record<string, Options>>,
     ))
-      for (const [parameter, value] of Object.entries(parameters))
-        values[`${parameter}_${pool}`] = value;
+      for (const [parameter, value] of Object.entries(parameters)) {
+        if (value && typeof value === 'object' && !Array.isArray(value))
+          values[parameter + '_' + pool] = value;
+      }
     setOverrides(values);
     setRegularizers((w?.fit_settings.regularizer_configs ?? {}) as Record<string, Options[]>);
-    setConstants((w?.fit_settings.parameter_constant_dims ?? {}) as Record<string, string[]>);
-    setExcluded(w?.frame_exclusions.join(', ') ?? '');
+    setConstants(
+      (w?.fit_settings.parameter_constant_dims ?? {}) as Record<string, (string | number)[]>,
+    );
+    setExcluded(w?.frame_exclusions ?? []);
+    setSettingsDraft({});
     return () => {
       cancelled = true;
     };
-  }, [w?.id, w?.revision, w?.experiment]);
+  }, [w?.id, w?.revision, w?.experiment, w?.model, setupContext]);
+  const fitInputs =
+    choices?.workspace_id === w?.id &&
+    choices?.experiment === w?.experiment &&
+    choices?.model === w?.model
+      ? choices?.inputs
+      : null;
+  const activePools =
+    fitInputs && choices && choices.default_pools.length > 0
+      ? (((w?.fit_settings.selected_pools as string[] | undefined)?.length
+          ? w!.fit_settings.selected_pools
+          : choices.default_pools) as string[])
+      : [];
+  const poolsByLength = [...activePools].sort((left, right) => right.length - left.length);
+  const parameterPool = (name: string) => poolsByLength.find((pool) => name.endsWith('_' + pool));
+  const advancedSettings = Object.fromEntries(
+    Object.entries(w?.fit_settings ?? {}).filter(([key]) =>
+      ['mask_fill_value', 'use_view_state_data'].includes(key),
+    ),
+  );
+  const settingValue = (key: string) =>
+    Object.hasOwn(settingsDraft, key) ? settingsDraft[key] : w?.fit_settings[key];
+  const updateSetting = (key: string, value: unknown) =>
+    setSettingsDraft((old) => ({ ...old, [key]: value }));
   const setParameter = (name: string, key: string, value: unknown) =>
     setOverrides((p) => ({
       ...p,
       [name]: {
         ...p[name],
         [key]: value,
-        ...(key === 'bounds' ? { transform: 'bounded' } : {}),
-        ...(key === 'init' && p[name]?.trainable === false ? { value } : {}),
+        ...(key === 'bounds'
+          ? {
+              transform:
+                (p[name]?.trainable ?? specs[name]?.trainable) === false ? 'identity' : 'bounded',
+            }
+          : {}),
+        ...(key === 'init' && (p[name]?.trainable ?? specs[name]?.trainable) === false
+          ? { value, trainable: false, transform: 'identity' }
+          : {}),
       },
     }));
+  const setFixedParameter = (name: string, fixed: boolean) =>
+    setOverrides((previous) => {
+      const old = previous[name] ?? {};
+      const initial = Number(old.init ?? old.value ?? specs[name].initial);
+      const bounds = old.bounds ?? specs[name].bounds;
+      const next: Options = {
+        ...old,
+        init: initial,
+        trainable: !fixed,
+        transform: fixed || !bounds ? 'identity' : 'bounded',
+      };
+      if (fixed) next.value = initial;
+      else delete next.value;
+      return { ...previous, [name]: next };
+    });
   const configuration = () => {
-    const plain: Record<string, Options> = {},
-      pools: Record<string, Record<string, Options>> = {};
+    const plain: Record<string, Options> = {};
+    const pools = structuredClone(
+      (w?.fit_settings.pool_overrides ?? {}) as Record<string, Options>,
+    );
+    const poolNames = [
+      ...new Set([
+        ...(fitInputs ? (choices?.pools ?? []) : []),
+        ...Object.keys(pools),
+        ...((w?.fit_settings.selected_pools ?? []) as string[]),
+      ]),
+    ].sort((left, right) => right.length - left.length);
     for (const [name, value] of Object.entries(overrides)) {
-      const pool = choices?.pools.find((p) => name.endsWith(`_${p}`));
+      const pool = poolNames.find((pool) => name.endsWith('_' + pool));
       if (pool) {
         pools[pool] ??= {};
         pools[pool][name.slice(0, -pool.length - 1)] = value;
       } else plain[name] = value;
     }
     return {
+      ...settingsDraft,
       num_steps: steps,
       step_size: rate,
       param_overrides: plain,
@@ -103,7 +180,24 @@ export function FitControls({
       parameter_constant_dims: constants,
     };
   };
-  const apply = () => action('fit.settings', configuration());
+  const apply = () => action('fit.settings', { ...configuration(), excluded_frames: excluded });
+  const renderParameter = (name: string, spec: ParameterSpec, caption = name) => (
+    <FitParameterEditor
+      key={name}
+      name={name}
+      caption={caption}
+      spec={spec}
+      override={overrides[name]}
+      regularizers={regularizers[name]}
+      constants={constants[name]}
+      dimensions={choices?.field_dimensions ?? []}
+      disabled={!w?.loaded || busy || setupLoading}
+      onChange={(key, value) => setParameter(name, key, value)}
+      onFixedChange={(fixed) => setFixedParameter(name, fixed)}
+      onRegularizersChange={(values) => setRegularizers((old) => ({ ...old, [name]: values }))}
+      onConstantsChange={(values) => setConstants((old) => ({ ...old, [name]: values }))}
+    />
+  );
   return (
     <div className="control-layout fit-controls">
       <button
@@ -114,10 +208,7 @@ export function FitControls({
             settings: configuration(),
             use_roi: useRoi,
             roi_names: useRoi ? (w?.scene.fit_rois ?? null) : null,
-            excluded_frames: excluded
-              .split(',')
-              .filter((value) => value.trim())
-              .map(Number),
+            excluded_frames: excluded,
           })
         }
       >
@@ -135,6 +226,8 @@ export function FitControls({
               value={w?.model ?? 'identity'}
               onChange={(e) =>
                 void action('fit.settings', {
+                  ...configuration(),
+                  excluded_frames: excluded,
                   model_name: e.target.value,
                   param_overrides: {},
                   pool_overrides: {},
@@ -151,6 +244,46 @@ export function FitControls({
               ))}
             </select>
           </label>
+          {(fitInputs?.reference_scan || Boolean(fitInputs?.prior_maps.length)) && (
+            <div className="field-grid field-wide" role="group" aria-label="Model inputs">
+              {fitInputs?.reference_scan && (
+                <label>
+                  Reference scan
+                  <select
+                    disabled={!w?.loaded || busy}
+                    aria-label="Reference scan"
+                    value={String(settingValue('sat_trans_reference_scan') ?? '')}
+                    onChange={(e) =>
+                      updateSetting('sat_trans_reference_scan', e.target.value || null)
+                    }
+                  >
+                    <option value="">Automatic</option>
+                    {choices?.reference_scans.map((name) => (
+                      <option key={name}>{name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {fitInputs?.prior_maps.map((kind) => (
+                <label key={kind}>
+                  {kind.toUpperCase()} prior map
+                  <select
+                    disabled={!w?.loaded || busy}
+                    aria-label={`${kind.toUpperCase()} prior map`}
+                    value={String(settingValue(`ab_mt_${kind}_map_ref`) ?? '')}
+                    onChange={(e) => updateSetting(`ab_mt_${kind}_map_ref`, e.target.value || null)}
+                  >
+                    <option value="">Automatic</option>
+                    {choices?.prior_maps[kind].map((map) => (
+                      <option key={map.ref} value={map.ref}>
+                        {map.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+          )}
           <div className="bounds-grid">
             <NumberField
               label="Fit steps"
@@ -173,8 +306,8 @@ export function FitControls({
             <select
               aria-label="Optimizer"
               disabled={!w || busy}
-              value={String(w?.fit_settings.optimizer_name ?? 'auto')}
-              onChange={(e) => void action('fit.settings', { optimizer_name: e.target.value })}
+              value={String(settingValue('optimizer_name') ?? 'auto')}
+              onChange={(e) => updateSetting('optimizer_name', e.target.value)}
             >
               {['auto', 'adam', 'adamw', 'sgd', 'rmsprop', 'fista', 'split_bregman'].map((v) => (
                 <option key={v}>{v}</option>
@@ -200,6 +333,71 @@ export function FitControls({
           </label>
         </div>
       </InspectorSection>
+      {Object.keys(specs).some((name) => !parameterPool(name)) && (
+        <InspectorSection title="General parameters" icon="fit" className="control-wide">
+          <div className="parameter-table">
+            {Object.entries(specs)
+              .filter(([name]) => !parameterPool(name))
+              .map(([name, spec]) => renderParameter(name, spec))}
+          </div>
+        </InspectorSection>
+      )}
+      {fitInputs && choices && choices.default_pools.length > 0 && (
+        <PoolEditor
+          key={(w?.id ?? '') + ':' + w?.experiment + ':' + w?.model}
+          pools={activePools}
+          templates={choices.pools}
+          busy={busy || setupLoading}
+          onEdit={(edit) =>
+            action('fit.pool', { ...edit, settings: configuration(), excluded_frames: excluded })
+          }
+          renderParameters={(pool) =>
+            Object.entries(specs)
+              .filter(([name]) => parameterPool(name) === pool)
+              .map(([name, spec]) => renderParameter(name, spec, name.slice(0, -pool.length - 1)))
+          }
+        />
+      )}
+      {w?.loaded && (
+        <details
+          className="control-advanced control-wide"
+          aria-label="Frames for fitting"
+          open={framesExpanded}
+          onToggle={(event) => setFramesExpanded(event.currentTarget.open)}
+        >
+          <summary>
+            Frames for fitting{' '}
+            <small>
+              ({w.frame_count - excluded.length} of {w.frame_count} included)
+            </small>
+          </summary>
+          {framesExpanded && (
+            <FitFrameSelector
+              workspace={w}
+              excluded={excluded}
+              disabled={busy || setupLoading}
+              onChange={setExcluded}
+              onView={(frame) => void changeView({ view: 'Image', frame })}
+            />
+          )}
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={Boolean(settingValue('auto_mask_nan_observables'))}
+              disabled={busy}
+              onChange={(event) => updateSetting('auto_mask_nan_observables', event.target.checked)}
+            />
+            Automatically exclude nonfinite observables
+          </label>
+        </details>
+      )}
+      <button
+        className="secondary control-wide"
+        disabled={!w?.loaded || busy || setupLoading}
+        onClick={() => void apply()}
+      >
+        Apply fit configuration
+      </button>
       <InspectorSection
         title="Preview"
         icon="timecourse"
@@ -224,10 +422,19 @@ export function FitControls({
             ))}
           </select>
         </label>
+        <NumberField
+          label="Preview steps"
+          value={previewSteps}
+          min={1}
+          step="1"
+          onChange={setPreviewSteps}
+        />
         <button
           className="secondary full"
           disabled={
-            !w?.rois.some((r) => r.name === w.selected_roi && r.enabled && r.pixels > 0) || busy
+            !w?.rois.some((r) => r.name === w.selected_roi && r.enabled && r.pixels > 0) ||
+            busy ||
+            setupLoading
           }
           onClick={() =>
             void run('preview', {
@@ -235,6 +442,7 @@ export function FitControls({
               steps: previewSteps,
               device,
               settings: configuration(),
+              excluded_frames: excluded,
             })
           }
         >
@@ -330,9 +538,43 @@ export function FitControls({
             </>
           )}
         </fieldset>
+        {fitInputs?.derived_maps && (
+          <label>
+            Derived maps
+            <select
+              aria-label="Derived maps"
+              value={
+                settingValue('compute_derived_maps') === null
+                  ? 'default'
+                  : String(settingValue('compute_derived_maps') ?? 'default')
+              }
+              onChange={(e) =>
+                updateSetting(
+                  'compute_derived_maps',
+                  e.target.value === 'default' ? null : e.target.value === 'true',
+                )
+              }
+            >
+              <option value="default">Model default</option>
+              <option value="true">Compute</option>
+              <option value="false">Skip</option>
+            </select>
+          </label>
+        )}
+        <FitReadiness
+          workspace={w}
+          disabled={!w?.loaded || busy || setupLoading}
+          options={{
+            settings: configuration(),
+            use_roi: useRoi,
+            roi_names: selectedRois,
+            device,
+            excluded_frames: excluded,
+          }}
+        />
         <button
           className="primary full"
-          disabled={!w?.loaded || busy || (useRoi && !selectedRois.length)}
+          disabled={!w?.loaded || busy || setupLoading || (useRoi && !selectedRois.length)}
           data-tutorial="fit-apply"
           onClick={() =>
             void run('full_fit', {
@@ -341,6 +583,7 @@ export function FitControls({
               roi_names: selectedRois,
               device,
               settings: configuration(),
+              excluded_frames: excluded,
             })
           }
         >
@@ -348,280 +591,16 @@ export function FitControls({
           Run full map fit
         </button>
       </InspectorSection>
-      <details className="control-advanced control-wide">
-        <summary>Parameters and fit options</summary>
-        {!!choices?.pools.length && (
-          <label>
-            Model pools
-            <select
-              aria-label="Model pools"
-              multiple
-              value={
-                (w?.fit_settings.selected_pools as string[] | undefined)?.length
-                  ? (w!.fit_settings.selected_pools as string[])
-                  : choices.default_pools
-              }
-              onChange={(e) =>
-                void action('fit.settings', {
-                  selected_pools: [...e.target.selectedOptions].map((o) => o.value),
-                  param_overrides: {},
-                  pool_overrides: {},
-                  regularizer_configs: {},
-                  parameter_constant_dims: {},
-                })
-              }
-            >
-              {choices.pools.map((pool) => (
-                <option key={pool}>{pool}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        <NumberField
-          label="Preview steps"
-          value={previewSteps}
-          min={1}
-          step="1"
-          onChange={setPreviewSteps}
-        />
-        <div className="parameter-table">
-          {Object.entries(specs).map(([name, spec]) => (
-            <fieldset key={name}>
-              <legend>
-                {name} <small>{spec.unit}</small>
-              </legend>
-              <NumberField
-                label={`${name} initial`}
-                value={Number(overrides[name]?.init ?? spec.initial)}
-                onChange={(v) => setParameter(name, 'init', v)}
-              />
-              {spec.bounds && (
-                <div className="bounds-grid">
-                  <NumberField
-                    label={`${name} lower bound`}
-                    value={Number(
-                      (overrides[name]?.bounds as number[] | undefined)?.[0] ?? spec.bounds[0],
-                    )}
-                    onChange={(v) =>
-                      setParameter(name, 'bounds', [
-                        v,
-                        (overrides[name]?.bounds as number[] | undefined)?.[1] ?? spec.bounds![1],
-                      ])
-                    }
-                  />
-                  <NumberField
-                    label={`${name} upper bound`}
-                    value={Number(
-                      (overrides[name]?.bounds as number[] | undefined)?.[1] ?? spec.bounds[1],
-                    )}
-                    onChange={(v) =>
-                      setParameter(name, 'bounds', [
-                        (overrides[name]?.bounds as number[] | undefined)?.[0] ?? spec.bounds![0],
-                        v,
-                      ])
-                    }
-                  />
-                </div>
-              )}
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={overrides[name]?.trainable === false}
-                  onChange={(e) =>
-                    setOverrides((p) => ({
-                      ...p,
-                      [name]: e.target.checked
-                        ? {
-                            ...p[name],
-                            trainable: false,
-                            value: Number(p[name]?.init ?? spec.initial),
-                            transform: 'identity',
-                          }
-                        : { init: Number(p[name]?.value ?? spec.initial) },
-                    }))
-                  }
-                />
-                Fix {name}
-              </label>
-              <label>
-                Regularizer
-                <select
-                  aria-label={`${name} regularizer`}
-                  value={String(regularizers[name]?.[0]?.type ?? 'none')}
-                  onChange={(e) =>
-                    setRegularizers((p) => ({
-                      ...p,
-                      [name]:
-                        e.target.value === 'none'
-                          ? []
-                          : [
-                              {
-                                ...p[name]?.[0],
-                                type: e.target.value,
-                                weight: p[name]?.[0]?.weight ?? 0.01,
-                              },
-                            ],
-                    }))
-                  }
-                >
-                  {['none', 'smoothness', 'tv', 'tv2'].map((v) => (
-                    <option key={v}>{v}</option>
-                  ))}
-                </select>
-              </label>
-              {!!regularizers[name]?.length && (
-                <>
-                  <NumberField
-                    label={`${name} regularization weight`}
-                    value={Number(regularizers[name][0].weight ?? 0)}
-                    min={0}
-                    onChange={(v) =>
-                      setRegularizers((p) => ({ ...p, [name]: [{ ...p[name][0], weight: v }] }))
-                    }
-                  />
-                  <label>
-                    Regularization axes
-                    <input
-                      aria-label={`${name} regularization axes`}
-                      value={((regularizers[name][0].axes ?? []) as string[]).join(',')}
-                      onChange={(e) =>
-                        setRegularizers((p) => ({
-                          ...p,
-                          [name]: [
-                            {
-                              ...p[name][0],
-                              axes: e.target.value
-                                .split(',')
-                                .map((v) => v.trim())
-                                .filter(Boolean),
-                            },
-                          ],
-                        }))
-                      }
-                    />
-                  </label>
-                </>
-              )}
-              <label>
-                Constant dimensions
-                <input
-                  aria-label={`${name} constant dimensions`}
-                  value={(constants[name] ?? []).join(',')}
-                  onChange={(e) =>
-                    setConstants((p) => ({
-                      ...p,
-                      [name]: e.target.value
-                        .split(',')
-                        .map((v) => v.trim())
-                        .filter(Boolean),
-                    }))
-                  }
-                />
-              </label>
-            </fieldset>
-          ))}
-        </div>
-        <button className="secondary full" disabled={!w || busy} onClick={() => void apply()}>
-          Apply fit configuration
-        </button>
-        <label>
-          Excluded frames (zero based)
-          <input
-            aria-label="Excluded frames"
-            value={excluded}
-            onChange={(e) => setExcluded(e.target.value)}
-          />
-        </label>
-        <button
-          className="secondary full"
-          disabled={!w || busy}
-          onClick={() =>
-            void action('frames.exclude', {
-              indices: excluded.trim() ? excluded.split(',').map(Number) : [],
-            })
-          }
-        >
-          Apply frame exclusions
-        </button>
-
-        <label className="check-label">
-          <input
-            type="checkbox"
-            checked={Boolean(w?.fit_settings.auto_mask_nan_observables)}
-            disabled={!w || busy}
-            onChange={(e) =>
-              void action('fit.settings', { auto_mask_nan_observables: e.target.checked })
-            }
-          />
-          Automatically exclude nonfinite observables
-        </label>
-
-        <label>
-          Derived maps
-          <select
-            aria-label="Derived maps"
-            value={
-              w?.fit_settings.compute_derived_maps === null
-                ? 'default'
-                : String(w?.fit_settings.compute_derived_maps ?? 'default')
-            }
-            onChange={(e) =>
-              void action('fit.settings', {
-                compute_derived_maps:
-                  e.target.value === 'default' ? null : e.target.value === 'true',
-              })
-            }
-          >
-            <option value="default">Model default</option>
-            <option value="true">Compute</option>
-            <option value="false">Skip</option>
-          </select>
-        </label>
-        <label>
-          Reference scan
-          <select
-            aria-label="Reference scan"
-            value={String(w?.fit_settings.sat_trans_reference_scan ?? '')}
-            onChange={(e) =>
-              void action('fit.settings', { sat_trans_reference_scan: e.target.value || null })
-            }
-          >
-            <option value="">None</option>
-            {choices?.reference_scans.map((name) => (
-              <option key={name}>{name}</option>
-            ))}
-          </select>
-        </label>
-        {['t1', 'b1', 'b0'].map((kind) => (
-          <label key={kind}>
-            {kind.toUpperCase()} prior map
-            <select
-              aria-label={`${kind.toUpperCase()} prior map`}
-              value={String(w?.fit_settings[`ab_mt_${kind}_map_ref`] ?? '')}
-              onChange={(e) =>
-                void action('fit.settings', { [`ab_mt_${kind}_map_ref`]: e.target.value || null })
-              }
-            >
-              <option value="">None</option>
-              {choices?.prior_maps[kind].map((map) => (
-                <option key={map.ref} value={map.ref}>
-                  {map.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        ))}
+      <details className="control-advanced control-wide" aria-label="Additional fit settings">
+        <summary>Additional fit settings</summary>
         <JsonEditor
-          label="Advanced fit settings"
-          value={w?.fit_settings ?? {}}
+          label="Additional fit settings"
+          value={advancedSettings}
           disabled={!w || busy}
-          onApply={(value) => action('fit.settings', value)}
+          onApply={(value) =>
+            action('fit.settings', { ...configuration(), ...value, excluded_frames: excluded })
+          }
         />
-        <p className="muted">
-          Advanced settings include selected_pools, pool_overrides, parameter_constant_dims,
-          regularizer_configs (smoothness / tv / tv2), derived maps, reference scans and prior-map
-          references.
-        </p>
       </details>
       {w?.fit_info && (
         <details>

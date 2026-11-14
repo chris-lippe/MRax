@@ -635,6 +635,129 @@
         "title": "FileLocation",
         "type": "object"
       },
+      "FitCheckCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "default": "cpu",
+            "title": "Device",
+            "type": "string"
+          },
+          "excluded_frames": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excluded Frames"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "roi_names": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Roi Names",
+            "type": "array"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Settings",
+            "type": "object"
+          },
+          "use_roi": {
+            "default": true,
+            "title": "Use Roi",
+            "type": "boolean"
+          },
+          "view_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "View Revision"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "FitCheckCommand",
+        "type": "object"
+      },
+      "FitReadinessResult": {
+        "properties": {
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "report": {
+            "title": "Report",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "model",
+          "ok",
+          "errors",
+          "warnings",
+          "notes",
+          "report"
+        ],
+        "title": "FitReadinessResult",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1917,18 +2040,6 @@
             "title": "Label",
             "type": "string"
           },
-          "reference": {
-            "anyOf": [
-              {
-                "const": "frame",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reference"
-          },
           "unavailable": {
             "anyOf": [
               {
@@ -1947,7 +2058,6 @@
           "group",
           "fields",
           "axes",
-          "reference",
           "unavailable"
         ],
         "title": "ProcessingMethod",
@@ -4742,6 +4852,115 @@
           }
         },
         "summary": "Comparison"
+      }
+    },
+    "/api/workspaces/{key}/fit-check": {
+      "post": {
+        "operationId": "fit_check_api_workspaces__key__fit_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FitCheckCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FitReadinessResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fit Check"
+      }
+    },
+    "/api/workspaces/{key}/fit-frames": {
+      "get": {
+        "operationId": "fit_frames_api_workspaces__key__fit_frames_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 32,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fit Frames"
       }
     },
     "/api/workspaces/{key}/fit-options": {

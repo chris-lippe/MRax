@@ -3,6 +3,7 @@ import { loadExample } from './ui';
 import { openRoiCoordinates } from './ui';
 
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
+import type { Workspace } from '../src/api';
 
 import {
   selectDataFormat,
@@ -14,10 +15,7 @@ import {
 } from './ui';
 
 async function opened(request: APIRequestContext) {
-  return (await (await request.get('/api/workspaces')).json()) as {
-    id: string;
-    revision: number;
-  }[];
+  return (await (await request.get('/api/workspaces')).json()) as Workspace[];
 }
 
 test.afterEach(async ({ request }) => {
@@ -125,4 +123,181 @@ test('complex views, planes, integer labels, brush, and undo use the real backen
   await selectTheme(page, 'dark');
   await page.screenshot({ path: testInfo.outputPath('multimodal-dark.png'), fullPage: true });
   expect(errors).toEqual([]);
+});
+
+test('fitting shows only the inputs used by the selected model', async ({ page, request }) => {
+  await synthetic(page);
+  await selectWorkflow(page, 'Fit');
+  const modelPanel = page.getByRole('region', { name: 'Model and solver', exact: true });
+  await expect(modelPanel).toBeVisible();
+  const checkFit = page.getByRole('button', { name: 'Check fit readiness', exact: true });
+  const readiness = page.getByRole('status', { name: 'Fit readiness', exact: true });
+  await checkFit.click();
+  await expect(readiness).toContainText('Needs attention');
+  await page.getByLabel('Fit region', { exact: true }).selectOption('all');
+  await expect(readiness).toHaveCount(0);
+  await checkFit.click();
+  await expect(readiness).toContainText('Ready to fit');
+  await page.getByLabel('Fit steps', { exact: true }).fill('301');
+  await expect(readiness).toHaveCount(0);
+  await expect(modelPanel.getByLabel('Reference scan', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('T1 prior map', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Derived maps', { exact: true })).toHaveCount(0);
+
+  let current = (await opened(request))[0];
+  const path = '/api/workspaces/' + current.id;
+  const general = page.getByRole('region', { name: 'General parameters', exact: true });
+  const t2 = general
+    .locator('fieldset.fit-parameter')
+    .filter({ has: page.getByLabel('t2 initial', { exact: true }) });
+  await t2.getByText('Spatial settings', { exact: true }).click();
+  await t2.getByLabel('t2 regularizer', { exact: true }).selectOption('smoothness');
+  await t2.getByRole('checkbox', { name: 't2 regularization dimension y', exact: true }).uncheck();
+  await t2.getByRole('checkbox', { name: 't2 regularization dimension z', exact: true }).uncheck();
+  await t2.getByRole('checkbox', { name: 't2 constant dimension z', exact: true }).check();
+  const frames = page.getByRole('group', { name: 'Frames for fitting', exact: true });
+  await frames.locator('summary').first().click();
+  await expect(frames.getByRole('list', { name: 'Frames for fitting' })).toContainText('TE:');
+  await frames.getByRole('checkbox', { name: 'Include frame 1', exact: true }).uncheck();
+  await frames.getByRole('button', { name: 'View frame 3', exact: true }).click();
+  await expect(
+    frames.getByRole('checkbox', { name: 'Include frame 1', exact: true }),
+  ).not.toBeChecked();
+  await checkFit.click();
+  await expect(readiness).toContainText('Ready to fit');
+  await page.getByRole('button', { name: 'Apply fit configuration', exact: true }).click();
+  await expect
+    .poll(async () => (await (await request.get(path)).json()).frame_exclusions)
+    .toEqual([0]);
+  current = (await opened(request))[0];
+  expect(current.fit_settings.parameter_constant_dims).toEqual({ t2: ['z'] });
+  const choices = await (await request.get(path + '/fit-options')).json();
+  const xAxis = choices.field_dimensions.find(
+    (dimension: { name: string }) => dimension.name === 'x',
+  ).axis;
+  expect(
+    (current.fit_settings.regularizer_configs as Record<string, { axes: number[] }[]>).t2[0].axes,
+  ).toEqual([xAxis]);
+  const inspected = await (await request.get(path + '/inspect')).json();
+  const token = (await (await request.get('/api/session')).json()).token;
+  const response = await request.post(path + '/actions', {
+    headers: { 'x-mrax-token': token },
+    data: {
+      revision: current.revision,
+      action: 'metadata.update',
+      options: {
+        exp_type: 'sat_trans',
+        observables: {
+          ...inspected.metadata.observables,
+          freq_offsets: { values: [-3, -2, -1, -0.5, 0.5, 1, 2, 3], unit: 'ppm' },
+          sat_time: { values: 2, unit: 's' },
+          sat_b1: { values: 1, unit: 'uT' },
+        },
+      },
+    },
+  });
+  expect(response.status()).toBe(200);
+  await page.reload();
+  await selectWorkflow(page, 'Fit');
+  await page.getByLabel('Model', { exact: true }).selectOption('wasabi');
+  await expect(modelPanel.getByLabel('Reference scan', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Derived maps', { exact: true })).toHaveCount(1);
+  for (const kind of ['T1', 'B0', 'B1'])
+    await expect(modelPanel.getByLabel(kind + ' prior map', { exact: true })).toHaveCount(0);
+
+  await page.getByLabel('Model', { exact: true }).selectOption('ab_mt_n');
+  for (const kind of ['T1', 'B0', 'B1'])
+    await expect(modelPanel.getByLabel(kind + ' prior map', { exact: true })).toBeVisible();
+  await expect(modelPanel.getByLabel('Reference scan', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Derived maps', { exact: true })).toHaveCount(0);
+
+  await page.getByLabel('Model', { exact: true }).selectOption('multipool_lorentzian');
+  await expect(modelPanel.getByLabel('Reference scan', { exact: true })).toBeVisible();
+  for (const kind of ['T1', 'B0', 'B1'])
+    await expect(modelPanel.getByLabel(kind + ' prior map', { exact: true })).toHaveCount(0);
+
+  await page.getByLabel('Pool template', { exact: true }).selectOption('glu');
+  await page.getByLabel('New pool name', { exact: true }).fill('mobile_glu');
+  await page.getByRole('button', { name: 'Add pool', exact: true }).click();
+  await expect(page.getByLabel('Name for pool mobile_glu', { exact: true })).toBeVisible();
+  const parameters = page.getByRole('group', {
+    name: 'Parameters for pool mobile_glu',
+    exact: true,
+  });
+  await expect(parameters.getByLabel('amp_mobile_glu initial', { exact: true })).toBeHidden();
+  await parameters.locator('summary').first().click();
+  await parameters.getByLabel('amp_mobile_glu initial', { exact: true }).fill('0.12');
+  await parameters.getByLabel('amp_mobile_glu lower bound', { exact: true }).fill('0.02');
+  await parameters.getByLabel('amp_mobile_glu upper bound', { exact: true }).fill('0.25');
+  await parameters.getByRole('checkbox', { name: 'Fix amp_mobile_glu', exact: true }).check();
+  await parameters.getByRole('checkbox', { name: 'Fix amp_mobile_glu', exact: true }).uncheck();
+  await expect(parameters.getByLabel('amp_mobile_glu lower bound', { exact: true })).toHaveValue(
+    '0.02',
+  );
+  await parameters.getByRole('checkbox', { name: 'Fix amp_mobile_glu', exact: true }).check();
+  const water = page.getByRole('group', { name: 'Parameters for pool water', exact: true });
+  await water.locator('summary').first().click();
+  await expect(water.getByRole('checkbox', { name: 'Fix dw_water', exact: true })).toBeChecked();
+  await water.getByLabel('dw_water initial', { exact: true }).fill('0.15');
+  await page.getByRole('button', { name: 'Apply fit configuration', exact: true }).click();
+  await expect
+    .poll(async () => {
+      const settings = (await (await request.get(path)).json()).fit_settings;
+      return [settings.pool_overrides.mobile_glu.amp.value, settings.pool_overrides.water.dw.value];
+    })
+    .toEqual([0.12, 0.15]);
+  await expect(parameters.getByLabel('amp_mobile_glu lower bound', { exact: true })).toHaveValue(
+    '0.02',
+  );
+  await page.getByLabel('Name for pool mobile_glu', { exact: true }).fill('amide');
+  await page.getByRole('button', { name: 'Rename pool mobile_glu', exact: true }).click();
+  await expect(page.getByLabel('Name for pool amide', { exact: true })).toBeVisible();
+  const renamedParameters = page.getByRole('group', {
+    name: 'Parameters for pool amide',
+    exact: true,
+  });
+  await renamedParameters.locator('summary').first().click();
+  await expect(renamedParameters.getByLabel('amp_amide initial', { exact: true })).toHaveValue(
+    '0.12',
+  );
+  await expect(
+    renamedParameters.getByRole('checkbox', { name: 'Fix amp_amide', exact: true }),
+  ).toBeChecked();
+  await expect(page.getByLabel('amp_amide initial', { exact: true })).toHaveCount(1);
+  await expect(general.getByLabel('baseline initial', { exact: true })).toBeVisible();
+  expect(
+    await general.evaluate((element) =>
+      Boolean(
+        element.compareDocumentPosition(document.querySelector('section[aria-label="Pools"]')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ),
+  ).toBe(true);
+  const additional = page.getByRole('group', { name: 'Additional fit settings', exact: true });
+  await additional.locator('summary').first().click();
+  await selectDataFormat(page, 'Additional fit settings', 'Raw');
+  const extras = JSON.parse(
+    await additional
+      .getByRole('textbox', { name: 'Additional fit settings', exact: true })
+      .inputValue(),
+  );
+  expect(extras).not.toHaveProperty('num_steps');
+  expect(extras).not.toHaveProperty('param_overrides');
+  expect(extras).not.toHaveProperty('regularizer_configs');
+  await checkFit.click();
+  await expect(readiness).toContainText('Needs attention');
+  await expect(readiness).toContainText('reference');
+  await page.getByRole('button', { name: 'Remove pool amide', exact: true }).click();
+  await expect(page.getByLabel('Name for pool amide', { exact: true })).toHaveCount(0);
+  await expect(readiness).toHaveCount(0);
+  await page.getByLabel('New pool name', { exact: true }).fill('mobile_glu');
+  await page.getByRole('button', { name: 'Add pool', exact: true }).click();
+  await expect(page.getByLabel('Name for pool mobile_glu', { exact: true })).toHaveValue(
+    'mobile_glu',
+  );
+  await page.getByRole('button', { name: 'Remove pool mobile_glu', exact: true }).click();
+
+  await page.getByLabel('Model', { exact: true }).selectOption('t2_se');
+  await expect(modelPanel.getByLabel('Reference scan', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Derived maps', { exact: true })).toHaveCount(0);
 });

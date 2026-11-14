@@ -99,6 +99,10 @@ export async function completeTutorialWorkflow(
   await open('Open Fit');
   await expect(next).toBeDisabled();
   await page.getByLabel('Fit steps', { exact: true }).fill('300');
+  await page.getByRole('button', { name: 'Check fit readiness', exact: true }).click();
+  await expect(page.getByRole('status', { name: 'Fit readiness', exact: true })).toContainText(
+    'Ready to fit',
+  );
   await page.getByRole('button', { name: 'Run full map fit', exact: true }).click();
   await advance('Analyze fitted maps');
   await open('Open map statistics');

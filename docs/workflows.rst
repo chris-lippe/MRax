@@ -1,7 +1,7 @@
 Reusable workflows
 ==================
 
-Use **Processing workflows** in Preprocess, Register or Analyze,
+Use **Processing workflows** in Denoise, Register or Analyze,
 **Reconstruction workflows** in Reconstruct, or **Fitting workflows** in Fit.
 Capture a configuration once, then apply it to other experiments or studies.
 The session library is shared by all open studies.

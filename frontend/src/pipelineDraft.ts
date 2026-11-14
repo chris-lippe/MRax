@@ -159,7 +159,7 @@ export function movedSteps(steps: DraftStep[], id: string, destination: number) 
   next.splice(target, 0, step);
   return next;
 }
-export function processDraftStep(w: Workspace, catalog: PipelineCatalog, methodId: string) {
+export function processDraftStep(catalog: PipelineCatalog, methodId: string) {
   const method = catalog.methods.find((method) => method.id === methodId);
   if (!method || method.id === 'dti' || method.unavailable)
     throw Error('Choose an available image processing method.');
@@ -172,7 +172,6 @@ export function processDraftStep(w: Workspace, catalog: PipelineCatalog, methodI
       component: 'auto',
       ...(method.axes === 'filter' ? { axes: catalog.spatial_axes } : {}),
       ...(method.axes === 'series' ? { axis: catalog.series_axes[0] ?? 'frame' } : {}),
-      ...(method.reference ? { reference_experiment: w.experiment, reference_frame: 0 } : {}),
       parameters: Object.fromEntries(method.fields.map((field) => [field.key, field.default])),
     },
     method.label,

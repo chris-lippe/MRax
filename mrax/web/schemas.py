@@ -436,6 +436,26 @@ class TaskCommand(Command):
     options: dict[str, Any] = {}
 
 
+class FitCheckCommand(Command):
+    revision: int = Field(ge=0)
+    view_revision: int | None = None
+    settings: dict[str, Any] = {}
+    use_roi: bool = True
+    roi_names: list[str] = []
+    excluded_frames: list[int] | None = None
+    device: str = "cpu"
+
+
+class FitReadinessResult(BaseModel):
+    name: str
+    model: str | None
+    ok: bool
+    errors: list[str]
+    warnings: list[str]
+    notes: list[str]
+    report: str
+
+
 class NoiseEstimateCommand(Command):
     revision: int = Field(ge=0)
     options: dict[str, Any] = {}
@@ -459,7 +479,6 @@ class ProcessingMethod(BaseModel):
     fields: list[ProcessingField]
     axes: Literal["filter", "series", "none"]
     axis_count: Literal[2, 3] | None = None
-    reference: Literal["frame"] | None
     unavailable: str | None
 
 

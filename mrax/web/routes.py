@@ -20,6 +20,7 @@ from mrax.gui.models import (
     model_available_pools,
     model_choices,
     model_default_pools,
+    model_fit_inputs,
     model_parameter_specs,
 )
 from mrax.gui.registration import DriftCorrectionOptions, RegistrationOptions
@@ -31,6 +32,13 @@ from mrax.gui.services.export import (
     _single_export_record_metadata,
 )
 from mrax.gui.services.export_workflow import export_destination_options
+from mrax.gui.services.fit_setup import (
+    apply_fit_exclusions,
+    check_fit_readiness,
+    edit_pool,
+    fitting_dimensions,
+    fitting_frame_page,
+)
 from mrax.gui.services.mask_preview import native_mask_preview
 from mrax.gui.services.noise_estimation import preview_noise
 from mrax.gui.services.processing import processing_catalog, rename_processing_sources
@@ -45,6 +53,8 @@ from .array_headers import read_array_header
 from .info import workspace_info
 from .schemas import (
     ActionCommand,
+    FitCheckCommand,
+    FitReadinessResult,
     ImportCommand,
     JobInfo,
     MaskPreview,
@@ -237,7 +247,7 @@ def register_routes(app, get_record, check_revision, add_record):
             name, options = command.action, command.options
             workspace = clone_workspace(
                 record.workspace,
-                share_sources=name.startswith("roi.") or name in {"fit.settings", "frames.exclude"},
+                share_sources=name.startswith("roi.") or name in {"fit.settings", "fit.pool", "frames.exclude"},
             )
             session = workspace.session
             if name.startswith("roi."):
@@ -294,7 +304,13 @@ def register_routes(app, get_record, check_revision, add_record):
                 if operation != "consolidate":
                     workspace.preview_results_by_experiment.clear()
             elif name == "fit.settings":
-                set_fit_settings(workspace, options)
+                values = dict(options)
+                exclusions = values.pop("excluded_frames", None)
+                set_fit_settings(workspace, values)
+                if exclusions is not None:
+                    apply_fit_exclusions(session, exclusions)
+            elif name == "fit.pool":
+                edit_pool(workspace, options)
             elif name == "frames.exclude":
                 excluded = [int(v) for v in options.get("indices", [])]
                 if any(not 0 <= v < session.frame_count for v in excluded):
@@ -404,12 +420,13 @@ def register_routes(app, get_record, check_revision, add_record):
                             comparison[side]["experiment"] = new
                 rename_processing_sources(workspace, old, new)
             workspace.session._save_current_view_state()
-            if name in {"fit.settings", "metadata.update", "frames.exclude", "study.globals"}:
+            if name in {"fit.settings", "fit.pool", "metadata.update", "frames.exclude", "study.globals"}:
                 workspace.preview_results_by_experiment.pop(
                     workspace.session.selected_experiment, None
                 )
             if (name.startswith("roi.") and name != "roi.consolidate") or name in {
                 "fit.settings",
+                "fit.pool",
                 "metadata.update",
                 "frames.exclude",
                 "study.globals",
@@ -655,18 +672,49 @@ def register_routes(app, get_record, check_revision, add_record):
                 )
             )
 
+    @app.post("/api/workspaces/{key}/fit-check", response_model=FitReadinessResult)
+    def fit_check(key: str, command: FitCheckCommand):
+        record = get_record(key)
+        with record.lock:
+            check_revision(record, command.revision, command.view_revision)
+            snapshot = clone_workspace(record.workspace, readonly_arrays=True)
+        result = check_fit_readiness(snapshot, command.model_dump())
+        with record.lock:
+            check_revision(record, command.revision, command.view_revision)
+        return result
+
+    @app.get("/api/workspaces/{key}/fit-frames")
+    def fit_frames(key: str, offset: int = Query(0, ge=0), limit: int = Query(32, ge=1, le=100)):
+        record = get_record(key)
+        with record.lock:
+            return {"revision": record.revision,
+                    **fitting_frame_page(record.workspace.session, offset, limit)}
+
     @app.get("/api/workspaces/{key}/fit-options")
     def fit_options(key: str):
         record = get_record(key)
         with record.lock:
             session = record.workspace.session
             model = session.fit_settings.model_name or session.current_model_name
+            inputs = model_fit_inputs(model)
+            reference_scan = (
+                inputs.reference_scan and session.current_experiment.get("exp_type") == "sat_trans"
+            )
             return {
-                "pools": model_available_pools(model),
+                "workspace_id": key,
+                "experiment": session.selected_experiment,
+                "model": model,
+                "inputs": {
+                    "reference_scan": reference_scan,
+                    "prior_maps": inputs.prior_maps,
+                    "derived_maps": inputs.derived_maps,
+                },
+                "pools": model_available_pools(model, session.fit_settings.pool_overrides),
                 "default_pools": model_default_pools(model),
-                "reference_scans": session.sat_trans_reference_choices(),
+                "field_dimensions": fitting_dimensions(session, model),
+                "reference_scans": session.sat_trans_reference_choices() if reference_scan else [],
                 "prior_maps": {
-                    kind: session.ab_mt_map_choices(kind) for kind in ("t1", "b1", "b0")
+                    kind: session.ab_mt_map_choices(kind) for kind in inputs.prior_maps
                 },
             }
 
