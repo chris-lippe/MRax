@@ -5,6 +5,7 @@ import { JsonEditor, NumberField, Report } from './Controls';
 import type { WorkflowTask } from './WorkflowNav';
 import { InspectorSection, InspectorChoice } from './InspectorSection';
 import { WorkbenchIcon } from './WorkbenchIcon';
+import { WorkflowButton } from './WorkflowButton';
 
 type RegistrationPreset = {
   key: string;
@@ -335,9 +336,7 @@ export function RegistrationControls({
   };
   return (
     <div className="registration-controls">
-      <button
-        type="button"
-        className="secondary workflow-library-trigger"
+      <WorkflowButton
         data-tutorial="processing-workflows"
         disabled={busy}
         onClick={() =>
@@ -346,10 +345,7 @@ export function RegistrationControls({
             options: task === 'drift' ? seriesOptions : alignmentOptions,
           })
         }
-      >
-        <WorkbenchIcon name="pipeline" />
-        Workflows
-      </button>
+      />
       {error && <p role="alert">{error}</p>}
       <div className="control-layout" hidden={task !== 'alignment'}>
         {[

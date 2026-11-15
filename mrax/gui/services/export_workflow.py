@@ -11,7 +11,7 @@ from mrax.gui.masks import save_roi_set
 from mrax.io.bundle import write_bundle
 
 from .export import (
-    _export_object_records_for_session,
+    _export_object_records_for_workspace,
     _single_export_file_types,
     _write_single_export_object,
 )
@@ -96,7 +96,7 @@ def _write_export_files(workspace, options, folder):
             encoding="utf-8",
         )
     elif kind == "object":
-        records = _export_object_records_for_session(workspace.session)
+        records = _export_object_records_for_workspace(workspace)
         record = next((r for r in records if r["id"] == options.get("object")), None)
         if record is None:
             raise ValueError("Choose an export object")

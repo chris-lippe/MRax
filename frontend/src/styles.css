@@ -4573,12 +4573,13 @@ input[type='file'].visually-hidden {
 }
 .workflow-library-trigger {
   display: flex;
+  width: 100%;
   align-items: center;
   justify-content: center;
   gap: 7px;
 }
-.inspector-heading .workflow-library-trigger {
-  margin-top: 10px;
+.workflow-library-row {
+  margin-bottom: 8px;
 }
 .workflow-dialog {
   position: fixed;
@@ -4781,9 +4782,11 @@ input[type='file'].visually-hidden {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+.processing-controls,
+.registration-controls,
 .reconstruction-controls {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 .reconstruction-raw {
   padding: 10px 12px;

@@ -4,8 +4,9 @@ import numpy as np
 import pytest
 from test_bruker_geometry_workflows import LPS_TO_RAS, _scan
 
+from mrax.gui.services.analysis_workflows import run_alignment
 from mrax.gui.services.roi_tools import roi_command
-from mrax.gui.services.scene import fitting_roi
+from mrax.gui.services.scene import fitting_roi, render_overlay
 from mrax.gui.services.workspace import StudyWorkspace
 from mrax.gui.session import GuiSession
 from mrax.io.image_export import export_image_files
@@ -19,7 +20,8 @@ def workspace(path, counts=(3, 2, 1)):
 
 
 def test_package_selection_sets_orientation_and_hides_unmeasured_slices(tmp_path):
-    session = workspace(tmp_path).session
+    work = workspace(tmp_path)
+    session = work.session
     assert session.experiment_names == ["1"]
     for package, plane in enumerate(("axial", "coronal", "sagittal")):
         session.set_active_index("slice_package", package)
@@ -40,6 +42,23 @@ def test_package_selection_sets_orientation_and_hides_unmeasured_slices(tmp_path
     assert session.frame_image().shape == (2, 7)
     session.set_active_index("slice_package", 2)
     assert session.active_image_plane == "sagittal"
+    session.replace_fitted_maps(
+        {"Package map": session.image_array}, dimensions={"Package map": session.experiment_dims},
+    )
+    work.view_label = "Map"
+    for package in range(3):
+        session.set_active_index("slice_package", package)
+        session.set_active_index("frame", 1)
+        session.set_active_index("z", 0)
+        result = run_alignment(work, {
+            "reference_experiment": "1", "moving_experiment": "1",
+            "reference_source": "map", "moving_source": "map",
+            "reference_map": "Package map", "moving_map": "Package map",
+            "reference_frame": session.map_frame_index(), "moving_frame": session.map_frame_index(),
+            "manual": True,
+        }, lambda *args: None)
+        overlay = render_overlay(work, {"kind": "registration", "registration_key": result["key"], "component": "auto"})
+        np.testing.assert_array_equal(overlay, session.map_image())
 
 
 def test_package_rois_and_spatial_edits_do_not_cross_packages(tmp_path):

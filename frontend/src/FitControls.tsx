@@ -10,6 +10,7 @@ import { FitReadiness } from './FitReadiness';
 import { FitParameterEditor, type ParameterSpec } from './FitParameterEditor';
 import type { FitDimension } from './FitDimensionSelector';
 import { FitFrameSelector } from './FitFrameSelector';
+import { WorkflowButton } from './WorkflowButton';
 
 type FitChoices = {
   workspace_id: string;
@@ -200,8 +201,7 @@ export function FitControls({
   );
   return (
     <div className="control-layout fit-controls">
-      <button
-        className="secondary control-wide workflow-library-trigger"
+      <WorkflowButton
         disabled={busy}
         onClick={() =>
           openWorkflows?.('fitting', {
@@ -211,10 +211,7 @@ export function FitControls({
             excluded_frames: excluded,
           })
         }
-      >
-        <WorkbenchIcon name="pipeline" />
-        Workflows
-      </button>
+      />
       {error && <p role="alert">{error}</p>}
       <InspectorSection title="Model and solver" icon="fit" className="fit-model">
         <div className="field-grid">

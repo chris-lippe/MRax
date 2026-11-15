@@ -1303,14 +1303,17 @@ def run_fit(
             derived = model.derived_maps(fitted_fields)  # type: ignore[attr-defined]
         if derived:
             derived_units = getattr(model, "derived_map_units", {}) or {}
+            masked_derived = _mask_fields_for_output(
+                {key: value.values if isinstance(value, Quantity) else value for key, value in derived.items()},
+                getattr(unpack, "_mrax_mask_fields", None),
+                fill_value=mask_fill_value,
+            )
             for key, value in derived.items():
                 if key in fitted_fields:
                     continue
-                if isinstance(value, Quantity):
-                    fitted_fields[key] = value
-                else:
-                    unit = derived_units.get(key)
-                    fitted_fields[key] = Quantity(value, unit) if unit else value
+                unit = value.si_unit if isinstance(value, Quantity) else derived_units.get(key)
+                value = masked_derived[key]
+                fitted_fields[key] = Quantity(value, unit) if unit else value
 
     if return_model_callable:
         model_fn = bind_device(make_model_callable(experiment, model, study_globals=study_globals,

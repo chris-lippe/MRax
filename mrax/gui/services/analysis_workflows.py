@@ -15,7 +15,7 @@ from mrax.analysis import ROI
 from mrax.data_struct.dimensions import reshape_dims_to_frames
 from mrax.devices import resolve_device
 from mrax.gui.masks import embed_mask_slice, mask_slice_for_display
-from mrax.gui.models import make_model, model_parameter_specs
+from mrax.gui.models import model_parameter_specs
 from mrax.gui.registration import (
     DriftCorrectionOptions,
     RegistrationOptions,
@@ -309,9 +309,13 @@ def _registration_context(session, name, source, frame, map_name=None, *, worksp
         context.session = session
         context.view_label = "Map"
         session = display_session(context, fitted=True, map_name=map_name)
-    if not 0 <= int(frame) < session.frame_count:
-        raise ValueError("Registration frame is out of range")
-    session.set_active_frame(int(frame))
+    if source == "map":
+        session.active_map = map_name
+        session.set_map_frame(int(frame), map_name)
+    else:
+        if not 0 <= int(frame) < session.frame_count:
+            raise ValueError("Registration frame is out of range")
+        session.set_active_frame(int(frame))
     return session
 
 
@@ -344,16 +348,7 @@ def _registration_source(
         elif data.shape == tuple(size for size in spatial_shape if size != 1):
             data = data.reshape(spatial_shape)
         else:
-            from mrax.core.loss_builder import _field_metadata
-
-            shape, names, _ = _field_metadata(
-                session.build_experiment(),
-                model=make_model(session.fit_settings.model_name or session.current_model_name),
-            )
-            if data.shape != shape:
-                raise ValueError(
-                    "Map dimensions do not match the selected experiment's parameter grid"
-                )
+            names = session.map_dimensions(map_name)
             data = data[
                 tuple(
                     slice(None) if name in spatial else session.active_indices.get(name, 0)
@@ -563,6 +558,8 @@ def run_alignment(workspace, options, progress):
         "moving_source": options.get("moving_source", "image"),
         "reference_frame": int(options.get("reference_frame", 0)),
         "moving_frame": int(options.get("moving_frame", session.active_frame)),
+        "reference_geometry_frame": reference_context.active_frame,
+        "moving_geometry_frame": moving_context.active_frame,
         "reference_aggregation": options.get("reference_aggregation", "frame"),
         "moving_aggregation": options.get("moving_aggregation", "frame"),
         "reference_grid": {
@@ -833,7 +830,7 @@ def run_operation(workspace, operation, options, progress):
             for value in result["fields"].values()
         ):
             raise ValueError("The fit produced no finite maps")
-        session.replace_fitted_maps(result["fields"])
+        session.replace_fitted_maps(result["fields"], dimensions=result["field_dims"])
         workspace.fit_results_by_experiment[session.selected_experiment] = result
         from .pipeline import _public_step, current_pipeline, signature, snapshot
 

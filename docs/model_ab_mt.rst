@@ -53,6 +53,9 @@ AB-MT+n model
   seconds by the study field strength.  :math:`a_0`, :math:`b_0`, and
   :math:`\sin\alpha_{eff}` are fitted AB-MT+n parameters. :math:`Z_{prev}=1`
   unless supplied as an observable.
+  :func:`mrax.analysis.prepare_ab_mt_z_spectra` uses the preceding acquired
+  readout at each voxel. The first readout supplies its own preceding value.
+  Each slice package keeps a separate acquisition history.
 - Observables: ``freq_offsets`` (ppm), ``sat_b1`` (uT), ``sat_time`` (ms), ``TR`` (ms),
   plus a study-wide ``field_strength_mhz``.
 - Optional maps: ``r1_map`` or ``t1_map`` (required), ``b0_map``/``b1_map`` for B0/B1 corrections.

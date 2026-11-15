@@ -7,6 +7,7 @@ import { InspectorSection } from './InspectorSection';
 import { WorkbenchIcon } from './WorkbenchIcon';
 import { NoiseEstimationControls } from './NoiseEstimationControls';
 import { processingGroups, type ProcessingSection } from './WorkflowNav';
+import { WorkflowButton } from './WorkflowButton';
 
 type Catalog = components['schemas']['ProcessingCatalog'];
 type Draft = {
@@ -322,18 +323,13 @@ export function ProcessControls({
   return (
     <div className="processing-controls">
       {section === 'denoise' && (
-        <button
-          type="button"
-          className="secondary workflow-library-trigger"
+        <WorkflowButton
           data-tutorial="processing-workflows"
           disabled={busy}
           onClick={() =>
             openWorkflows?.('denoising', { operation: 'process', options: processOptions })
           }
-        >
-          <WorkbenchIcon name="pipeline" />
-          Workflows
-        </button>
+        />
       )}
       {error && <p role="alert">{error}</p>}
       <form

@@ -143,6 +143,16 @@ def test_builtin_observables_broadcast_over_volumetric_parameter_maps(kind):
     planar_observations = {**observations, "r1_map": Quantity(jnp.ones((6, 4)), "1/s")}
     planar = model.model_apply(planar_fields, None, planar_observations, _allow_direct=True)
     np.testing.assert_allclose(predicted.reshape((3, 6, 4)), planar, rtol=1e-6, atol=1e-7)
+    if kind == "ab_mt_n":
+        from mrax.analysis.saturation_transfer import experiment_with_ab_mt_z_prev
+
+        experiment = Experiment(dims={"slice_package": 2, "t": 2, "offset": 3, "x": 1, "y": 1}, observables={})
+        measured = jnp.arange(12, dtype=jnp.float32).reshape(experiment.shape)
+        prepared = experiment_with_ab_mt_z_prev(experiment, measured)
+        np.testing.assert_array_equal(
+            prepared.observables["z_prev"].values.reshape(2, 6),
+            [[0, 0, 1, 2, 3, 4], [6, 6, 7, 8, 9, 10]],
+        )
 
 
 @pytest.mark.parametrize(
@@ -236,16 +246,22 @@ def test_auto_data_variance_estimates_heteroscedastic_frame_noise():
 
 def test_fit_study_storage_and_roi_workflow(tmp_path):
     study, model = _small_t2_study()
+    model.derived_maps = lambda fields: {"offset_map": Quantity(fields["t2"].values + 7, "ms")}
+    mask = np.asarray([[True, False], [True, False]])
     plan = plan_study_fits(study, target_names=["t2_demo"])
 
     results, field_cache = execute_study_plan(
         plan,
-        run_fit_kwargs={"num_steps": 12, "step_size": 0.03},
+        run_fit_kwargs={"num_steps": 12, "step_size": 0.03, "mask": mask, "compute_derived_maps": True},
     )
 
     assert results[0]["loss_history"][-1] < results[0]["loss_history"][0]
     assert {"amplitude", "t2", "bias"} <= set(field_cache["t2_demo"])
     assert results[0]["spatial_geometry"]["source"] == "synthetic"
+    derived = results[0]["fields"]["offset_map"]
+    assert derived.si_unit == "ms"
+    np.testing.assert_array_equal(derived.values[~mask], 0)
+    np.testing.assert_allclose(derived.values[mask], field_cache["t2_demo"]["t2"].values[mask] + 7)
 
     manifest = save_study_results(
         study,

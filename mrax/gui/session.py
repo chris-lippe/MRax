@@ -15,7 +15,7 @@ from mrax.analysis import ROI, broadcast_mask, collect_roi_stats, prepare_ab_mt_
 from mrax.analysis.dti import dti_design_rank, fit_dti_log_linear
 from mrax.analysis.timecourse import extract_timecourse as extract_timecourse_array
 from mrax.analysis.timecourse import extract_timecourse_from_experiment
-from mrax.core.loss_builder import run_fit
+from mrax.core.loss_builder import _field_metadata, run_fit
 from mrax.data_struct import (
     DataSet,
     Experiment,
@@ -1378,11 +1378,61 @@ class GuiSession:
             return value.si_unit
         return (self.current_experiment.get("fitted_map_units") or {}).get(map_name)
 
-    def replace_fitted_maps(self, fields: Mapping[str, Any] | None) -> None:
+    def map_dimensions(self, name: str | None = None, *, experiment: str | None = None) -> dict[str, int]:
+        """Named axes on the stored parameter grid."""
+        experiment = experiment or self.selected_experiment
+        entry = (self.data or {}).get("experiments", {}).get(experiment, {})
+        name = name or self.active_map
+        array = _array_source((entry.get("fitted_maps") or {})[name])
+        saved = ((entry.get("extra_metadata") or {}).get("fitted_map_dims") or {}).get(name)
+        if saved and tuple(saved.values()) == array.shape:
+            return dict(saved)
+        dims = (entry.get("fit_grid") or {}).get("dims") or self.summary_by_name.get(experiment, {}).get("dims") or {}
+        spatial = {key: dims[key] for key in spatial_names(dims)}
+        if tuple(spatial.values()) == array.shape:
+            return spatial
+        if tuple(dims.values()) == array.shape:
+            return dict(dims)
+        from mrax.io.image_export import _image_layout
+
+        shaped, names = _image_layout(array, dims)
+        if shaped.shape == array.shape:
+            return dict(zip(names, array.shape, strict=True))
+        raise ValueError("The fitted map has no matching dimension metadata")
+
+    def map_frame_count(self, name: str | None = None, *, experiment: str | None = None) -> int:
+        return frame_count_from_dims(self.map_dimensions(name, experiment=experiment))
+
+    def map_frame_index(self, name: str | None = None) -> int:
+        dims = self.map_dimensions(name)
+        names = non_spatial_names(dims)
+        if not names:
+            return 0
+        return int(np.ravel_multi_index(
+            tuple(min(self.active_indices.get(key, 0), dims[key] - 1) for key in names),
+            tuple(dims[key] for key in names),
+        ))
+
+    def set_map_frame(self, value: int, name: str | None = None) -> None:
+        dims = self.map_dimensions(name)
+        names = non_spatial_names(dims)
+        count = frame_count_from_dims(dims)
+        if not 0 <= value < count:
+            raise ValueError("The fitted map has no matching frame")
+        if names:
+            for key, index in zip(names, np.unravel_index(value, tuple(dims[key] for key in names)), strict=True):
+                self.set_active_index(key, int(index))
+
+    def replace_fitted_maps(
+        self, fields: Mapping[str, Any] | None, *, dimensions: Mapping[str, Mapping[str, int]] | None = None,
+    ) -> None:
         """Replace fitted maps for the current experiment and invalidate display slices."""
 
         maps = dict(fields or {})
         self.current_experiment["fitted_maps"] = maps
+        metadata = self.current_experiment.setdefault("extra_metadata", {})
+        saved = {**metadata.get("fitted_map_dims", {}), **(dimensions or {})}
+        metadata["fitted_map_dims"] = {name: dict(saved[name]) for name in maps if name in saved}
         self.active_map = next(iter(maps), None)
         self._slice_cache.clear()
 
@@ -1513,7 +1563,7 @@ class GuiSession:
             try:
                 return _axis_controls_for_map(
                     _array_source(self.fitted_maps[self.active_map or self.map_names[0]]),
-                    self.experiment_dims,
+                    self.map_dimensions(self.active_map or self.map_names[0]),
                     plane_dims=self.image_plane_dims,
                 )
             except Exception:
@@ -1941,7 +1991,7 @@ class GuiSession:
         if key not in self._slice_cache:
             self._slice_cache[key] = _display_slice(
                 _array_source(self.fitted_maps[map_name]),
-                dims=self.experiment_dims,
+                dims=self.map_dimensions(map_name),
                 indices=indices,
                 kind="map",
                 plane_dims=self.image_plane_dims,
@@ -2400,6 +2450,7 @@ class GuiSession:
         mask_dims = self._roi_mask_dims(roi, tuple(experiment.spatial_dim_names)) if roi is not None else None
         spatial_geometry = dataset.spatial_geometry
         output_shape = experiment.spatial_shape
+        field_shape, field_names, _extra_dims = _field_metadata(experiment, model=model)
         fit_bounds = None
         if (
             mask is not None
@@ -2445,6 +2496,11 @@ class GuiSession:
             auto_mask_nan_observables=self.fit_settings.auto_mask_nan_observables,
             regularizer_configs=self.fit_settings.regularizer_configs or None,
             initial_params=initial_params,
+            physical_metric=(
+                "initial_gradient"
+                if model.name in {"t2_se", "t2star_se", "exp_decay"}
+                else "curvature"
+            ),
             compute_derived_maps=(
                 self.fit_settings.compute_derived_maps
                 if compute_derived_maps is None
@@ -2483,6 +2539,11 @@ class GuiSession:
             "name": self.selected_experiment or "gui_fit",
             "model": model.name,
             "fields": fields,
+            "field_dims": {
+                name: {dim: int(size) for dim, size in zip(field_names, field_shape, strict=True)}
+                for name, value in fields.items()
+                if _as_numpy(value).shape == field_shape
+            },
             "loss_history": losses,
             "cached": False,
             "fit_notes": fit_notes,
@@ -3617,9 +3678,6 @@ def _display_slice(
         return np.asarray(arr).reshape((1, 1))
     if arr.ndim == 1:
         return np.asarray(arr).reshape((1, arr.shape[0]))
-    if arr.ndim == 2:
-        return np.asarray(arr)
-
     controls = _axis_controls_for_kind(arr, dims or {}, kind, plane_dims=plane_dims)
     index_map = dict(indices or {})
     slicer: list[object] = [slice(None)] * arr.ndim
@@ -3627,7 +3685,7 @@ def _display_slice(
         axis = int(control["axis"])
         key = str(control["key"])
         if 0 <= axis < arr.ndim:
-            value = int(index_map.get(key, 0))
+            value = int(index_map.get(str(control["label"]), index_map.get(key, 0)))
             slicer[axis] = max(0, min(value, arr.shape[axis] - 1))
     selected = np.asarray(arr[tuple(slicer)])
     if selected.ndim == 2:

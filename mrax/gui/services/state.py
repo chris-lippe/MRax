@@ -120,7 +120,10 @@ def _serialize_gui_state(
                 unit = value.si_unit
                 array_value = value.values
             arrays[key] = np.asarray(array_value)
-            rows.append({"name": str(map_name), "array_key": key, "unit": unit})
+            rows.append({
+                "name": str(map_name), "array_key": key, "unit": unit,
+                "dims": session.map_dimensions(str(map_name), experiment=str(exp_name)),
+            })
         if rows:
             fitted_map_rows[str(exp_name)] = rows
     drift_rows: dict[str, dict[str, Any]] = {}
@@ -394,6 +397,11 @@ def _restore_gui_state(
                 unit = str(row.get("unit") or "")
                 arr = np.asarray(arrays[key])
                 restored_maps[map_name] = Quantity(arr, unit) if unit else arr
+                if row.get("dims"):
+                    dimensions = {str(key): int(size) for key, size in row["dims"].items()}
+                    if tuple(dimensions.values()) != arr.shape:
+                        raise ValueError("Fitted map dimensions do not match its array")
+                    exp_data.setdefault("extra_metadata", {}).setdefault("fitted_map_dims", {})[map_name] = dimensions
                 if unit:
                     units[map_name] = unit
             except Exception as exc:

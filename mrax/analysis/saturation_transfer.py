@@ -7,7 +7,6 @@ import numpy as np
 
 from mrax.data_struct import DataSet, Experiment, Quantity, Study
 from mrax.data_struct.dimensions import (
-    non_spatial_names,
     reshape_dims_to_frames,
     reshape_frames_to_dims,
     spatial_shape_from_dims,
@@ -191,10 +190,21 @@ def experiment_with_ab_mt_z_prev(
 ) -> Experiment:
     """Return ``experiment`` with AB-MT runtime observables derived from Z-spectra."""
 
-    dim_names = non_spatial_names(experiment.dims)
-    axis = dim_names.index("offset") if "offset" in dim_names else (0 if dim_names else None)
-    z_values = jnp.asarray(z_spectra)
-    z_prev = jnp.roll(z_values, shift=1, axis=axis) if axis is not None else z_values
+    def previous_readout(values, dims):
+        frames = reshape_dims_to_frames(values, dims)
+        previous = jnp.concatenate((frames[:1], frames[:-1]), axis=0)
+        return reshape_frames_to_dims(previous, dims)
+
+    z_values = reshape_frames_to_dims(jnp.asarray(z_spectra), experiment.dims)
+    if "slice_package" in experiment.dims:
+        axis = list(experiment.dims).index("slice_package")
+        dims = {name: size for name, size in experiment.dims.items() if name != "slice_package"}
+        z_prev = jnp.stack([
+            previous_readout(jnp.take(z_values, index, axis=axis), dims)
+            for index in range(experiment.dims["slice_package"])
+        ], axis=axis)
+    else:
+        z_prev = previous_readout(z_values, experiment.dims)
     observables: dict[str, Quantity] = {
         "z_prev": Quantity(z_prev, "1"),
     }

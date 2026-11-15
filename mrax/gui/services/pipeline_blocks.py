@@ -171,8 +171,8 @@ def validate_chain(workspace, steps):
                 resolved_block(context, step["kind"], step["options"])
 
 
-def fit_result_for_map(workspace, map_name=None):
-    name = workspace.session.selected_experiment
+def fit_result_for_map(workspace, map_name=None, *, experiment=None):
+    name = experiment or workspace.session.selected_experiment
     selected = workspace.session.active_map if map_name is None else map_name
     pipeline = workspace.pipelines.get(name) or {}
     for record in pipeline.get("fits", {}).values():
@@ -189,6 +189,7 @@ def run_fitting_block(workspace, step, progress):
     document, options = resolved_block(workspace, "fit", step["options"])
     session = workspace.session
     original_maps = dict(session.fitted_maps)
+    original_dims = dict((session.current_experiment.get("extra_metadata") or {}).get("fitted_map_dims") or {})
     pipeline = workspace.pipelines[session.selected_experiment]
     prior = workspace.fit_results_by_experiment.get(session.selected_experiment)
     if original_maps and not (prior or {}).get("block_id"):
@@ -240,6 +241,7 @@ def run_fitting_block(workspace, step, progress):
         original_maps.pop(key, None)
     prefix = step.get("map_prefix", document.name)
     maps = {prefix + " / " + key: value for key, value in result["fields"].items()}
-    session.replace_fitted_maps({**original_maps, **maps})
+    dimensions = {**original_dims, **{prefix + " / " + key: dims for key, dims in result["field_dims"].items()}}
+    session.replace_fitted_maps({**original_maps, **maps}, dimensions=dimensions)
     session.active_map = next(iter(maps), session.active_map)
     return {"prefix": prefix, "maps": list(maps), "result": result}

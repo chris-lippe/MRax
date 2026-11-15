@@ -6,6 +6,8 @@ import math
 
 import numpy as np
 
+from mrax.data_struct.dimensions import non_spatial_names
+
 from .cloning import clone_workspace
 from .pipeline import display_session, install, snapshot
 from .view_data import display_options, render_image
@@ -223,13 +225,25 @@ def _plane(workspace, source, navigation):
     elif kind != "registration":
         raise ValueError("Unknown comparison source")
     grid = display_session(context)
-    frame_count = 1 if kind == "map" else grid.frame_count
+    frame_count = grid.map_frame_count() if kind == "map" else grid.frame_count
+    if follow_frame and not navigation.get("frame_explicit", False):
+        names = non_spatial_names(grid.map_dimensions() if kind == "map" else grid.experiment_dims)
+        named = navigation.get("named_indices", {})
+        if any(dimension in named for dimension in names):
+            for dimension in names:
+                if dimension in named:
+                    grid.set_active_index(dimension, named[dimension])
+            frame = grid.map_frame_index() if kind == "map" else grid.active_frame
     if follow_frame and frame_count == 1:
         frame = 0
     if not 0 <= frame < frame_count:
         raise ValueError("This source has no matching frame. Choose a fixed comparison frame.")
-    session.set_active_frame(frame)
-    grid.set_active_frame(frame)
+    if kind == "map":
+        session.set_map_frame(frame)
+        grid.set_map_frame(frame)
+    else:
+        session.set_active_frame(frame)
+        grid.set_active_frame(frame)
     if plane is None:
         plane = grid.native_image_plane
     if plane != grid.native_image_plane and not grid.supports_image_planes():
@@ -283,6 +297,7 @@ def _plane(workspace, source, navigation):
             "plane_axis_labels": list(grid.image_plane_axis_labels),
             "plane_axis_directions": list(grid.image_plane_axis_directions),
             "frame": frame,
+            "geometry_frame": grid.active_frame,
             "unit": str(unit),
             "range": [float(finite.min()), float(finite.max())] if finite.size else [0.0, 1.0],
         },
@@ -339,6 +354,8 @@ def render_comparison(workspace, *, catalog=None):
         else settings["frame"],
         "plane": plane,
         "indices": resolved,
+        "named_indices": workspace.session.active_indices,
+        "frame_explicit": settings["frame"] is not None,
     }
     arrays, planes, grids = [], [], []
     for side in ("left", "right"):
@@ -355,8 +372,8 @@ def render_comparison(workspace, *, catalog=None):
             grids[1].spatial_dim_names,
             grids[1].spatial_shape,
             grids[1].build_dataset().spatial_geometry,
-            source_frame=planes[0]["frame"],
-            target_frame=planes[1]["frame"],
+            source_frame=planes[0]["geometry_frame"],
+            target_frame=planes[1]["geometry_frame"],
         )
         if (
             planes[0]["plane_dims"] != planes[1]["plane_dims"]

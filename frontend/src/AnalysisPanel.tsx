@@ -14,6 +14,7 @@ import { workflows, type Workflow, type WorkflowTask } from './WorkflowNav';
 import { WorkbenchIcon } from './WorkbenchIcon';
 import { InspectorGroup } from './InspectorSection';
 import { useControlLayout } from './useControlLayout';
+import { WorkflowButton } from './WorkflowButton';
 
 export function AnalysisPanel(
   props: AnalysisProps &
@@ -70,17 +71,6 @@ export function AnalysisPanel(
         {props.workspace?.loaded && (
           <span className="inspector-context">{props.workspace.experiment}</span>
         )}
-        {section === 'analyze' && (
-          <button
-            className="secondary small workflow-library-trigger"
-            data-tutorial="processing-workflows"
-            disabled={blocked.busy}
-            onClick={() => props.openWorkflows?.('processing')}
-          >
-            <WorkbenchIcon name="pipeline" />
-            Workflows
-          </button>
-        )}
       </header>
       <div
         ref={body}
@@ -90,6 +80,15 @@ export function AnalysisPanel(
         aria-labelledby={`workflow-${section} workflow-task-heading`}
         tabIndex={0}
       >
+        {section === 'analyze' && (
+          <div className="workflow-library-row">
+            <WorkflowButton
+              data-tutorial="processing-workflows"
+              disabled={blocked.busy}
+              onClick={() => props.openWorkflows?.('processing')}
+            />
+          </div>
+        )}
         <div hidden={section !== 'image' || signalTools}>{props.displayControls}</div>
         <div hidden={!signalTools}>{props.signalSourceControls}</div>
         <div hidden={task !== 'timecourse' && !props.signalComparison}>

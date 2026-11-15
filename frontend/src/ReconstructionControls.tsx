@@ -8,6 +8,7 @@ import { ReconstructionPipelineEditor } from './ReconstructionPipelineEditor';
 import { useFileSystem } from './FileSystemDialog';
 import type { WorkflowEntry } from './reusableWorkflows';
 import { recoProblem, type RecoCatalog, type RecoPlan } from './reconstructionPlan';
+import { WorkflowButton } from './WorkflowButton';
 
 type Draft = { plan: RecoPlan; component: string; generation: number; submitted?: boolean };
 
@@ -105,16 +106,11 @@ export function ReconstructionControls({
   const rawAvailable = Boolean(w?.can_reconstruct || w?.can_load_raw);
   return (
     <div className="reconstruction-controls">
-      {error && <p role="alert">{error}</p>}
-      <button
-        type="button"
-        className="secondary workflow-library-trigger"
+      <WorkflowButton
         disabled={busy}
         onClick={() => openWorkflows?.('reconstruction', { component, pipeline: plan })}
-      >
-        <WorkbenchIcon name="save" />
-        Workflows
-      </button>
+      />
+      {error && <p role="alert">{error}</p>}
       <details className="reconstruction-raw">
         <summary>
           <WorkbenchIcon name="reconstruct" />

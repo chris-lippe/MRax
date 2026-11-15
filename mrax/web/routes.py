@@ -27,7 +27,7 @@ from mrax.gui.registration import DriftCorrectionOptions, RegistrationOptions, r
 from mrax.gui.services.analysis_workflows import set_fit_settings, transform_roi, update_metadata
 from mrax.gui.services.cloning import clone_workspace
 from mrax.gui.services.export import (
-    _export_object_records_for_session,
+    _export_object_records_for_workspace,
     _single_export_file_types,
     _single_export_record_metadata,
 )
@@ -545,7 +545,7 @@ def register_routes(app, get_record, check_revision, add_record):
         with record.lock:
             workspace = record.workspace
             session = workspace.session
-            rows = _export_object_records_for_session(session) if session.is_loaded else []
+            rows = _export_object_records_for_workspace(workspace) if session.is_loaded else []
             return json_value(
                 {
                     "summary": list(session.summary_by_name.values()),

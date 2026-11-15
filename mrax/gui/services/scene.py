@@ -10,7 +10,12 @@ from uuid import uuid4
 import numpy as np
 
 from mrax.analysis import ROI
-from mrax.data_struct.dimensions import reshape_dims_to_frames
+from mrax.data_struct import SpatialGeometry
+from mrax.data_struct.dimensions import (
+    reshape_dims_to_frames,
+    spatial_names,
+    spatial_shape_from_dims,
+)
 from mrax.gui.registration import apply_transform_to_image
 
 from .cloning import clone_workspace
@@ -81,7 +86,7 @@ def overlay_sources(workspace, catalog):
                 **common,
                 "kind": "map",
                 "map_name": name,
-                "frames": 1,
+                "frames": workspace.session.map_frame_count(name, experiment=entry["name"]),
                 "label": f"{entry['name']} · {name}",
             }
             for name in entry["maps"]
@@ -158,17 +163,24 @@ def render_overlay(workspace, layer):
         if result is None:
             raise ValueError("This registration is unavailable")
         meta = result["metadata"]
-        reference = clone_workspace(workspace, share_sources=True).session
-        reference.select_experiment(meta["reference_experiment"])
+        reference_grid = meta.get("reference_grid")
+        if reference_grid:
+            reference_dims = reference_grid["dims"]
+            reference_geometry = SpatialGeometry.from_metadata(reference_grid.get("geometry"))
+        else:
+            reference = clone_workspace(workspace, share_sources=True).session
+            reference.select_experiment(meta["reference_experiment"])
+            reference_dims = reference.experiment_dims
+            reference_geometry = reference.build_dataset().spatial_geometry
         require_common_grid(
-            reference.spatial_dim_names,
-            reference.spatial_shape,
-            reference.build_dataset().spatial_geometry,
+            spatial_names(reference_dims),
+            spatial_shape_from_dims(reference_dims),
+            reference_geometry,
             target.spatial_dim_names,
             target.spatial_shape,
             target.build_dataset().spatial_geometry,
-            source_frame=meta.get("reference_frame", 0),
-            target_frame=0 if workspace.view_label == "Map" else target.active_frame,
+            source_frame=meta.get("reference_geometry_frame", meta.get("reference_frame", 0)),
+            target_frame=target.active_frame,
         )
         if meta.get("scope") != "volume":
             if meta.get("plane", "axial") != target.active_image_plane or any(
@@ -242,7 +254,17 @@ def render_overlay(workspace, layer):
     context.session.select_experiment(layer["experiment"])
     source = display_session(context, fitted=True, map_name=layer.get("map_name")) if layer["kind"] == "map" else context.session
 
-    frame = target.active_frame if layer.get("frame") is None else layer["frame"]
+    if layer["kind"] == "map":
+        source.active_map = layer.get("map_name")
+        if layer.get("frame") is not None:
+            source.set_map_frame(layer["frame"])
+        else:
+            for dim in source.map_dimensions():
+                if dim in target.active_indices:
+                    source.set_active_index(dim, target.active_indices[dim])
+        frame = source.active_frame
+    else:
+        frame = target.active_frame if layer.get("frame") is None else layer["frame"]
     if layer["kind"] != "map" and not 0 <= frame < source.frame_count:
         raise ValueError("The overlay has no matching frame. Select an explicit overlay frame")
     require_common_grid(
@@ -252,14 +274,15 @@ def render_overlay(workspace, layer):
         target.spatial_dim_names,
         target.spatial_shape,
         target.build_dataset().spatial_geometry,
-        source_frame=0 if layer["kind"] == "map" else frame,
-        target_frame=0 if workspace.view_label == "Map" else target.active_frame,
+        source_frame=frame,
+        target_frame=target.active_frame,
     )
     source.set_image_plane(target.active_image_plane)
     for dim, value in target.active_indices.items():
-        if dim != "frame":
+        if dim != "frame" and dim in source.spatial_dim_names:
             source.set_active_index(dim, value)
-    source.set_active_frame(0 if layer["kind"] == "map" else frame)
+    if layer["kind"] != "map":
+        source.set_active_frame(frame)
     if layer["kind"] == "map":
         source.active_map = layer.get("map_name")
         data = source.map_image()

@@ -50,6 +50,25 @@ def _quantity_array_and_unit(value: Any) -> tuple[np.ndarray, str | None]:
     return np.asarray(value), None
 
 
+def _export_object_records_for_workspace(workspace) -> list[dict[str, Any]]:
+    from .pipeline_blocks import fit_result_for_map
+
+    records = _export_object_records_for_session(workspace.session)
+    for record in records:
+        if record["kind"] != "map":
+            continue
+        result = fit_result_for_map(workspace, record["name"], experiment=record["experiment"])
+        grid = result.get("pipeline_grid")
+        if grid:
+            geometry = grid.get("geometry") or {}
+            record["nifti_reference"] = {
+                "experiment": record["experiment"],
+                "geometry": geometry,
+                "affine": geometry.get("affine"),
+            }
+    return records
+
+
 def _export_object_records_for_session(session: GuiSession) -> list[dict[str, Any]]:
     if not session.is_loaded:
         return []
@@ -65,7 +84,6 @@ def _export_object_records_for_session(session: GuiSession) -> list[dict[str, An
             exp_data.get("pipeline_source_grid") or extra.get("pipeline_source_grid") or {}
         )
         source_dims = source_grid.get("dims") or dims
-        fit_dims = (exp_data.get("fit_grid") or extra.get("fit_grid") or {}).get("dims") or dims
         if exp_data.get("mr_image") is not None:
             current_image = np.asarray(exp_data["mr_image"])
             records.append(
@@ -149,7 +167,7 @@ def _export_object_records_for_session(session: GuiSession) -> list[dict[str, An
                     group=group,
                     experiment=exp_name,
                     name=str(map_name),
-                    dims=fit_dims,
+                    dims=session.map_dimensions(str(map_name), experiment=str(exp_name)),
                     unit=unit or str((exp_data.get("fitted_map_units") or {}).get(map_name) or ""),
                 )
             )
