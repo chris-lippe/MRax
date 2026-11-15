@@ -73,6 +73,10 @@ def display_session(workspace, *, fitted=False, map_name=None):
     context.data = {**session.data, "experiments": dict(session.data["experiments"])}
     entry = dict(session.current_experiment)
     entry["spatial_geometry"] = grid["geometry"]
+    entry["extra_metadata"] = {
+        **(entry.get("extra_metadata") or {}),
+        "registration_space": grid.get("space") or session.selected_experiment,
+    }
     entry["mr_image"] = (
         grid["data"]
         if raw_view
@@ -120,6 +124,12 @@ def snapshot(session, *, original=False):
         "exp_type": experiment.exp_type,
         "unit": (entry.get("extra_metadata") or {}).get("image_unit", ""),
         "geometry": None if geometry is None else geometry.to_metadata(),
+        "space": session.selected_experiment
+        if original
+        else (
+            (entry.get("extra_metadata") or {}).get("registration_space")
+            or session.selected_experiment
+        ),
     }
 
 
@@ -139,10 +149,17 @@ def install(workspace, state, *, update_model=True):
     entry["mr_image"] = values
     entry["observables"] = copy.deepcopy(state["observables"])
     entry["spatial_geometry"] = copy.deepcopy(state["geometry"])
+    entry["processed"] = dict(entry.get("processed") or {})
+    space = state.get("space") or name
+    if space != name:
+        entry["processed"]["registration_space"] = space
+    else:
+        entry["processed"].pop("registration_space", None)
     entry["extra_metadata"] = {
         **(entry.get("extra_metadata") or {}),
         "image_unit": state["unit"],
         "spatial_geometry": copy.deepcopy(state["geometry"]),
+        "registration_space": space,
     }
     pipeline = current_pipeline(workspace)
     if pipeline is not None:
@@ -167,6 +184,7 @@ def install(workspace, state, *, update_model=True):
         )
         session.study.models[index] = make_model(state["model"])
         session.study.datasets[index].data = values
+        session.study.datasets[index].processed = dict(entry["processed"])
         session.study.datasets[index].spatial_geometry = _spatial_geometry_from_metadata(
             {"spatial_geometry": state["geometry"]}, spatial_shape=session.spatial_shape
         )
@@ -219,7 +237,7 @@ def _capture_inputs(workspace, options):
         if name and name != workspace.session.selected_experiment:
             if name not in workspace.session.experiment_names:
                 raise ValueError("Choose an available reference experiment")
-            context = clone_workspace(workspace)
+            context = clone_workspace(workspace, readonly_arrays=True)
             context.session.select_experiment(name)
             references[name] = snapshot(context.session)
     mask = None
@@ -227,8 +245,18 @@ def _capture_inputs(workspace, options):
     if roi_names is None and options.get("roi_name"):
         roi_names = [options["roi_name"]]
     if roi_names is not None:
-        roi = fitting_roi(workspace, roi_names)
-        mask = {"mask": np.asarray(roi.mask).copy(), "dims": tuple(roi.dims)}
+        fitting_roi(workspace, roi_names)
+        mask = {
+            "rois": [
+                {
+                    "mask": np.asarray(roi.mask).copy(),
+                    "dims": tuple(roi.dims or workspace.session.roi_dim_names),
+                    "metadata": copy.deepcopy(roi.metadata),
+                }
+                for roi in workspace.session.rois
+                if roi.name in roi_names
+            ]
+        }
     return references, mask
 
 
@@ -263,7 +291,9 @@ def pipeline_info(workspace):
     preview = (
         workspace.preview_results_by_experiment.get(workspace.session.selected_experiment) or {}
     )
-    stored = [] if pipeline is None else [row["result"] for row in pipeline.get("fits", {}).values()]
+    stored = (
+        [] if pipeline is None else [row["result"] for row in pipeline.get("fits", {}).values()]
+    )
     return {
         "enabled": True if pipeline is None else pipeline["enabled"],
         "generation": 0 if pipeline is None else pipeline["generation"],
@@ -278,7 +308,11 @@ def pipeline_info(workspace):
 
 
 def _grid(state):
-    return {"dims": dict(state["dims"]), "geometry": copy.deepcopy(state["geometry"])}
+    return {
+        "dims": dict(state["dims"]),
+        "geometry": copy.deepcopy(state["geometry"]),
+        "space": state.get("space"),
+    }
 
 
 def _evaluate(workspace, progress, *, start_at=0):
@@ -330,10 +364,44 @@ def _evaluate_steps(workspace, progress, report, *, start_at=0):
         work.session.select_experiment(name)
         if step.get("mask") is not None:
             frozen = step["mask"]
-            mask = project_roi(
-                workspace,
-                ROI("_pipeline_mask", frozen["mask"], dims=frozen["dims"]),
-                steps=step.get("input_steps", enabled[:index]),
+            mask_values = np.zeros(work.session.roi_shape, dtype=bool)
+            prefix = step.get("input_steps", enabled[:index])
+            input_space = (work.session.current_experiment.get("extra_metadata") or {}).get(
+                "registration_space", name
+            )
+            for item in frozen.get("rois", [frozen]):
+                projected = project_roi(
+                    workspace,
+                    ROI(
+                        "_pipeline_mask",
+                        item["mask"],
+                        dims=tuple(item["dims"]),
+                        metadata=dict(item.get("metadata") or {}),
+                    ),
+                    steps=prefix,
+                )
+                if projected.mask.shape != mask_values.shape:
+                    raise ValueError("The selected ROI no longer matches this pipeline input grid")
+                if projected.metadata.get("registration_space") not in {
+                    None,
+                    input_space,
+                } and name not in projected.metadata.get("compatible_experiments", []):
+                    raise ValueError(
+                        "The selected ROI is outside this pipeline's registration space. Transfer it or choose another ROI"
+                    )
+                mask_values |= projected.mask != 0
+            mask = ROI(
+                "_pipeline_mask",
+                mask_values,
+                dims=tuple(work.session.roi_dim_names),
+                metadata={
+                    "registration_space": input_space,
+                    "registration_steps": [
+                        value["id"] + ":" + str(value["version"])
+                        for value in prefix
+                        if value["enabled"] and value["kind"] in {"register", "stored_registration"}
+                    ],
+                },
             )
             work.session.rois = [mask]
             options["roi_names"] = [mask.name]
@@ -357,7 +425,8 @@ def _evaluate_steps(workspace, progress, report, *, start_at=0):
             if step.get("noise_mask") is not None:
                 frozen = step["noise_mask"]
                 work._processing_noise_roi = project_roi(
-                    workspace, ROI("_pipeline_noise", frozen["mask"], dims=frozen["dims"]),
+                    workspace,
+                    ROI("_pipeline_noise", frozen["mask"], dims=frozen["dims"]),
                     steps=step.get("input_steps", enabled[:index]),
                 )
             summary = apply_processing(work, options, step_progress)
@@ -434,7 +503,9 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
     if kind not in {"reconstruct", "fit"}:
         clean.setdefault("input", "image")
     if kind == "reconstruct" and "workflow" not in clean and clean.get("pipeline") is None:
-        saved = (candidate.session.current_experiment.get("kspace_metadata") or {}).get("reconstruction_pipeline")
+        saved = (candidate.session.current_experiment.get("kspace_metadata") or {}).get(
+            "reconstruction_pipeline"
+        )
         if saved:
             clean["pipeline"] = copy.deepcopy(saved)
     if kind in {"reconstruct", "fit"}:
@@ -454,6 +525,8 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
         "reconstruct": "Image reconstruction",
         "drift": "Drift correction",
     }.get(kind)
+    if kind == "drift" and (clean.get("settings") or {}).get("method") == "framewise":
+        label = "Series alignment"
     if kind == "process":
         row = next((m for m in processing_methods(candidate.session) if m["id"] == method), None)
         if row is None:
@@ -474,13 +547,18 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
         "mask": mask,
     }
     if kind == "fit":
-        used = {row.get("map_prefix") for row in current_pipeline(candidate)["steps"] if previous is None or row["id"] != previous["id"]}
+        used = {
+            row.get("map_prefix")
+            for row in current_pipeline(candidate)["steps"]
+            if previous is None or row["id"] != previous["id"]
+        }
         prefix, number = label, 2
         while prefix in used:
             prefix, number = f"{label} ({number})", number + 1
         step["map_prefix"] = (
             previous.get("map_prefix", prefix)
-            if previous and previous["label"] == label else prefix
+            if previous and previous["label"] == label
+            else prefix
         )
     if kind == "process" and clean.get("noise_roi_names") is not None:
         roi = fitting_roi(candidate, clean["noise_roi_names"])
@@ -500,7 +578,9 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
             "exp_type": candidate.session.current_experiment.get("exp_type"),
         }
         step["input_steps"] = (
-            display_steps(candidate, fitted=True, map_name=source[4:]) if source.startswith("map:") else []
+            display_steps(candidate, fitted=True, map_name=source[4:])
+            if source.startswith("map:")
+            else []
         )
     if kind == "process" and method in FILTERS:
         dims = step["input"]["dims"] if step.get("input") else candidate.session.experiment_dims
@@ -546,8 +626,14 @@ def apply_step(workspace, options, progress, *, kind="process", append=False, en
     if kind == "register" and options.get("moving_experiment"):
         candidate.session.select_experiment(options["moving_experiment"])
     pipeline = ensure_pipeline(candidate)
-    if kind == "reconstruct" and not candidate.session.can_reconstruct_raw_data() and candidate.session.can_lazy_load_raw_data(require_acquisition=True):
-        candidate.session.load_raw_data_for_experiment(progress_callback=progress, require_acquisition=True)
+    if (
+        kind == "reconstruct"
+        and not candidate.session.can_reconstruct_raw_data()
+        and candidate.session.can_lazy_load_raw_data(require_acquisition=True)
+    ):
+        candidate.session.load_raw_data_for_experiment(
+            progress_callback=progress, require_acquisition=True
+        )
     method = options.get("method") if kind == "process" else kind
     family = "register" if kind == "stored_registration" else _family(method)
     requested = options.get("step_id")
@@ -661,6 +747,26 @@ def project_roi(workspace, roi, *, steps=None, inverse=False):
     ]
     if not transforms:
         return roi
+    space = roi.metadata.get("registration_space")
+    applied = list(roi.metadata.get("registration_steps") or [])
+    applicable = []
+    for step in reversed(transforms) if inverse else transforms:
+        token = step["id"] + ":" + str(step["version"])
+        if not inverse and token in applied:
+            continue
+        source = step["output_grid"] if inverse else step["input_grid"]
+        target = step["input_grid"] if inverse else step["output_grid"]
+        if space and source.get("space") and space != source["space"]:
+            continue
+        applicable.append(step)
+        space = target.get("space", space)
+        if inverse:
+            applied = [value for value in applied if value != token]
+        else:
+            applied.append(token)
+    if not applicable:
+        return roi
+    transforms = list(reversed(applicable)) if inverse else applicable
     first_grid = transforms[-1]["output_grid"] if inverse else transforms[0]["input_grid"]
     spatial_shape = tuple(
         size
@@ -679,7 +785,11 @@ def project_roi(workspace, roi, *, steps=None, inverse=False):
         if len(cache) >= 64:
             cache.clear()
         cache[key] = (roi.mask, values)
-    return ROI(roi.name, cache[key][1], dims=roi.dims, metadata=dict(roi.metadata))
+    metadata = dict(roi.metadata)
+    if space:
+        metadata["registration_space"] = space
+    metadata["registration_steps"] = applied
+    return ROI(roi.name, cache[key][1], dims=roi.dims, metadata=metadata)
 
 
 def _resample(workspace, step, values, *, mask=False, inverse=False):
@@ -717,14 +827,25 @@ def _resample(workspace, step, values, *, mask=False, inverse=False):
         return output
     if values.ndim != transform.GetDimension():
         raise ValueError("The registration transform does not match this mask or image grid")
+    plane_order = None
+    if values.ndim == 2 and result["metadata"].get("plane_dims"):
+        reverse = inverse != (step["options"].get("direction") == "reference_to_moving")
+        source_axes = result["metadata"]["plane_dims" if reverse else "moving_plane_dims"]
+        target_axes = result["metadata"]["moving_plane_dims" if reverse else "plane_dims"]
+        source_grid = step["output_grid"] if inverse else step["input_grid"]
+        source_spatial = [name for name in source_grid["dims"] if name in spatial]
+        values = values.transpose([source_spatial.index(dim) for dim in source_axes])
+        target = np.zeros(tuple(dims[dim] for dim in target_axes), dtype=np.float32)
+        plane_order = [target_axes.index(dim) for dim in spatial]
     if mask:
-        return resample_mask_with_transform(values, target, transform, output_dtype=values.dtype)
-    if np.iscomplexobj(values):
-        return apply_transform_to_image(
+        sampled = resample_mask_with_transform(values, target, transform, output_dtype=values.dtype)
+    elif np.iscomplexobj(values):
+        sampled = apply_transform_to_image(
             values.real, target, transform, interpolator=interpolator
         ) + 1j * apply_transform_to_image(values.imag, target, transform, interpolator=interpolator)
-    result = apply_transform_to_image(values, target, transform, interpolator=interpolator)
-    return np.asarray(np.rint(result) if mask else result, dtype=values.dtype if mask else None)
+    else:
+        sampled = apply_transform_to_image(values, target, transform, interpolator=interpolator)
+    return sampled.transpose(plane_order) if plane_order is not None else sampled
 
 
 def _apply_alignment(workspace, step, options, progress):
@@ -736,8 +857,12 @@ def _apply_alignment(workspace, step, options, progress):
 
         _document, options = resolved_block(workspace, "reconstruct", options)
         options["device"] = step["options"].get("device", "cpu")
-        saved_plan = (session.current_experiment.get("kspace_metadata") or {}).get("reconstruction_pipeline")
-        if not session.has_reconstruction or (options.get("pipeline") is not None and options["pipeline"] != saved_plan):
+        saved_plan = (session.current_experiment.get("kspace_metadata") or {}).get(
+            "reconstruction_pipeline"
+        )
+        if not session.has_reconstruction or (
+            options.get("pipeline") is not None and options["pipeline"] != saved_plan
+        ):
             result = run_operation(workspace, "_reconstruct_step", options, progress)[1]
             step["label"] = _document.name
         component = options.get("component", "magnitude")
@@ -751,7 +876,9 @@ def _apply_alignment(workspace, step, options, progress):
         try:
             state["data"] = reshape_frames_to_dims(data, state["dims"])
         except ValueError as error:
-            raise ValueError("Reconstruction output must match the experiment grid. Keep its native output geometry") from error
+            raise ValueError(
+                "Reconstruction output must match the experiment grid. Keep its native output geometry"
+            ) from error
         if component == "phase":
             state.update(unit="rad", model="identity")
         install(workspace, state)
@@ -783,7 +910,24 @@ def _apply_alignment(workspace, step, options, progress):
     context.session.set_image_plane(row["metadata"].get("plane", session.active_image_plane))
     step["plane_dims"] = list(context.session.image_plane_dims)
     target = snapshot(context.session)
+    reverse = options.get("direction") == "reference_to_moving"
+    recorded_grid = row["metadata"].get("moving_grid" if reverse else "reference_grid")
+    if recorded_grid:
+        target.update(recorded_grid)
     before = snapshot(session)
+    if before["dims"].get("slice_package", 1) > 1:
+        raise ValueError(
+            "Cross-experiment registration requires a single slice package per moving experiment"
+        )
+    if options.get("moving_source") == "map":
+        map_grid = row["metadata"].get("moving_grid") or {}
+        if map_grid.get("space", before.get("space")) != before.get("space") or any(
+            map_grid.get("dims", before["dims"]).get(dim) != before["dims"][dim]
+            for dim in session.spatial_dim_names
+        ):
+            raise ValueError(
+                "The moving map uses an earlier image grid. Use current images or rerun its fit before registration"
+            )
     spatial = session.spatial_dim_names
     target_shape = tuple(target["dims"][name] for name in context.session.spatial_dim_names)
     output = {
@@ -793,6 +937,7 @@ def _apply_alignment(workspace, step, options, progress):
             for k, v in before["dims"].items()
         },
         "geometry": target["geometry"],
+        "space": target.get("space", reference),
     }
     step["output_grid"] = _grid(output)
     data = np.asarray(reshape_dims_to_frames(session.image_array, session.experiment_dims))
@@ -874,6 +1019,10 @@ def encode_pipelines(workspace, arrays):
 def decode_pipelines(payload, arrays):
     def decode(value):
         if isinstance(value, dict):
+            if value.get("format") == "mrax.workflow":
+                from mrax.workflows import WorkflowDocument
+
+                return WorkflowDocument.model_validate(value).model_dump()
             if value.get("__pipeline_type") == "array":
                 array = arrays[value["key"]]
                 array.flags.writeable = False

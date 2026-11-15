@@ -67,10 +67,14 @@ def display_options(workspace):
     return workspace.display_settings.setdefault(workspace.session.selected_experiment or "", {})
 
 
-def registration_plane(array, session):
+def registration_plane(array, session, *, native_2d=False):
     array = np.asarray(array)
-    if array.ndim <= 2:
+    if array.ndim < 2 or (array.ndim == 2 and not native_2d):
         return array
+    if array.ndim == 2:
+        return mask_slice_for_display(
+            array, dims=session.spatial_dim_names, plane_dims=session.image_plane_dims
+        )
     names = tuple(session.spatial_dim_names[: array.ndim])
     dims = dict(zip(names, array.shape))
     return _display_slice(

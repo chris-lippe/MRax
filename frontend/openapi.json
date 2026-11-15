@@ -121,7 +121,9 @@
             "enum": [
               "processing",
               "reconstruction",
-              "fitting"
+              "fitting",
+              "registration",
+              "denoising"
             ],
             "title": "Kind",
             "type": "string"
@@ -169,6 +171,12 @@
           "revision"
         ],
         "title": "CloseCommand",
+        "type": "object"
+      },
+      "Command": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "Command",
         "type": "object"
       },
       "ComparisonChoice": {
@@ -3014,11 +3022,8 @@
             "enum": [
               "roi",
               "experiment",
-              "map",
-              "sat_trans_reference_scan",
-              "ab_mt_t1_map_ref",
-              "ab_mt_b1_map_ref",
-              "ab_mt_b0_map_ref"
+              "image",
+              "map"
             ],
             "title": "Kind",
             "type": "string"
@@ -3065,24 +3070,20 @@
             "title": "Format",
             "type": "string"
           },
-          "format_version": {
-            "enum": [
-              1,
-              2
-            ],
-            "title": "Format Version",
-            "type": "integer"
-          },
           "kind": {
+            "default": "processing",
             "enum": [
               "processing",
               "reconstruction",
-              "fitting"
+              "fitting",
+              "registration",
+              "denoising"
             ],
             "title": "Kind",
             "type": "string"
           },
           "mrax_version": {
+            "description": "MRax release that wrote the workflow and defines its file format.",
             "maxLength": 80,
             "pattern": "^\\d+\\.\\d+\\.\\d+[a-zA-Z0-9.+_-]*$",
             "title": "Mrax Version",
@@ -3106,8 +3107,6 @@
         },
         "required": [
           "format",
-          "format_version",
-          "kind",
           "mrax_version",
           "name",
           "steps"
@@ -3161,6 +3160,32 @@
         "title": "WorkflowLibraryEntry",
         "type": "object"
       },
+      "WorkflowPreset": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/WorkflowDocument"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "requirements": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Requirements",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "document",
+          "requirements"
+        ],
+        "title": "WorkflowPreset",
+        "type": "object"
+      },
       "WorkflowStep": {
         "additionalProperties": false,
         "properties": {
@@ -3189,6 +3214,20 @@
             "additionalProperties": true,
             "title": "Settings",
             "type": "object"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
           },
           "version": {
             "const": 1,
@@ -4255,6 +4294,77 @@
           }
         },
         "summary": "Session"
+      }
+    },
+    "/api/workflow-presets": {
+      "get": {
+        "operationId": "bundled_presets_api_workflow_presets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowPreset"
+                  },
+                  "title": "Response Bundled Presets Api Workflow Presets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Bundled Presets"
+      }
+    },
+    "/api/workflow-presets/{key}/open": {
+      "post": {
+        "operationId": "open_preset_api_workflow_presets__key__open_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Command"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowLibraryEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Preset"
       }
     },
     "/api/workflow-targets": {

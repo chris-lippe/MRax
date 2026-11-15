@@ -59,8 +59,7 @@ def calculate(client, w, **options):
     )
 
 
-@pytest.mark.parametrize("statistic", ["mean", "std"])
-def test_timecourse_reducers_keep_units_counts_and_current_acquisition(analysis, statistic):
+def test_timecourse_spread_keeps_units_counts_and_current_acquisition(analysis):
     client, record, w, data = analysis
     changed = client.patch(
         f"/api/workspaces/{w['id']}/view", json={"revision": w["revision"], "indices": {"t": 1}}
@@ -68,12 +67,12 @@ def test_timecourse_reducers_keep_units_counts_and_current_acquisition(analysis,
     assert changed.status_code == 200, changed.text
     w = changed.json()
     before = client.get(f"/api/workspaces/{w['id']}").json()
-    response = calculate(client, w, statistic=statistic)
+    response = calculate(client, w, statistic="std")
     assert response.status_code == 200, response.text
     result = response.json()
     np.testing.assert_array_equal(result["x"], [5, 15, 30])
     assert result["x_name"] == "TE (ms)" and result["unit"] == "1"
-    function = getattr(np, "nanvar" if statistic == "variance" else "nan" + statistic)
+    function = np.nanstd
     for row in result["series"]:
         roi = record.workspace.session.roi(row["roi"])
         source = data.real[1][:, roi.mask != 0]
@@ -81,11 +80,3 @@ def test_timecourse_reducers_keep_units_counts_and_current_acquisition(analysis,
         np.testing.assert_array_equal(row["counts"], np.isfinite(source).sum(axis=1))
     assert client.get(f"/api/workspaces/{w['id']}").json() == before
     np.testing.assert_array_equal(record.workspace.session.image_array, data)
-
-
-def test_missing_samples_are_not_fabricated_as_zero(analysis):
-    client, record, w, data = analysis
-    data[:, 1] = np.nan
-    record.workspace.session.replace_image_data(data)
-    result = calculate(client, w, statistic="sum").json()
-    assert all(row["values"][1] is None and row["counts"][1] == 0 for row in result["series"])

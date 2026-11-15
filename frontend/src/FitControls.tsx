@@ -213,7 +213,7 @@ export function FitControls({
         }
       >
         <WorkbenchIcon name="pipeline" />
-        Fitting workflows
+        Workflows
       </button>
       {error && <p role="alert">{error}</p>}
       <InspectorSection title="Model and solver" icon="fit" className="fit-model">
@@ -262,6 +262,9 @@ export function FitControls({
                       <option key={name}>{name}</option>
                     ))}
                   </select>
+                  <span className="control-note">
+                    Use Register to align the reference image to the scan before fitting.
+                  </span>
                 </label>
               )}
               {fitInputs?.prior_maps.map((kind) => (

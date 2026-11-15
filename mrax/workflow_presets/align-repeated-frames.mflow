@@ -1,0 +1,62 @@
+{
+  "format": "mrax.workflow",
+  "kind": "registration",
+  "mrax_version": "0.4.0",
+  "name": "Align repeated frames",
+  "description": "Align each repeated frame to the first frame with rigid correlation.",
+  "bindings": [],
+  "steps": [
+    {
+      "id": "motion",
+      "operation": "drift",
+      "version": 1,
+      "enabled": true,
+      "settings": {
+        "settings": {
+          "method": "framewise",
+          "reference": "first",
+          "dimensions": null,
+          "estimation_dimensions": [],
+          "registration": {
+            "transform": "rigid",
+            "metric": "correlation",
+            "optimizer": "regular_step_gradient_descent",
+            "interpolator": "linear",
+            "initializer": "geometry",
+            "sampling_strategy": "none",
+            "sampling_percentage": 0.2,
+            "histogram_bins": 32,
+            "learning_rate": 0.25,
+            "min_step": 0.0001,
+            "iterations": 200,
+            "convergence_minimum": 0.000001,
+            "convergence_window": 10,
+            "shrink_factors": [
+              2,
+              1
+            ],
+            "smoothing_sigmas": [
+              1,
+              0
+            ],
+            "normalize_intensity": true,
+            "validate_alignment": true,
+            "prealign_translation": true,
+            "initialization_mask_padding": 8,
+            "max_displacement_voxels": null,
+            "extra": {}
+          }
+        }
+      }
+    }
+  ],
+  "extensions": {
+    "org.mrax.preset": {
+      "requirements": [
+        "A same-contrast series with at least two frames.",
+        "All non-spatial acquisition dimensions are aligned. Slice packages stay independent.",
+        "Use Register to choose motion and contrast-averaging dimensions for mixed-contrast series."
+      ]
+    }
+  }
+}

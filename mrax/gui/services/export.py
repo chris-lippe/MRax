@@ -410,6 +410,9 @@ def _roi_nifti_reference(session: GuiSession, metadata: Mapping[str, Any] | None
     roi_metadata = dict(metadata or {})
     declared_experiment = str(roi_metadata.get("source_experiment") or "").strip()
     reference_experiment = declared_experiment or str(session.selected_experiment or "").strip()
+    space = roi_metadata.get("registration_space")
+    if space in (session.data or {}).get("experiments", {}):
+        reference_experiment = space
     indices = roi_metadata.get("slice_indices") or {}
     try:
         frame_index = int(indices.get("frame", 0)) if isinstance(indices, Mapping) else 0
@@ -422,6 +425,8 @@ def _roi_nifti_reference(session: GuiSession, metadata: Mapping[str, Any] | None
     geometry = (
         source.get("geometry") or entry.get("spatial_geometry") or extra.get("spatial_geometry")
     )
+    if geometry is not None:
+        affine = SpatialGeometry.from_metadata(geometry).affine_for_frame(frame_index)
     return {
         "experiment": reference_experiment or None,
         "selection": "mask metadata" if declared_experiment else "active experiment",

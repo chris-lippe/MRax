@@ -64,7 +64,8 @@ export function ProcessControls({
   editingStep,
   section,
   active,
-}: Pick<AnalysisProps, 'workspace' | 'busy' | 'run' | 'editingStep'> & {
+  openWorkflows,
+}: Pick<AnalysisProps, 'workspace' | 'busy' | 'run' | 'editingStep' | 'openWorkflows'> & {
   section: ProcessingSection;
   active: boolean;
 }) {
@@ -310,28 +311,37 @@ export function ProcessControls({
     step_id: editing ? editingStep?.id : undefined,
     noise_roi_names: noiseRois,
   };
+  const processOptions = {
+    ...noiseOptions,
+    axis,
+    roi_names: limited ? scopedRois : null,
+    noise_roi_names:
+      ['bm3d', 'bm4d'].includes(method?.id ?? '') && parameters.sigma == null ? noiseRois : null,
+  };
 
   return (
     <div className="processing-controls">
+      {section === 'denoise' && (
+        <button
+          type="button"
+          className="secondary workflow-library-trigger"
+          data-tutorial="processing-workflows"
+          disabled={busy}
+          onClick={() =>
+            openWorkflows?.('denoising', { operation: 'process', options: processOptions })
+          }
+        >
+          <WorkbenchIcon name="pipeline" />
+          Workflows
+        </button>
+      )}
       {error && <p role="alert">{error}</p>}
       <form
         className="control-layout"
         onSubmit={(event) => {
           event.preventDefault();
           if (!method || invalid) return;
-          void run('process', {
-            ...scopeOptions,
-            method: method.id,
-            input: source,
-            component: draft.component ?? 'auto',
-            axes,
-            axis,
-            parameters,
-            step_id: editing ? editingStep?.id : undefined,
-            roi_names: limited ? scopedRois : null,
-            noise_roi_names:
-              ['bm3d', 'bm4d'].includes(method.id) && parameters.sigma == null ? noiseRois : null,
-          });
+          void run('process', processOptions);
         }}
       >
         <fieldset className="control-form" disabled={busy || !w?.loaded || !catalog}>

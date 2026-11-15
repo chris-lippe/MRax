@@ -1,4 +1,4 @@
-"""Versioned, data-free reconstruction plans used inside .mrec workflows.
+"""Versioned, data-free reconstruction plans used inside .mflow workflows.
 
 Included recipe stages inherit acquisition settings unless an option overrides
 them. Removed/disabled stages do not run. ``when=configured`` explicitly keeps
@@ -282,11 +282,11 @@ def reconstruction_presets():
 
     result = []
     for path in sorted(files("mrax.reco").joinpath("presets").iterdir(), key=lambda p: p.name):
-        if path.name.endswith(".mrec"):
+        if path.name.endswith(".mflow"):
             document = loads_workflow(path.read_text(encoding="utf-8"))
             result.append(
                 {
-                    "id": path.name[:-5],
+                    "id": path.name.removesuffix(".mflow"),
                     "filename": path.name,
                     "name": document.name,
                     "description": document.description,

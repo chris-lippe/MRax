@@ -124,7 +124,7 @@ export const tutorialSteps: readonly TutorialStep[] = [
     action: 'Show processing workflows',
     optional: true,
     context: { section: 'denoise', task: 'denoising' },
-    text: 'Processing workflows captures the pipeline as .mpip. Insert reconstruction (.mrec) and fitting (.mfit) plans as blocks. Reuse workflows in this session or save them for later. Saving is optional.',
+    text: 'Workflows captures the pipeline as .mflow. Insert reconstruction (.mflow) and fitting (.mflow) plans as blocks. Reuse workflows in this session or save them for later. Saving is optional.',
   },
   {
     id: 'files',

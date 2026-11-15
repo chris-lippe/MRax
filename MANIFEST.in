@@ -10,7 +10,8 @@ include requirements-dev.txt
 include pytest.ini
 include tests/README.md
 recursive-include mrax *.py *.toml
-recursive-include mrax/reco/presets *.mrec
+recursive-include mrax/reco/presets *.mflow
+recursive-include mrax/workflow_presets *.mflow
 recursive-include mrax/web/static *.html *.js *.css *.svg
 include frontend/package.json frontend/package-lock.json frontend/openapi.json
 include frontend/index.html frontend/tsconfig.json

@@ -1,10 +1,9 @@
 {
   "format": "mrax.workflow",
-  "format_version": 1,
   "kind": "reconstruction",
   "mrax_version": "0.4.0",
-  "name": "Acquisition Fourier",
-  "description": "Fourier reconstruction with the acquisition's configured corrections and output geometry.",
+  "name": "Cartesian Fourier",
+  "description": "Cartesian inverse Fourier reconstruction using acquisition corrections.",
   "bindings": [],
   "steps": [
     {
@@ -16,8 +15,8 @@
         "component": "magnitude",
         "pipeline": {
           "schema_version": 1,
-          "name": "Acquisition Fourier",
-          "encoding": "any",
+          "name": "Cartesian Fourier",
+          "encoding": "cartesian",
           "stages": [
             {
               "kind": "profile_inversion",
@@ -53,12 +52,6 @@
               "kind": "partial_fourier",
               "enabled": true,
               "when": "configured",
-              "options": {}
-            },
-            {
-              "kind": "gridding",
-              "enabled": true,
-              "when": "sampled",
               "options": {}
             },
             {

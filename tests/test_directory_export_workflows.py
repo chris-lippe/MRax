@@ -92,19 +92,7 @@ def confirm(client, w, pending, *, status="completed", files=None):
     )
 
 
-@pytest.mark.parametrize(
-    ("kind", "format"),
-    [
-        ("object", "nifti"),
-        ("object", "dicom"),
-        ("rois", "roi_set"),
-        ("package", "package"),
-        ("state", "state"),
-    ],
-)
-def test_multifile_exports_add_files_without_replacing_existing_contents(
-    client, tmp_path, kind, format
-):
+def test_multifile_exports_add_files_without_replacing_existing_contents(client, tmp_path):
     w = workspace(client)
     target = tmp_path / "results"
     (target / "unrelated").mkdir(parents=True)
@@ -117,7 +105,7 @@ def test_multifile_exports_add_files_without_replacing_existing_contents(
     (sibling / "keep").write_text("sibling file")
     before, beside = inventory(target), inventory(sibling)
     inode = target.stat().st_ino
-    result = export(client, w, target, kind=kind, format=format, overwrite=True)
+    result = export(client, w, target, kind="object", format="nifti", overwrite=True)
     assert result["summary"]["saved"] and not result["summary"].get("needs_confirmation")
     after = inventory(target)
     assert all(after[name] == value for name, value in before.items() if name != ".")

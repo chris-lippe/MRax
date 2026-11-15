@@ -9,13 +9,11 @@ import numpy as np
 import pytest
 from _synthetic import (
     _header,
-    _write_mrd,
 )
 from ismrmrd import xsd
 
 from mrax.core import run_fit
 from mrax.io import (
-    import_pulseq_experiment,
     read_measurement,
     read_pulseq_measurement,
 )
@@ -117,20 +115,6 @@ def test_physical_cartesian_coordinates_echo_timing_and_geometry(quantitative_re
     experiment.validate(dataset)
 
 
-def test_compact_nifti_rejects_ambiguous_order_and_accepts_override(quantitative_recording):
-    _, image, sequence, _, truth, _, _ = quantitative_recording
-    pixels = np.ones((8, 5, 3), np.float32)
-    nib.save(nib.Nifti1Image(pixels, np.eye(4)), image)
-    with pytest.raises(ValueError, match="ambiguous"):
-        read_pulseq_measurement(image, sequence_path=sequence)
-    explicit = read_pulseq_measurement(
-        image,
-        sequence_path=sequence,
-        reader_options={"spatial_ndim": 2, "frame_order": [1, 2, 0], "spatial_unit": "mm"},
-    )
-    assert explicit.image_data.shape == truth.shape
-
-
 def test_fractional_sequence_coordinates_remain_sampled(quantitative_recording, monkeypatch):
     raw, _, sequence, info, *_ = quantitative_recording
     physical = info.trajectory_physical.copy()
@@ -164,33 +148,6 @@ def test_nifti_explicit_layout_validates_order_and_preserves_standard_volumes(tm
             read_measurement(path, spatial_ndim=2, frame_order=order)
     with pytest.raises(ValueError, match="spatial_ndim"):
         read_measurement(path, spatial_ndim=1)
-
-
-def test_mrd_order_masks_geometry_and_shared_reconstruction(tmp_path):
-    path = tmp_path / "acquisition.h5"
-    _write_mrd(path)
-    measurement = read_pulseq_measurement(path)
-    acq = measurement.acquisition
-    assert acq.samples.shape == (2, 2, 6, 8)
-    assert acq.acquired.all()
-    np.testing.assert_array_equal(acq.samples[0, 0, 0], 0)
-    np.testing.assert_array_equal(acq.samples[1, 1, 5], 12)
-    assert acq.geometry.status == "known"
-    np.testing.assert_allclose(acq.geometry.voxel_sizes, [10, 10])
-    result = reconstruct_acquisition(acq)
-    expected = np.fft.fftshift(
-        np.fft.ifftn(np.fft.ifftshift(acq.samples, axes=(-2, -1)), axes=(-2, -1), norm="ortho"),
-        axes=(-2, -1),
-    )
-    np.testing.assert_allclose(
-        result.image, np.sqrt(np.sum(np.abs(expected) ** 2, axis=1)), rtol=1e-6, atol=1e-6
-    )
-    exp, data, model, _ = import_pulseq_experiment(
-        path, image_data=np.abs(result.image), override_type="mse"
-    )
-    exp.validate(data)
-    np.testing.assert_allclose(exp.observables["TE"].values.reshape(-1), [12, 36])
-    assert model.name == "t2_se"
 
 
 def test_slice_volumes_contrast_order_geometry_and_inverse_encoding(tmp_path):

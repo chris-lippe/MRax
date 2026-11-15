@@ -1,6 +1,6 @@
 """Versioned, data-free workflow documents shared by Python and the browser GUI.
 
-The filename suffix describes the workflow kind. All three use UTF-8 JSON.
+Workflow files use the .mflow suffix and UTF-8 JSON.
 See docs/workflows.rst for the compatibility and execution contract.
 """
 
@@ -14,12 +14,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mrax._version import MRAX_VERSION
+from mrax.versioning import validate_mrax_file_version
 
-WorkflowKind = Literal["processing", "reconstruction", "fitting"]
-EXTENSIONS = {"processing": ".mpip", "reconstruction": ".mrec", "fitting": ".mfit"}
+WorkflowKind = Literal["processing", "reconstruction", "fitting", "registration", "denoising"]
+EXTENSION = ".mflow"
 MAX_DOCUMENT_BYTES = 1024 * 1024
-FORMAT_VERSION = 1
-COMPOSITE_FORMAT_VERSION = 2
 
 
 class _StrictModel(BaseModel):
@@ -28,15 +27,7 @@ class _StrictModel(BaseModel):
 
 class WorkflowBinding(_StrictModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
-    kind: Literal[
-        "roi",
-        "experiment",
-        "map",
-        "sat_trans_reference_scan",
-        "ab_mt_t1_map_ref",
-        "ab_mt_b1_map_ref",
-        "ab_mt_b0_map_ref",
-    ]
+    kind: Literal["roi", "experiment", "image", "map"]
     label: str = Field(min_length=1, max_length=160)
     experiment: str | None = None
     default: Literal["target"] | None = None
@@ -48,6 +39,7 @@ class WorkflowStep(_StrictModel):
     version: int = Field(ge=1, json_schema_extra={"const": 1})
     enabled: bool = True
     settings: dict[str, Any]
+    target: dict[str, str] | None = None
 
     @field_validator("version")
     @classmethod
@@ -61,24 +53,22 @@ class WorkflowStep(_StrictModel):
 
 class WorkflowDocument(_StrictModel):
     format: Literal["mrax.workflow"]
-    format_version: int = Field(
-        json_schema_extra={"enum": [FORMAT_VERSION, COMPOSITE_FORMAT_VERSION]}
+    kind: WorkflowKind = "processing"
+    mrax_version: str = Field(
+        pattern=r"^\d+\.\d+\.\d+[a-zA-Z0-9.+_-]*$",
+        max_length=80,
+        description="MRax release that wrote the workflow and defines its file format.",
     )
-    kind: WorkflowKind
-    mrax_version: str = Field(pattern=r"^\d+\.\d+\.\d+[a-zA-Z0-9.+_-]*$", max_length=80)
     name: str = Field(min_length=1, max_length=160)
     description: str = Field(default="", max_length=8000)
     bindings: list[WorkflowBinding] = Field(default_factory=list, max_length=128)
     steps: list[WorkflowStep] = Field(min_length=1, max_length=64)
     extensions: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("format_version")
+    @field_validator("mrax_version")
     @classmethod
-    def supported_format(cls, value):
-        if value not in {FORMAT_VERSION, COMPOSITE_FORMAT_VERSION}:
-            raise ValueError(
-                "Unsupported workflow format version. No automatic conversion is attempted"
-            )
+    def supported_release(cls, value):
+        validate_mrax_file_version({"mrax_version": value}, file_kind="Workflow")
         return value
 
     @field_validator("name")
@@ -90,29 +80,14 @@ class WorkflowDocument(_StrictModel):
 
     @model_validator(mode="after")
     def consistent_document(self):
-        allowed = {
-            "processing": {"process", "register", "drift", "reconstruct", "fit"}
-            if self.format_version == COMPOSITE_FORMAT_VERSION
-            else {"process", "register", "drift"},
-            "reconstruction": {"reconstruct"},
-            "fitting": {"fit"},
-        }[self.kind]
-        composite = self.kind == "processing" and any(
-            s.operation in {"reconstruct", "fit"} for s in self.steps
-        )
-        if self.format_version == COMPOSITE_FORMAT_VERSION and not composite:
-            raise ValueError(
-                "Workflow format version 2 is reserved for processing pipelines with workflow blocks"
-            )
-        reconstruction = [
-            index for index, step in enumerate(self.steps) if step.operation == "reconstruct"
-        ]
-        if reconstruction and self.kind == "processing" and reconstruction != [0]:
-            raise ValueError("A reconstruction block can occur only once, first")
-        if any(step.operation not in allowed for step in self.steps):
-            raise ValueError("The workflow contains an operation from another workflow kind")
-        if self.kind != "processing" and len(self.steps) != 1:
-            raise ValueError("A reconstruction or fitting workflow has exactly one configuration")
+        targets = set()
+        for step in self.steps:
+            target = json.dumps(step.target, sort_keys=True)
+            if step.operation == "reconstruct" and target in targets:
+                raise ValueError(
+                    "Reconstruction must occur once, before other blocks on its target"
+                )
+            targets.add(target)
         if not any(step.enabled for step in self.steps):
             raise ValueError("Enable at least one workflow step")
         for values in (self.steps, self.bindings):
@@ -121,11 +96,18 @@ class WorkflowDocument(_StrictModel):
         if any("." not in key for key in self.extensions):
             raise ValueError("Extension names must be namespaced, for example org.example.notes")
         used = set()
+        outputs = []
 
         def inspect(value, depth=0):
             if depth > 24:
                 raise ValueError("Workflow settings are nested too deeply")
             if isinstance(value, dict):
+                if "$output" in value:
+                    if not _is_output(value):
+                        raise ValueError(
+                            "Use an earlier block ID, an output port and an optional map name"
+                        )
+                    outputs.append(value)
                 if "$binding" in value:
                     if set(value) != {"$binding"} or not isinstance(value["$binding"], str):
                         raise ValueError("A binding reference contains only the $binding string")
@@ -148,13 +130,26 @@ class WorkflowDocument(_StrictModel):
             elif value is not None and type(value) not in {int, bool}:
                 raise ValueError("Workflow settings must contain only JSON values")
 
+        previous = {}
         for step in self.steps:
-            # Embedded documents own a separate binding namespace and validate it below.
-            inspect({key: value for key, value in step.settings.items() if key != "workflow"})
+            outputs.clear()
+            inspect(step.settings)
+            if step.target is not None:
+                _require_binding(self, step.target, "experiment", "Block target", outputs=False)
+                inspect(step.target)
+            for reference in outputs:
+                producer = previous.get(reference["$output"])
+                if producer is None:
+                    raise ValueError("Output references must point to earlier blocks")
+                if not producer.enabled:
+                    raise ValueError("Output references require an enabled producing block")
+                if (reference["port"] == "map") != (producer.operation == "fit"):
+                    raise ValueError("The output port does not match its producing block")
+            previous[step.id] = step
         declared = {binding.id for binding in self.bindings}
         for binding in self.bindings:
-            if binding.kind == "experiment" and binding.experiment is not None:
-                raise ValueError("Experiment bindings cannot depend on other experiment bindings")
+            if binding.kind in {"experiment", "image"} and binding.experiment is not None:
+                raise ValueError("Image and experiment bindings cannot have an experiment owner")
             if binding.experiment is not None:
                 used.add(binding.experiment)
             if binding.experiment is not None and not any(
@@ -169,18 +164,12 @@ class WorkflowDocument(_StrictModel):
         # Extensions are metadata only, never executable parameters or bindings.
         inspect(self.extensions)
         validate_operations(self)
+        self.kind = workflow_kind(self.steps)
         return self
 
 
 def validate_operations(document):
-    """Reject unknown executable fields."""
-    from mrax.gui.session import FitSettings
-
-    portable_fit = set(FitSettings.__dataclass_fields__) - {
-        "output_dir",
-        "selected_roi",
-        "use_view_state_data",
-    }
+    """Validate block structure and resource references."""
     allowed = {
         "process": {
             "method",
@@ -215,42 +204,14 @@ def validate_operations(document):
             "manual",
             "manual_settings",
             "indices",
+            "reference_aggregation",
+            "moving_aggregation",
         },
         "drift": {"settings", "roi_name"},
-        "fit": {"settings", "excluded_frames", "use_roi", "roi_names"},
+        "fit": {"settings", "inputs", "excluded_frames", "use_roi", "roi_names"},
     }
     for step in document.steps:
         settings = step.settings
-        if "workflow" in settings:
-            if (
-                document.kind != "processing"
-                or document.format_version != COMPOSITE_FORMAT_VERSION
-                or step.operation not in {"reconstruct", "fit"}
-            ):
-                raise ValueError(
-                    "Only processing pipelines can contain reconstruction or fitting workflow blocks"
-                )
-            if set(settings) - {"workflow", "bindings"}:
-                raise ValueError("A workflow block contains its document and input bindings only")
-            expected = "reconstruction" if step.operation == "reconstruct" else "fitting"
-            if (
-                not isinstance(settings["workflow"], dict)
-                or settings["workflow"].get("kind") != expected
-            ):
-                raise ValueError("The embedded workflow kind does not match its block")
-            child = WorkflowDocument.model_validate(settings["workflow"])
-            bindings = settings.get("bindings", {})
-            if not isinstance(bindings, dict) or set(bindings) != {
-                binding.id for binding in child.bindings
-            }:
-                raise ValueError("Assign every embedded workflow input")
-            for binding in child.bindings:
-                _require_binding(document, bindings[binding.id], binding.kind, binding.label)
-            continue
-        if document.kind == "processing" and step.operation in {"reconstruct", "fit"}:
-            raise ValueError(
-                "Reconstruction and fitting blocks must embed their .mrec or .mfit workflow"
-            )
         if set(settings) - allowed[step.operation]:
             raise ValueError("Unknown " + step.operation + " workflow setting")
         for key in ("settings", "parameters", "manual_settings"):
@@ -323,33 +284,17 @@ def validate_operations(document):
 
             normalize_plan(settings["pipeline"])
         if step.operation == "fit":
-            fit = settings.get("settings")
-            if not isinstance(fit, dict) or set(fit) - portable_fit or not fit.get("model_name"):
-                raise ValueError("A fitting workflow needs a model and portable fit settings")
-            if not isinstance(fit["model_name"], str):
-                raise ValueError("The fitting model must be a registered model name")
-            for key in (
-                "param_overrides",
-                "pool_overrides",
-                "regularizer_configs",
-                "parameter_constant_dims",
-            ):
-                if key in fit and not isinstance(fit[key], dict):
-                    raise ValueError(key + " must be an object")
-            if "selected_pools" in fit and (
-                not isinstance(fit["selected_pools"], list)
-                or not all(isinstance(value, str) for value in fit["selected_pools"])
-            ):
-                raise ValueError("Selected pools must be a list of pool names")
-            for key in ("auto_mask_nan_observables", "compute_derived_maps"):
-                if fit.get(key) is not None and type(fit[key]) is not bool:
-                    raise ValueError(key + " must be a boolean or null")
+            if not isinstance(settings.get("settings"), dict):
+                raise ValueError("Fitting settings must be an object")
+            inputs = settings.get("inputs", {})
+            if not isinstance(inputs, dict):
+                raise ValueError("Block inputs must map role names to resource references")
+            for role, resource in inputs.items():
+                if not role.strip():
+                    raise ValueError("Give each input a role name")
+                _require_binding(document, resource, None, role)
             if type(settings.get("use_roi", True)) is not bool:
                 raise ValueError("use_roi must be a boolean")
-            if "num_steps" in fit and type(fit["num_steps"]) is not int:
-                raise ValueError("Fit step count must be an integer")
-            if "step_size" in fit and type(fit["step_size"]) not in {int, float}:
-                raise ValueError("Fit step size must be a number")
             frames = settings.get("excluded_frames", [])
             if not isinstance(frames, list) or any(type(n) is not int or n < 0 for n in frames):
                 raise ValueError("Excluded frames are zero-based non-negative integers")
@@ -383,26 +328,59 @@ def validate_operations(document):
         for key in ("roi_names", "noise_roi_names"):
             for value in settings.get(key) or []:
                 _require_binding(document, value, "roi", key)
-        for key in (
-            "sat_trans_reference_scan",
-            "ab_mt_t1_map_ref",
-            "ab_mt_b1_map_ref",
-            "ab_mt_b0_map_ref",
-        ):
-            value = settings.get("settings", {}).get(key)
-            if value is not None:
-                _require_binding(document, value, key, key)
 
 
-def _require_binding(document, value, kind, label):
+def _require_binding(document, value, kind, label, *, outputs=True):
+    if outputs and _is_output(value):
+        expected = "image" if kind in {"experiment", "image"} else "map"
+        if kind is not None and (kind == "roi" or value["port"] != expected):
+            raise ValueError(label + " uses an incompatible output port")
+        return
     if not _is_binding(value) or not any(
-        binding.id == value["$binding"] and binding.kind == kind for binding in document.bindings
+        binding.id == value["$binding"] and (kind is None or binding.kind == kind)
+        for binding in document.bindings
     ):
-        raise ValueError(label + " must use a " + kind + " binding")
+        raise ValueError(label + " must use a " + (kind or "resource") + " binding")
 
 
 def _is_binding(value):
     return isinstance(value, dict) and set(value) == {"$binding"}
+
+
+def _is_output(value):
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("$output"), str)
+        and (
+            (value.get("port") == "image" and set(value) == {"$output", "port"})
+            or (
+                value.get("port") == "map"
+                and set(value) == {"$output", "port", "name"}
+                and isinstance(value["name"], str)
+                and bool(value["name"])
+            )
+        )
+    )
+
+
+def single_operation(document, operation):
+    return len(document.steps) == 1 and document.steps[0].operation == operation
+
+
+def workflow_kind(steps):
+    if len(steps) == 1:
+        operation = steps[0].operation
+        if operation == "process":
+            from mrax.gui.services.processing import FILTERS
+
+            return "denoising" if steps[0].settings.get("method") in FILTERS else "processing"
+        return {
+            "reconstruct": "reconstruction",
+            "fit": "fitting",
+            "register": "registration",
+            "drift": "registration",
+        }.get(operation, "processing")
+    return "processing"
 
 
 def _unique_object(pairs):
@@ -425,14 +403,15 @@ def loads_workflow(text: str | bytes, *, suffix: str | None = None) -> WorkflowD
     except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ValueError("Choose a valid UTF-8 JSON workflow file") from exc
     document = WorkflowDocument.model_validate(values)
-    if suffix is not None and suffix.lower() != EXTENSIONS[document.kind]:
-        raise ValueError("The file extension does not match its workflow kind")
+    if suffix is not None and suffix.lower() != EXTENSION:
+        raise ValueError("The workflow extension must be .mflow")
     return document
 
 
 def dumps_workflow(document: WorkflowDocument) -> str:
     document = WorkflowDocument.model_validate(document.model_dump())
-    text = json.dumps(document.model_dump(), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    values = {**document.model_dump(), "mrax_version": MRAX_VERSION}
+    text = json.dumps(values, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
     if len(text.encode("utf-8")) > MAX_DOCUMENT_BYTES:
         raise ValueError("Workflow files must be smaller than 1 MiB")
     return text
@@ -449,8 +428,8 @@ def save_workflow(document: WorkflowDocument, path: str | Path, *, overwrite=Fal
     from mrax.gui.services.file_output import write_file_atomic
 
     path = Path(path)
-    if path.suffix.lower() != EXTENSIONS[document.kind]:
-        raise ValueError("Save this workflow with a " + EXTENSIONS[document.kind] + " extension")
+    if path.suffix.lower() != EXTENSION:
+        raise ValueError("Save this workflow with an .mflow extension")
     text = dumps_workflow(document)
     if path.exists() and overwrite:
         # A native extension alone must never turn an unrelated input into an output.
@@ -466,10 +445,6 @@ def new_workflow(kind, steps, *, name=None, description="", bindings=()):
     return WorkflowDocument.model_validate(
         {
             "format": "mrax.workflow",
-            "format_version": COMPOSITE_FORMAT_VERSION
-            if kind == "processing"
-            and any(step["operation"] in {"reconstruct", "fit"} for step in steps)
-            else FORMAT_VERSION,
             "kind": kind,
             "mrax_version": MRAX_VERSION,
             "name": name or kind.capitalize() + " workflow",

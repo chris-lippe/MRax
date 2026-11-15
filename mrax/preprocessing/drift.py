@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Iterable, Protocol
 
 import jax
@@ -617,6 +617,7 @@ def linear_drift_correct_framestack(
     fit_intercept: bool = False,
     frame_weights: Iterable[float] | None = None,
     mask: np.ndarray | jnp.ndarray | None = None,
+    normalize_intensity: bool = False,
     max_parameter_change: float | Iterable[float] | None = None,
     optimizer_name: str = "adam",
     step_size: float = 0.05,
@@ -636,11 +637,17 @@ def linear_drift_correct_framestack(
     reference-grid pixels. Custom metrics and transforms used in this objective
     must be JAX-compatible. When ``mask`` is passed the metric must accept a
     ``mask=`` keyword.
+    Motion estimation uses linear interpolation when nearest-neighbour output
+    is selected. The lowest finite objective determines the retained coefficients.
     """
 
     stack = _check_framestack(frames, name="frames")
     reference_image, reference_index = _select_reference_image(stack, reference, name="frames")
     image_transform = TranslationTransform() if transform is None else transform
+    estimation_transform = image_transform
+    if isinstance(image_transform, (TranslationTransform, Rigid2DTransform, Similarity2DTransform, Affine2DTransform)):
+        if _interpolation_order(image_transform.order) == 0:
+            estimation_transform = replace(image_transform, order="linear")
     identity = _identity_parameters(image_transform, reference_image, identity_parameters)
 
     if anchor_frame is None:
@@ -670,6 +677,18 @@ def linear_drift_correct_framestack(
 
     stack_jax = jnp.asarray(stack)
     reference_jax = jnp.asarray(reference_image)
+    estimation_stack = stack_jax
+    estimation_reference = reference_jax
+    if normalize_intensity:
+        values = np.abs(np.asarray(reference_image))
+        valid = np.isfinite(values)
+        if mask is not None:
+            valid &= np.asarray(mask, dtype=bool)
+        scale = float(np.sqrt(np.mean(values[valid] ** 2))) if np.any(valid) else 0.0
+        if scale <= np.finfo(np.float32).tiny:
+            raise ValueError("Choose a reference with nonzero signal inside the registration mask")
+        estimation_stack = stack_jax / scale
+        estimation_reference = reference_jax / scale
     if mask is None:
         mask_jax = None
     else:
@@ -687,12 +706,12 @@ def linear_drift_correct_framestack(
 
     def _objective(coeffs: jnp.ndarray) -> jnp.ndarray:
         corrected = _apply_stack_jax(
-            stack_jax,
-            image_transform,
+            estimation_stack,
+            estimation_transform,
             _parameters_from_coefficients(coeffs),
         )
         scores = jax.vmap(
-            lambda frame: _call_metric(metric, reference_jax, frame, mask=mask_jax)
+            lambda frame: _call_metric(metric, estimation_reference, frame, mask=mask_jax)
         )(corrected)
         finite_scores = jnp.where(jnp.isfinite(scores), scores, -1e12)
         return -jnp.sum(weights * finite_scores) / jnp.maximum(jnp.sum(weights), 1.0)
@@ -724,12 +743,16 @@ def linear_drift_correct_framestack(
         return optax.apply_updates(coeffs, updates), next_state, loss
 
     objective_history = [initial_objective]
+    best_coefficients = coefficients
+    best_objective = initial_objective
     completed_iterations = 0
     stopped_nonfinite = False
     stop_detail = ""
     for step in range(max(0, int(num_steps))):
         next_coefficients, next_state, loss = _train_step(coefficients, opt_state)
         loss_value = float(loss)
+        if np.isfinite(loss_value) and loss_value < best_objective:
+            best_coefficients, best_objective = coefficients, loss_value
         next_coefficients_np = np.asarray(next_coefficients)
         if not np.isfinite(loss_value):
             stopped_nonfinite = True
@@ -745,6 +768,9 @@ def linear_drift_correct_framestack(
         objective_history.append(loss_value)
         completed_iterations += 1
     final_objective = float(_objective(coefficients))
+    if np.isfinite(final_objective) and final_objective < best_objective:
+        best_coefficients, best_objective = coefficients, final_objective
+    coefficients, final_objective = best_coefficients, best_objective
     objective_history.append(final_objective)
     parameters = _parameters_from_coefficients(coefficients)
     corrected = _apply_stack_jax(stack_jax, image_transform, parameters)
@@ -827,13 +853,15 @@ def _normalize_dimensions(
     available: tuple[str, ...],
 ) -> tuple[str, ...]:
     if dimensions is None:
-        return available
+        return tuple(name for name in available if name != "slice_package")
     selected = tuple(str(name) for name in dimensions)
     if len(set(selected)) != len(selected):
         raise ValueError("dimensions must not contain duplicates")
     unknown = [name for name in selected if name not in available]
     if unknown:
         raise ValueError(f"Drift dimensions {unknown} are not non-spatial dimensions {available}")
+    if "slice_package" in selected:
+        raise ValueError("Slice packages have separate image grids. Select acquisition dimensions within each package")
     return tuple(name for name in available if name in selected)
 
 
@@ -845,19 +873,24 @@ def linear_drift_correct_dataset(
     dimensions: Iterable[str] | None = None,
     reference: ReferenceSelector = "first",
     times: Iterable[float] | None = None,
+    mask: np.ndarray | None = None,
+    mask_dims: Iterable[str] | None = None,
     device: DeviceLike = "cpu",
     **drift_kwargs,
 ) -> LinearDriftCorrectionResult:
-    """Fit grouped linear drift corrections and restore MRax dataset dimensions."""
+    """Fit grouped linear drift corrections and restore MRax dataset dimensions.
+
+    Named masks follow each reference group. Slice packages stay independent.
+    """
 
     dim_data = _dim_ordered_data(experiment, dataset)
     non_spatial = tuple(experiment.non_spatial_dim_names)
     selected = _normalize_dimensions(dimensions, non_spatial)
     group_dimensions = tuple(name for name in non_spatial if name not in selected)
-    non_spatial_axis = {name: index for index, name in enumerate(non_spatial)}
+    non_spatial_axis = {name: index for index, name in enumerate(experiment.dims)}
     selected_axes = tuple(non_spatial_axis[name] for name in selected)
     group_axes = tuple(non_spatial_axis[name] for name in group_dimensions)
-    spatial_axes = tuple(range(len(non_spatial), dim_data.ndim))
+    spatial_axes = tuple(non_spatial_axis[name] for name in experiment.spatial_dim_names)
 
     permuted_axes = selected_axes + group_axes + spatial_axes
     permuted = np.transpose(dim_data, permuted_axes) if permuted_axes else dim_data
@@ -867,12 +900,29 @@ def linear_drift_correct_dataset(
     selected_frames = int(np.prod(selected_shape, dtype=int)) if selected_shape else 1
     group_count = int(np.prod(group_shape, dtype=int)) if group_shape else 1
     grouped = permuted.reshape((selected_frames, group_count) + spatial_shape)
+    grouped_mask = None
+    if mask is not None:
+        from mrax.analysis import broadcast_mask
+
+        full_mask = broadcast_mask(mask, experiment.shape,
+            mask_dims=tuple(mask_dims) if mask_dims is not None else experiment.spatial_dim_names,
+            target_dims=tuple(experiment.dims))
+        grouped_mask = np.transpose(full_mask, permuted_axes).reshape(grouped.shape)
+
+    def group_mask(index):
+        if grouped_mask is None:
+            return None
+        masks = grouped_mask[:, index]
+        if isinstance(reference, (int, np.integer)):
+            return masks[int(reference)]
+        return masks[0] if isinstance(reference, str) and reference.lower() in {"first", "frame0"} else np.any(masks, axis=0)
 
     groups = tuple(
         linear_drift_correct_framestack(
             grouped[:, group_index, ...],
             reference=reference,
             times=times,
+            mask=group_mask(group_index),
             device=device,
             **drift_kwargs,
         )

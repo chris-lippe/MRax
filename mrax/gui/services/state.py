@@ -125,13 +125,13 @@ def _serialize_gui_state(
             fitted_map_rows[str(exp_name)] = rows
     drift_rows: dict[str, dict[str, Any]] = {}
     for key, result in dict(drift_results or {}).items():
-        if str(result.get("kind") or "") != "mrax_linear_drift" or result.get("corrected") is None:
+        if str(result.get("kind") or "") not in {"mrax_linear_drift", "mrax_framewise_motion"} or result.get("corrected") is None:
             continue
         array_key = f"drift_{_safe_key(str(key))}_corrected"
         arrays[array_key] = np.asarray(result["corrected"])
         drift_rows[str(key)] = {
             "key": str(key),
-            "kind": "mrax_linear_drift",
+            "kind": result["kind"],
             "corrected_key": array_key,
             "metadata": _metadata_to_jsonable(dict(result.get("metadata") or {})),
             "summary": _metadata_to_jsonable(dict(result.get("summary") or {})),

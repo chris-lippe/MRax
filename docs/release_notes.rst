@@ -13,8 +13,7 @@ Highlights
 - A shared workflow for viewing, reconstruction, preprocessing, registration,
   segmentation, fitting and analysis, including overlays and split comparison.
 - Editable processing pipelines retain original image data and fitted maps.
-  Reusable processing, reconstruction and fitting workflows can be saved as
-  versioned ``.mpip``, ``.mrec`` and ``.mfit`` files.
+  Reusable presets and combined processing workflows use versioned ``.mflow`` files.
 - Direct file and folder imports, workspace saving and export with explicit
   overwrite confirmation. Imported files remain unchanged.
 - Improved Bruker geometry and multi-package viewing and reconstruction, plus

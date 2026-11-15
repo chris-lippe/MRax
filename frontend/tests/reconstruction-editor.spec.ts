@@ -73,7 +73,7 @@ test.afterEach(async ({ request }) => {
     await request.delete('/api/workflows/' + entry.id + '?revision=' + entry.revision, { headers });
 });
 
-test('stages insert, edit, remove and discard. Named reconstructions save and reopen as mrec without running', async ({
+test('stages insert, edit, remove and discard. Named reconstruction workflows save and reopen without running', async ({
   page,
   request,
 }, info) => {
@@ -120,10 +120,10 @@ test('stages insert, edit, remove and discard. Named reconstructions save and re
   ).toMatchObject({ name: 'Windowed Fourier' });
   await expect(page.getByRole('button', { name: 'Vendor comparison', exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Reconstruction workflows', exact: true }).click();
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click();
   const modal = page.getByRole('dialog', { name: 'Reusable workflows', exact: true });
   await modal.getByRole('button', { name: 'Capture current configuration', exact: true }).click();
-  const file = info.outputPath('windowed.mrec');
+  const file = info.outputPath('windowed.mflow');
   await modal.getByRole('button', { name: 'Save workflow file', exact: true }).click();
   await chooseFilePath(page, file, 'Save');
   await expect(modal.getByRole('status')).toHaveText('Workflow saved.');
@@ -131,10 +131,10 @@ test('stages insert, edit, remove and discard. Named reconstructions save and re
   expect(document.kind).toBe('reconstruction');
   expect(document.steps[0].settings.pipeline.name).toBe('Windowed Fourier');
   document.steps[0].settings.pipeline.name = 'Imported Fourier';
-  const imported = info.outputPath('imported.mrec');
+  const imported = info.outputPath('imported.mflow');
   await writeFile(imported, JSON.stringify(document, null, 2));
   await modal.getByRole('button', { name: 'Close workflows', exact: true }).click();
-  await page.getByRole('button', { name: 'Open .mrec', exact: true }).click();
+  await page.getByRole('button', { name: 'Open .mflow', exact: true }).click();
   await chooseFilePath(page, imported, 'Open');
   await expect(page.getByLabel('Reconstruction pipeline name', { exact: true })).toHaveValue(
     'Imported Fourier',

@@ -1,10 +1,9 @@
 {
   "format": "mrax.workflow",
-  "format_version": 1,
   "kind": "reconstruction",
   "mrax_version": "0.4.0",
-  "name": "Cartesian Fourier",
-  "description": "Cartesian inverse Fourier reconstruction using acquisition corrections.",
+  "name": "Gridded Fourier",
+  "description": "Kaiser–Bessel gridding and inverse Fourier reconstruction for non-Cartesian acquisitions.",
   "bindings": [],
   "steps": [
     {
@@ -16,8 +15,8 @@
         "component": "magnitude",
         "pipeline": {
           "schema_version": 1,
-          "name": "Cartesian Fourier",
-          "encoding": "cartesian",
+          "name": "Gridded Fourier",
+          "encoding": "sampled",
           "stages": [
             {
               "kind": "profile_inversion",
@@ -50,9 +49,9 @@
               "options": {}
             },
             {
-              "kind": "partial_fourier",
+              "kind": "gridding",
               "enabled": true,
-              "when": "configured",
+              "when": "always",
               "options": {}
             },
             {

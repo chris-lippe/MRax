@@ -19,6 +19,11 @@ export type WorkflowEntry = {
   origin: { workspace_id: string; experiment: string } | null;
   suggested_bindings: Record<string, string>;
 };
+export type WorkflowPreset = {
+  id: string;
+  document: WorkflowDocument;
+  requirements: string[];
+};
 export type WorkflowTarget = {
   workspace_id: string;
   label: string;
@@ -29,11 +34,7 @@ export type WorkflowTarget = {
     resources: Record<string, { value: string; label: string }[]>;
   }[];
 };
-export const workflowExtensions = {
-  processing: '.mpip',
-  reconstruction: '.mrec',
-  fitting: '.mfit',
-};
+export const workflowExtension = '.mflow';
 export const targetKey = (workspace: string, experiment: string) =>
   JSON.stringify([workspace, experiment]);
 export const printWorkflow = (document: WorkflowDocument) =>

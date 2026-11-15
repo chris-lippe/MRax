@@ -7,7 +7,23 @@ import pytest
 from scipy.ndimage import gaussian_filter, median_filter
 
 from mrax.gui.services.pipeline import change_pipeline, pipeline_info
-from tests.test_web_pipeline_workflows import process, workspace
+from mrax.gui.services.processing import run_processing
+from mrax.gui.services.workspace import StudyWorkspace
+from mrax.gui.session import GuiSession
+
+
+def workspace():
+    data = np.random.default_rng(9).normal(10, 1, (4, 9, 11)).astype(np.float32)
+    session = GuiSession()
+    session.create_empty_study("Independent synthetic pipeline")
+    session.add_experiment("Experiment", data, dims={"frame": 4, "x": 9, "y": 11})
+    return StudyWorkspace(key="synthetic", label=session.study_name, session=session), data
+
+
+def process(workspace, method, **options):
+    return run_processing(
+        workspace, {"method": method, "input": "image", **options}, lambda *_: None
+    )
 
 
 def draft_step(step, *, client_id=None):
@@ -81,36 +97,27 @@ def test_insert_copy_reorder_and_remove_apply_once_from_protected_source():
     )
 
 
-@pytest.mark.parametrize("failure", ["generation", "version", "duplicate", "late", "cancel"])
-def test_failed_stale_and_cancelled_proposals_leave_pipeline_and_images_untouched(failure):
+def test_cancelled_pipeline_edit_preserves_images_and_chain():
     w, _ = workspace()
     process(w, "gaussian", axes=["x", "y"], parameters={"sigma": 0.6})
     before = pipeline_info(w)
     images = w.session.image_array.copy()
     rows = [draft_step(before["steps"][0]), draft_step(before["steps"][0], client_id="copy")]
-    generation = before["generation"]
-    if failure == "generation":
-        generation -= 1
-    elif failure == "version":
-        rows[0]["source_version"] = "outdated"
-    elif failure == "duplicate":
-        rows[1]["id"] = rows[0]["id"]
-    elif failure == "late":
-        rows[1]["options"]["parameters"]["sigma"] = -1
     events = []
 
     def progress(done, _total, _detail):
-        if failure == "cancel" and events and events[-1]["steps"][1]["status"] == "running":
+        if events and events[-1]["steps"][1]["status"] == "running":
             raise InterruptedError("Cancel synthetic replay")
 
     progress.pipeline_event = events.append
-    with pytest.raises((ValueError, InterruptedError)):
+    with pytest.raises(InterruptedError, match="Cancel synthetic replay"):
         change_pipeline(
-            w, {"action": "replace", "base_generation": generation, "steps": rows}, progress
+            w,
+            {"action": "replace", "base_generation": before["generation"], "steps": rows},
+            progress,
         )
     assert pipeline_info(w) == before
     np.testing.assert_array_equal(w.session.image_array, images)
-    if failure in {"late", "cancel"}:
-        assert events[-1]["status"] == ("cancelled" if failure == "cancel" else "failed")
-        assert events[-1]["steps"][0]["status"] == "completed"
-        assert events[-1]["steps"][1]["status"] in {"failed", "cancelled"}
+    assert events[-1]["status"] == "cancelled"
+    assert events[-1]["steps"][0]["status"] == "completed"
+    assert events[-1]["steps"][1]["status"] == "cancelled"

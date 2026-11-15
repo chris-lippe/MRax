@@ -792,6 +792,39 @@ def apply_processing(workspace, options, progress):
 
 
 def rename_processing_sources(workspace, old, new):
+    def spaces(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if (
+                    key
+                    in {
+                        "space",
+                        "registration_space",
+                        "source_experiment",
+                        "reference_experiment",
+                        "moving_experiment",
+                        "experiment",
+                    }
+                    and isinstance(item, str)
+                    and item == old
+                ):
+                    value[key] = new
+                elif key == "compatible_experiments" and isinstance(item, (list, tuple)):
+                    value[key] = [new if name == old else name for name in item]
+                else:
+                    spaces(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                spaces(item)
+
+    for value in (
+        workspace.pipelines,
+        workspace.registration_results,
+        workspace.fit_results_by_experiment,
+        workspace.preview_results_by_experiment,
+        workspace.session.data,
+    ):
+        spaces(value)
     for pipeline in workspace.pipelines.values():
         for step in pipeline["steps"]:
             for key in ("reference_experiment", "moving_experiment"):

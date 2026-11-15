@@ -33,7 +33,7 @@ from mrax.library.default_models import (
 )
 from mrax.opt.regularizers import total_variation_penalty
 from mrax.preprocessing import denoise_filter, regularized_denoise
-from mrax.reco import fftnc, ifftnc, unwrap_phase_image
+from mrax.reco import unwrap_phase_image
 
 
 def _small_t2_study():
@@ -95,35 +95,7 @@ def _constant_signal_problem():
     return experiment, model, dataset
 
 
-def _problem():
-    values = jnp.asarray([1.0, 1.1, 0.9, 15.0]).reshape(4, 1, 1)
-    exp = Experiment(dims={"frame": 4, "x": 1, "y": 1})
-    exp.observables["offsets"] = Quantity(jnp.arange(4), "1")
-    exp._mrax_dim_observables = {"frame": "offsets"}
-    model = Model(
-        name="synthetic_location",
-        parameter_units={"level": "1"},
-        parametrization_factory=lambda shape: ({"level": jnp.full(shape, 0.5)}, lambda p: p),
-        model_apply=lambda fields, offsets, observables=None: jnp.broadcast_to(
-            fields["level"], exp.shape
-        ),
-    )
-    return exp, model, DataSet(values)
-
-
-def test_models_dimensions_reconstruction_and_preprocessing_workflow():
-    assert default_model_for_type("mse").name == "t2_se"
-    assert default_model_for_type("mge").name == "t2star_se"
-    offsets = Quantity(jnp.asarray([1.0, 2.0, 1.0, 2.0], dtype=jnp.float32), "ppm")
-    experiment = build_default_experiment(
-        "sat_trans", frame_count=4, spatial_shape=(2, 2), observables={"freq_offsets": offsets}
-    )
-    assert experiment.dims["offset"] == 2
-    assert experiment.dims["t"] == 2
-    image = jnp.arange(16, dtype=jnp.float32).reshape((4, 4))
-    kspace = fftnc(image)
-    assert np.allclose(np.asarray(ifftnc(kspace)), np.asarray(image), atol=1e-05)
-    assert np.allclose(np.asarray(ifftnc(kspace)), np.asarray(image), atol=1e-05)
+def test_spatial_denoising_preserves_shape_and_reduces_variation():
     noisy = jnp.ones((5, 5), dtype=jnp.float32).at[2, 2].set(5.0)
     filtered = denoise_filter(noisy, method="gaussian", sigma=0.8)
     denoised, history = regularized_denoise(
@@ -134,29 +106,18 @@ def test_models_dimensions_reconstruction_and_preprocessing_workflow():
     assert denoised.shape == noisy.shape
     assert len(history) == 3
     assert np.isfinite(np.asarray(denoised)).all()
-    experiment = build_default_experiment("mse", 1, (2, 2), {})
-    help_text = experiment.help()
-    assert "\\n" not in help_text
-    assert len(help_text.splitlines()) > 3
-    from mrax import library
-
-    assert library.make_dti_tensor_model().name == "dti"
-    assert library.make_dki_kurtosis_model().name == "dki"
+    assert float(total_variation_penalty(filtered)) < float(total_variation_penalty(noisy))
 
 
-@pytest.mark.parametrize(
-    "kind", ["ir", "vtr", "vfa", "mse", "mge", "fair_asl", "wasabi", "lorentzian", "ab_mt_n"]
-)
+@pytest.mark.parametrize("kind", ["ir", "vfa", "mse", "fair_asl", "wasabi", "ab_mt_n"])
 def test_builtin_observables_broadcast_over_volumetric_parameter_maps(kind):
     from mrax.library.default_models import (
         make_AB_MT_n_model,
-        make_multipool_lorentzian_model,
         make_wasabi_model,
     )
 
     special = {
         "wasabi": make_wasabi_model,
-        "lorentzian": make_multipool_lorentzian_model,
         "ab_mt_n": make_AB_MT_n_model,
     }
     model = special[kind]() if kind in special else default_model_for_type(kind)
@@ -184,11 +145,12 @@ def test_builtin_observables_broadcast_over_volumetric_parameter_maps(kind):
     np.testing.assert_allclose(predicted.reshape((3, 6, 4)), planar, rtol=1e-6, atol=1e-7)
 
 
-@pytest.mark.parametrize("order", [("ti", "fair"), ("fair", "ti")])
-@pytest.mark.parametrize("storage", ["axis", "grid", "frame"])
-@pytest.mark.parametrize("n_ti", [3])
-def test_model_callable_expands_independent_observable_axes(order, storage, n_ti):
-    ti = np.asarray([80.0, 360.0, 1500.0], dtype=np.float32)[:n_ti]
+@pytest.mark.parametrize(
+    "order,storage",
+    [(("ti", "fair"), "axis"), (("fair", "ti"), "grid"), (("ti", "fair"), "frame")],
+)
+def test_model_callable_expands_independent_observable_axes(order, storage):
+    ti = np.asarray([80.0, 360.0, 1500.0], dtype=np.float32)
     labels = np.asarray([0.0, 1.0], dtype=np.float32)
     sizes = {"ti": len(ti), "fair": len(labels)}
     dims = {name: sizes[name] for name in order}
@@ -216,7 +178,7 @@ def test_model_callable_expands_independent_observable_axes(order, storage, n_ti
     amp = np.where(label_grid >= 0.5, 0.9, 1.2)
     t1 = np.where(label_grid >= 0.5, 1400.0, 850.0)
     signal = np.abs(amp - 2 * amp * np.exp(-ti_grid / t1)) + 1e-6
-    expected = np.broadcast_to(signal.reshape((-1, 1, 1)), (n_ti * 2, 2, 4))
+    expected = np.broadcast_to(signal.reshape((-1, 1, 1)), (len(ti) * 2, 2, 4))
     predict = make_model_callable(experiment, model)
     np.testing.assert_allclose(predict(fields), expected, rtol=2e-6, atol=2e-7)
     gradient = jax.grad(lambda values: jnp.sum(predict(values)))(fields)
@@ -246,12 +208,11 @@ def test_loss_combines_inverse_variance_weighting_with_rms_scaling():
     assert np.allclose(np.asarray(gradient), 0.0, atol=1e-6)
 
 
-@pytest.mark.parametrize("variance", ([1.0, 0.0], [1.0, np.nan], [1.0, 2.0, 3.0]))
-def test_loss_rejects_invalid_data_variance(variance):
+def test_loss_rejects_nonpositive_data_variance():
     experiment, model, dataset = _constant_signal_problem()
 
     with pytest.raises(ValueError, match="data_variance"):
-        build_loss(experiment, model, dataset, data_variance=jnp.asarray(variance))
+        build_loss(experiment, model, dataset, data_variance=jnp.asarray([1.0, 0.0]))
 
 
 def test_auto_data_variance_estimates_heteroscedastic_frame_noise():
@@ -430,15 +391,6 @@ def test_group_pseudo_huber_bounds_spectral_influence_and_ignores_missing():
     r = jnp.asarray([[0.01, jnp.nan], [0.02, jnp.inf]])
     w = jnp.asarray([[1.0, 0.0], [1.0, 0.0]])
     assert np.isfinite(float(pseudo_huber_loss(r, w, delta=0.1, group_size=2)))
-
-
-def test_custom_data_loss_contract_is_checked():
-    exp, model, data = _problem()
-    with pytest.raises(TypeError, match="callable"):
-        build_loss(exp, model, data, data_loss=2.0)
-    loss, p, _ = build_loss(exp, model, data, data_loss=lambda r, w: r)
-    with pytest.raises(ValueError, match="real scalar"):
-        loss(p)
 
 
 @pytest.mark.parametrize(

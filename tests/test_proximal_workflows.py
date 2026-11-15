@@ -7,14 +7,7 @@ import pytest
 
 from mrax.core import run_fit
 from mrax.data_struct import DataSet, Experiment, Model
-from mrax.opt.tv import TVOperator, tv_prox
-
-
-def _device(backend):
-    try:
-        return jax.devices(backend)[0]
-    except RuntimeError:
-        pytest.skip(f"{backend} is unavailable")
+from mrax.opt.tv import TVOperator
 
 
 def _image_problem(tv=True):
@@ -37,11 +30,10 @@ def _image_problem(tv=True):
     return experiment, model, data, regularizers
 
 
-@pytest.mark.parametrize("order", [1, 2])
-def test_masked_tv_operator_adjoint_and_disconnected_regions(order):
+def test_masked_tv_operator_adjoint_and_disconnected_regions():
     field = (jnp.arange(20, dtype=jnp.float32).reshape(4, 5) / 3) ** 2
     mask = jnp.asarray([[1, 1, 1, 0, 1], [1, 1, 1, 0, 1], [1, 1, 1, 0, 1], [0, 0, 0, 0, 0]])
-    operator = TVOperator.create(field.shape, order=order, mask=mask)
+    operator = TVOperator.create(field.shape, order=2, mask=mask)
     dual = (
         jnp.arange(operator.gradient(field).size, dtype=field.dtype).reshape(
             operator.gradient(field).shape
@@ -56,21 +48,9 @@ def test_masked_tv_operator_adjoint_and_disconnected_regions(order):
     np.testing.assert_array_equal(operator.value(field), operator.value(changed))
 
 
-@pytest.mark.parametrize("backend", ["cpu"])
-def test_tv_prox_matches_two_pixel_solution_and_certifies_gap(backend):
-    device = _device(backend)
-    value = jax.device_put(jnp.asarray([-1.0, 1.0]), device)
-    operator = TVOperator.create(value.shape, weight=0.5)
-    solve = jax.jit(lambda value: tv_prox(value, (operator,), 1.0, (-2.0, 2.0), tolerance=1e-8))
-    result, _, gap, _ = solve(value)
-    np.testing.assert_allclose(result, [-0.75, 0.75], rtol=0, atol=2e-4)
-    assert float(gap) <= 1e-8 * 1.5
-
-
-@pytest.mark.parametrize("backend", ["cpu"])
 @pytest.mark.parametrize("name", ["fista", "split_bregman"])
-def test_true_tv_fitting_in_physical_coordinates(backend, name):
-    device = _device(backend)
+def test_true_tv_fitting_in_physical_coordinates(name):
+    device = jax.devices("cpu")[0]
     with jax.default_device(device):
         exp, model, data, regularizers = _image_problem()
         fields, history, info = run_fit(

@@ -1,7 +1,6 @@
 """Composite pipelines use only independently generated acquisitions and signals."""
 
 import copy
-from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -10,8 +9,6 @@ from mrax.data_struct import AcquisitionData, Quantity
 from mrax.gui.services.pipeline import pipeline_info
 from mrax.gui.services.pipeline_blocks import (
     block_options,
-    fit_result_for_map,
-    reconstruction_available,
 )
 from mrax.gui.services.pipeline_editing import apply_pipeline_draft
 from mrax.gui.services.reusable_workflows import (
@@ -23,8 +20,7 @@ from mrax.gui.services.workspace import StudyWorkspace
 from mrax.gui.services.workspace_io import load_workspace_bundle, save_workspace_bundle
 from mrax.gui.session import GuiSession
 from mrax.reco import fftnc
-from mrax.reco.plans import reconstruction_presets
-from mrax.workflows import dumps_workflow, loads_workflow
+from mrax.workflows import WorkflowDocument, dumps_workflow, loads_workflow, new_workflow
 
 
 def workspace(*, raw=True):
@@ -71,48 +67,7 @@ def gaussian():
     }
 
 
-def test_fit_blocks_pass_images_through_and_store_distinct_maps_at_their_chain_positions(tmp_path):
-    work, original = workspace()
-    reco = block_options(work, "reconstruct", {})
-    fit = block_options(work, "fit", {"use_roi": False})
-    fit["workflow"]["name"] = "Before smoothing"
-    second = copy.deepcopy(fit)
-    second["workflow"]["name"] = "After smoothing"
-    apply(
-        work,
-        [
-            row("reconstruct", reco, "reco"),
-            row("fit", fit, "fit_first"),
-            row("process", gaussian(), "smooth"),
-            row("fit", second, "fit_second"),
-        ],
-    )
-    from scipy.ndimage import gaussian_filter
-
-    np.testing.assert_allclose(
-        work.session.image_array,
-        gaussian_filter(original * 2, (0, 0.7, 0.7), mode="mirror"),
-        rtol=1e-5,
-    )
-    np.testing.assert_array_equal(work.session.original_image_array, original)
-    assert work.session.experiment_names == ["A"]
-    first = work.session.map_array("Before smoothing / t2")
-    np.testing.assert_allclose(first, 80, rtol=0.02)
-    np.testing.assert_allclose(work.session.map_array("After smoothing / t2"), 80, rtol=0.02)
-    assert not np.allclose(
-        work.session.map_array("Before smoothing / amplitude"),
-        work.session.map_array("After smoothing / amplitude"),
-    )
-    result = fit_result_for_map(work, "Before smoothing / t2")
-    assert [step["kind"] for step in result["pipeline_steps"]] == ["reconstruct"]
-    assert len(work.pipelines["A"]["fits"]) == 2
-    save_workspace_bundle(work, tmp_path / "chain.mrax")
-    loaded = load_workspace_bundle(tmp_path / "chain.mrax", tmp_path / "unpacked", key="loaded")
-    np.testing.assert_allclose(loaded.session.map_array("Before smoothing / t2"), first)
-    assert fit_result_for_map(loaded, "Before smoothing / t2")["block_id"] == result["block_id"]
-
-
-def test_mpip_wraps_versioned_leaf_documents_and_reuses_target_kspace():
+def test_common_workflow_replays_flat_reconstruction_processing_and_fitting_blocks(tmp_path):
     work, _ = workspace()
     apply(
         work,
@@ -123,44 +78,113 @@ def test_mpip_wraps_versioned_leaf_documents_and_reuses_target_kspace():
         ],
     )
     document, bindings = capture_workflow(work, "processing")
-    restored = loads_workflow(dumps_workflow(document), suffix=".mpip")
-    assert restored.format_version == 2
+    restored = loads_workflow(dumps_workflow(document), suffix=".mflow")
     assert [step.operation for step in restored.steps] == ["reconstruct", "process", "fit"]
-    assert restored.steps[0].settings["workflow"]["kind"] == "reconstruction"
-    assert restored.steps[2].settings["workflow"]["kind"] == "fitting"
+    assert "pipeline" in restored.steps[0].settings
+    assert "model_name" in restored.steps[2].settings["settings"]
+    assert all("workflow" not in step.settings for step in restored.steps)
     target, original = workspace()
     assert validate_workflow_targets(target, restored, ["A"], {"A": bindings})[0]["ready"]
     apply_workflow(target, restored.model_dump(), ["A"], {"A": bindings}, lambda *_: None)
     np.testing.assert_allclose(target.session.image_array, work.session.image_array)
     np.testing.assert_array_equal(target.session.original_image_array, original)
     assert len(target.session.map_names) == 3
+    work.fit_results_by_experiment["A"]["workflow"] = restored.model_dump()
+    saved = save_workspace_bundle(work, tmp_path / "combined.mrax")
+    original_bundle = saved.read_bytes()
+    reopened = load_workspace_bundle(saved, tmp_path / "reopened", key="reopened")
+    assert saved.read_bytes() == original_bundle
+    assert reopened.fit_results_by_experiment["A"]["workflow"] == restored.model_dump()
+    for saved_step, opened_step in zip(
+        work.pipelines["A"]["steps"], reopened.pipelines["A"]["steps"], strict=True
+    ):
+        if saved_step["kind"] in {"reconstruct", "fit"}:
+            assert opened_step["options"]["workflow"] == saved_step["options"]["workflow"]
+    np.testing.assert_array_equal(reopened.session.image_array, work.session.image_array)
 
 
-@pytest.mark.parametrize(
-    "invalid", ["missing", "cached_only", "no_samples", "nonfinite", "nufft_on_cartesian"]
-)
-def test_invalid_reconstruction_blocks_are_rejected_atomically(invalid):
-    work, original = workspace(raw=invalid not in {"missing", "cached_only"})
-    if invalid == "cached_only":
-        work.session.current_experiment["processed"] = {"raw_reconstruction": original * 2}
-    if invalid in {"no_samples", "nonfinite"}:
-        raw = work.session.current_experiment["acquisition"]
-        if invalid == "no_samples":
-            raw = replace(raw, acquired=np.zeros_like(raw.samples, dtype=bool))
-        else:
-            values = raw.samples.copy()
-            values[0, 0, 0, 0] = np.nan
-            raw = replace(raw, samples=values)
-        work.session.current_experiment["acquisition"] = raw
-    options = block_options(work, "reconstruct", {})
-    if invalid == "nufft_on_cartesian":
-        options["workflow"] = next(
-            p["document"] for p in reconstruction_presets() if p["id"] == "nufft-adjoint"
+def test_named_outputs_cross_experiment_targets_and_late_failures_are_transactional(tmp_path):
+    work, original = workspace(raw=False)
+    work.session.add_experiment(
+        "B",
+        original * 2,
+        dims={"frame": 8, "x": 4, "y": 5},
+        model_name="t2_se",
+        observables={"TE": Quantity(np.linspace(10, 120, 8), "ms")},
+    )
+    work.session.select_experiment("A")
+    fit, _ = capture_workflow(work, "fitting", draft={"use_roi": False})
+    steps = [
+        {"id": "anatomy", "operation": "process", "version": 1, "settings": gaussian()},
+        {"id": "relaxation", "operation": "fit", "version": 1, "settings": fit.steps[0].settings},
+        {
+            "id": "map_smoothing",
+            "operation": "process",
+            "version": 1,
+            "settings": {
+                **gaussian(),
+                "input": {"$output": "relaxation", "port": "map", "name": "t2"},
+            },
+        },
+        {
+            "id": "align",
+            "operation": "register",
+            "version": 1,
+            "target": {"$binding": "moving"},
+            "settings": {
+                "reference_experiment": {"$output": "anatomy", "port": "image"},
+                "manual": True,
+            },
+        },
+    ]
+    document = new_workflow(
+        "processing",
+        steps,
+        bindings=[{"id": "moving", "kind": "experiment", "label": "Second acquisition"}],
+    )
+    assignments = {"A": {"moving": "B"}}
+    assert validate_workflow_targets(work, document, ["A"], assignments)[0]["ready"]
+    apply_workflow(work, document.model_dump(), ["A"], assignments, lambda *_: None)
+    np.testing.assert_array_equal(work.session.original_image_array, original)
+    assert "relaxation / t2" in work.session.map_names
+    a = work.session.image_array.copy()
+    assert work.pipelines["A"]["steps"][-1]["options"]["input"] == "map:relaxation / t2"
+    assert work.pipelines["B"]["steps"][0]["options"]["reference_experiment"] == "A"
+    from scipy.ndimage import gaussian_filter
+
+    np.testing.assert_allclose(
+        work.pipelines["B"]["steps"][0]["references"]["A"]["data"],
+        gaussian_filter(original, sigma=(0, 0.7, 0.7), mode="mirror"),
+        rtol=1e-5,
+    )
+    assert a.shape == (4, 5)
+    recaptured, _ = capture_workflow(work, "processing")
+    assert recaptured.steps[2].settings["input"] == {
+        "$output": "step_2",
+        "port": "map",
+        "name": "t2",
+    }
+    saved = save_workspace_bundle(work, tmp_path / "named.mrax")
+    restored = load_workspace_bundle(saved, tmp_path / "opened", key="restored")
+    np.testing.assert_array_equal(restored.session.image_array, a)
+    maps = {name: work.session.map_array(name).copy() for name in work.session.map_names}
+    bad = document.model_dump()
+    bad["steps"][2]["settings"]["input"]["name"] = "missing"
+    with pytest.raises(ValueError, match="did not produce"):
+        apply_workflow(work, bad, ["A"], assignments, lambda *_: None)
+    np.testing.assert_array_equal(work.session.image_array, a)
+    for name, values in maps.items():
+        np.testing.assert_array_equal(work.session.map_array(name), values)
+    future = document.model_dump()
+    future["steps"][0]["settings"]["input"] = {"$output": "relaxation", "port": "map", "name": "t2"}
+    with pytest.raises(ValueError, match="earlier"):
+        WorkflowDocument.model_validate(future)
+    targeted_fit = new_workflow(
+        "fitting",
+        [{**steps[1], "target": {"$binding": "moving"}}],
+        bindings=[{"id": "moving", "kind": "experiment", "label": "Second acquisition"}],
+    )
+    with pytest.raises(ValueError, match="another experiment"):
+        block_options(
+            work, "fit", {"workflow": targeted_fit.model_dump(), "bindings": {"moving": "B"}}
         )
-    before = pipeline_info(work)
-    with pytest.raises(ValueError):
-        apply(work, [row("reconstruct", options, "invalid")])
-    np.testing.assert_array_equal(work.session.image_array, original)
-    assert pipeline_info(work) == before
-    if invalid != "nufft_on_cartesian":
-        assert reconstruction_available(work.session)[0] is False

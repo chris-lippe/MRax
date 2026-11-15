@@ -113,7 +113,7 @@ export function ReconstructionControls({
         onClick={() => openWorkflows?.('reconstruction', { component, pipeline: plan })}
       >
         <WorkbenchIcon name="save" />
-        Reconstruction workflows
+        Workflows
       </button>
       <details className="reconstruction-raw">
         <summary>
@@ -200,7 +200,7 @@ export function ReconstructionControls({
                       const file = await choose({
                         title: 'Open reconstruction pipeline',
                         mode: 'file',
-                        extensions: ['.mrec'],
+                        extensions: ['.mflow'],
                       });
                       if (!file) return;
                       const entry = await api<WorkflowEntry>('/api/workflows/open-file', 'POST', {
@@ -208,7 +208,9 @@ export function ReconstructionControls({
                         path: file.path,
                       });
                       if (entry.document.kind !== 'reconstruction')
-                        throw Error('Choose a reconstruction (.mrec) workflow.');
+                        throw Error('Choose a reconstruction (.mflow) workflow.');
+                      if (entry.document.bindings.length)
+                        throw Error('Use Workflows to assign this file’s experiment inputs.');
                       const settings = entry.document.steps[0].settings;
                       const imported = (settings.pipeline as RecoPlan | undefined) ?? catalog?.plan;
                       if (imported)
@@ -225,7 +227,7 @@ export function ReconstructionControls({
                 }}
               >
                 <WorkbenchIcon name="open" />
-                Open .mrec
+                Open .mflow
               </button>
               {draft && (
                 <button

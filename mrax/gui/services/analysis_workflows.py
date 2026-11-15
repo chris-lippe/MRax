@@ -15,13 +15,15 @@ from mrax.analysis import ROI
 from mrax.data_struct.dimensions import reshape_dims_to_frames
 from mrax.devices import resolve_device
 from mrax.gui.masks import embed_mask_slice, mask_slice_for_display
-from mrax.gui.models import model_parameter_specs
+from mrax.gui.models import make_model, model_parameter_specs
 from mrax.gui.registration import (
     DriftCorrectionOptions,
     RegistrationOptions,
     alignment_metrics,
     apply_transform_to_image,
     manual_affine_transform,
+    physical_grid_transform,
+    registration_method_factory,
     resample_mask_with_transform,
     run_drift_correction,
     run_registration,
@@ -291,31 +293,94 @@ def import_source(workspace, source, options, progress):
     return workspace
 
 
-def _registration_source(session, name, source, frame, map_name=None, *, volume=False):
+def _registration_context(session, name, source, frame, map_name=None, *, workspace=None):
     if name not in session.experiment_names:
         raise ValueError("Choose an available registration experiment")
     if source not in {"image", "map", "reconstruction"}:
         raise ValueError("Unknown registration source")
-    active = session.selected_experiment
+    session = copy.copy(session)
+    session.active_indices = dict(session.active_indices)
+    session.view_states = dict(session.view_states)
     session.select_experiment(name)
-    try:
-        if source == "map":
-            if map_name not in session.map_names:
-                raise ValueError("Choose a fitted map from the selected experiment")
-            data = session.map_array(map_name)
-        elif source == "reconstruction":
-            data = session.reconstruction_display_array()
+    if source == "map" and workspace is not None:
+        from .pipeline import display_session
+
+        context = copy.copy(workspace)
+        context.session = session
+        context.view_label = "Map"
+        session = display_session(context, fitted=True, map_name=map_name)
+    if not 0 <= int(frame) < session.frame_count:
+        raise ValueError("Registration frame is out of range")
+    session.set_active_frame(int(frame))
+    return session
+
+
+def _registration_source(
+    session,
+    name,
+    source,
+    frame,
+    map_name=None,
+    *,
+    volume=False,
+    aggregation="frame",
+    workspace=None,
+):
+    session = _registration_context(session, name, source, frame, map_name, workspace=workspace)
+    if source == "map":
+        if map_name not in session.map_names:
+            raise ValueError("Choose a fitted map from the selected experiment")
+        data = session.map_array(map_name)
+    elif source == "reconstruction":
+        data = session.reconstruction_display_array()
+    else:
+        data = session.image_array
+    data = np.asarray(data)
+    if source == "map":
+        spatial = tuple(session.spatial_dim_names)
+        spatial_shape = tuple(session.experiment_dims[name] for name in spatial)
+        if data.shape == spatial_shape:
+            pass
+        elif data.shape == tuple(size for size in spatial_shape if size != 1):
+            data = data.reshape(spatial_shape)
         else:
-            data = session.image_array
-        data = np.asarray(data)
-        if source != "map":
-            if not 0 <= int(frame) < session.frame_count:
-                raise ValueError("Registration frame is out of range")
+            from mrax.core.loss_builder import _field_metadata
+
+            shape, names, _ = _field_metadata(
+                session.build_experiment(),
+                model=make_model(session.fit_settings.model_name or session.current_model_name),
+            )
+            if data.shape != shape:
+                raise ValueError(
+                    "Map dimensions do not match the selected experiment's parameter grid"
+                )
+            data = data[
+                tuple(
+                    slice(None) if name in spatial else session.active_indices.get(name, 0)
+                    for name in names
+                )
+            ]
+    else:
+        if aggregation == "frame":
             data = np.asarray(reshape_dims_to_frames(data, session.experiment_dims))[int(frame)]
-        return data.copy() if volume else registration_plane(data, session).copy()
-    finally:
-        if active:
-            session.select_experiment(active)
+        elif aggregation in {"mean", "median"}:
+            from mrax.data_struct.dimensions import reshape_frames_to_dims
+
+            dims = session.experiment_dims
+            data = np.asarray(reshape_frames_to_dims(data, dims))
+            names = list(dims)
+            if "slice_package" in dims:
+                axis = names.index("slice_package")
+                data = np.take(data, session.active_indices.get("slice_package", 0), axis=axis)
+                names.remove("slice_package")
+            axes = tuple(
+                index for index, dim in enumerate(names) if dim not in session.spatial_dim_names
+            )
+            reducer = np.nanmean if aggregation == "mean" else np.nanmedian
+            data = reducer(np.abs(data), axis=axes) if axes else np.abs(data)
+        else:
+            raise ValueError("Choose a single frame, mean image or median image")
+    return data.copy() if volume else registration_plane(data, session, native_2d=True).copy()
 
 
 def run_alignment(workspace, options, progress):
@@ -330,6 +395,8 @@ def run_alignment(workspace, options, progress):
         int(options.get("reference_frame", 0)),
         options.get("reference_map"),
         volume=volume,
+        aggregation=options.get("reference_aggregation", "frame"),
+        workspace=workspace,
     )
     moving = _registration_source(
         session,
@@ -338,25 +405,59 @@ def run_alignment(workspace, options, progress):
         int(options.get("moving_frame", session.active_frame)),
         options.get("moving_map"),
         volume=volume,
+        aggregation=options.get("moving_aggregation", "frame"),
+        workspace=workspace,
     )
     if np.iscomplexobj(fixed):
         fixed = np.abs(fixed)
     if np.iscomplexobj(moving):
         moving = np.abs(moving)
     fixed_mask = moving_mask = None
-    for which, name, experiment, image in (
-        ("fixed", options.get("reference_roi"), fixed_name, fixed),
-        ("moving", options.get("moving_roi"), moving_name, moving),
+    for which, name, experiment, image, frame in (
+        (
+            "fixed",
+            options.get("reference_roi"),
+            fixed_name,
+            fixed,
+            int(options.get("reference_frame", 0)),
+        ),
+        (
+            "moving",
+            options.get("moving_roi"),
+            moving_name,
+            moving,
+            int(options.get("moving_frame", session.active_frame)),
+        ),
     ):
-        context = copy.copy(session)
-        context.view_states = dict(session.view_states)
-        context.select_experiment(experiment)
+        source = options.get("reference_source" if which == "fixed" else "moving_source", "image")
+        map_name = options.get("reference_map" if which == "fixed" else "moving_map")
+        context = _registration_context(
+            session, experiment, source, frame, map_name, workspace=workspace
+        )
         roi = next((r for r in context.rois if r.name == name), None)
         if name and roi is None:
             raise ValueError("A registration mask is unavailable")
         if roi is not None:
             mask = np.asarray(roi.mask) != 0
-            if not volume:
+            if volume and roi.dims is not None:
+                from mrax.analysis import broadcast_mask
+
+                spatial = tuple(context.spatial_dim_names)
+                mask = mask[
+                    tuple(
+                        slice(None)
+                        if dim in spatial
+                        else (0 if mask.shape[axis] == 1 else context.active_indices.get(dim, 0))
+                        for axis, dim in enumerate(roi.dims)
+                    )
+                ]
+                mask = broadcast_mask(
+                    mask,
+                    image.shape,
+                    mask_dims=tuple(dim for dim in roi.dims if dim in spatial),
+                    target_dims=spatial,
+                )
+            elif not volume:
                 mask = mask_slice_for_display(
                     mask,
                     dims=roi.dims,
@@ -377,11 +478,57 @@ def run_alignment(workspace, options, progress):
     registration_options = RegistrationOptions(**config)
     if registration_options.iterations < 1 or not 0 < registration_options.sampling_percentage <= 1:
         raise ValueError("Invalid registration iterations or sampling")
+    from .pipeline import snapshot
+
+    reference_context = _registration_context(
+        session,
+        fixed_name,
+        options.get("reference_source", "image"),
+        int(options.get("reference_frame", 0)),
+        options.get("reference_map"),
+        workspace=workspace,
+    )
+    moving_context = _registration_context(
+        session,
+        moving_name,
+        options.get("moving_source", "image"),
+        int(options.get("moving_frame", session.active_frame)),
+        options.get("moving_map"),
+        workspace=workspace,
+    )
+    fixed_grid, moving_grid = snapshot(reference_context), snapshot(moving_context)
+    pre_transform, spacing = physical_grid_transform(
+        fixed_grid,
+        moving_grid,
+        fixed_axes=reference_context.spatial_dim_names
+        if volume
+        else reference_context.image_plane_dims,
+        moving_axes=moving_context.spatial_dim_names if volume else moving_context.image_plane_dims,
+        fixed_frame=reference_context.active_frame,
+        moving_frame=moving_context.active_frame,
+        fixed_indices=reference_context.active_indices,
+        moving_indices=moving_context.active_indices,
+    )
+    if fixed_grid.get("geometry"):
+        from mrax.data_struct import SpatialGeometry
+
+        geometry = SpatialGeometry.from_metadata(fixed_grid["geometry"])
+        fixed_grid["geometry"] = dataclasses.replace(
+            geometry,
+            affine=geometry.affine_for_frame(reference_context.active_frame),
+            frame_affines=(),
+            frame_dims=(),
+            frame_shapes=(),
+        ).to_metadata()
     if options.get("manual"):
         if volume:
             raise ValueError("Manual affine controls operate on a two-dimensional plane")
         manual = {k: float(v) for k, v in (options.get("manual_settings") or {}).items()}
         transform = manual_affine_transform(fixed.shape, **manual)
+        if pre_transform is not None:
+            import SimpleITK as sitk
+
+            transform = sitk.CompositeTransform([pre_transform, transform])
         corrected = apply_transform_to_image(
             moving, fixed, transform, interpolator=registration_options.interpolator
         )
@@ -389,7 +536,13 @@ def run_alignment(workspace, options, progress):
     else:
         progress(1, 3, "Optimizing registration")
         result = run_registration(
-            fixed, moving, registration_options, fixed_mask=fixed_mask, moving_mask=moving_mask
+            fixed,
+            moving,
+            registration_options,
+            fixed_mask=fixed_mask,
+            moving_mask=moving_mask,
+            moving_pre_transform=pre_transform,
+            fixed_spacing=spacing,
         )
         transform, corrected = result.transform, np.asarray(result.corrected)
         diagnostics = dataclasses.asdict(result.diagnostics)
@@ -403,9 +556,6 @@ def run_alignment(workspace, options, progress):
         moving_mask_pixels=None if moving_mask is None else int(moving_mask.sum()),
     )
     key = "registration-" + uuid4().hex[:12]
-    reference_context = copy.copy(session)
-    reference_context.view_states = dict(session.view_states)
-    reference_context.select_experiment(fixed_name)
     metadata = {
         "reference_experiment": fixed_name,
         "moving_experiment": moving_name,
@@ -413,9 +563,20 @@ def run_alignment(workspace, options, progress):
         "moving_source": options.get("moving_source", "image"),
         "reference_frame": int(options.get("reference_frame", 0)),
         "moving_frame": int(options.get("moving_frame", session.active_frame)),
+        "reference_aggregation": options.get("reference_aggregation", "frame"),
+        "moving_aggregation": options.get("moving_aggregation", "frame"),
+        "reference_grid": {
+            key: value for key, value in fixed_grid.items() if key in {"dims", "geometry", "space"}
+        },
+        "moving_grid": {
+            key: value for key, value in moving_grid.items() if key in {"dims", "geometry", "space"}
+        },
         "reference_map": options.get("reference_map"),
         "moving_map": options.get("moving_map"),
         "plane": reference_context.active_image_plane,
+        "plane_dims": list(reference_context.image_plane_dims),
+        "moving_plane_dims": list(moving_context.image_plane_dims),
+        "moving_indices": dict(moving_context.active_indices),
         "indices": dict(reference_context.active_indices),
         "scope": "volume" if volume else "plane",
     }
@@ -444,12 +605,43 @@ def transform_roi(workspace, options):
     inverse = options.get("direction") == "reference_to_moving"
     reference = result["moving"] if inverse else result["fixed"]
     mask = np.asarray(roi.mask)
-    if result["transform"].GetDimension() == 2 and mask.ndim > 2:
+    meta = result["metadata"]
+    source_dims = meta.get("plane_dims" if inverse else "moving_plane_dims")
+    target_dims = meta.get("moving_plane_dims" if inverse else "plane_dims")
+    source_name = meta["reference_experiment" if inverse else "moving_experiment"]
+    source_grid = meta.get("reference_grid" if inverse else "moving_grid") or {}
+    target_grid = meta.get("moving_grid" if inverse else "reference_grid") or {}
+    if (
+        roi.metadata.get("registration_space")
+        and source_grid.get("space")
+        and roi.metadata["registration_space"] != source_grid["space"]
+    ):
+        from .pipeline import project_roi
+
+        work = copy.copy(workspace)
+        work.session = _registration_context(
+            workspace.session,
+            source_name,
+            "image",
+            meta.get("reference_frame" if inverse else "moving_frame", 0),
+        )
+        roi = project_roi(work, roi, inverse=True)
+        if roi.metadata.get("registration_space") != source_grid["space"]:
+            raise ValueError(
+                "The ROI is outside this transform's source space. Choose the matching direction or align it first"
+            )
+        mask = np.asarray(roi.mask)
+    if result["transform"].GetDimension() == 2 and (mask.ndim > 2 or source_dims):
+        context = copy.copy(workspace.session)
+        context.view_states = dict(context.view_states)
+        context.active_indices = dict(context.active_indices)
+        context.select_experiment(meta["reference_experiment" if inverse else "moving_experiment"])
+        context.set_active_frame(meta.get("reference_frame" if inverse else "moving_frame", 0))
         mask = mask_slice_for_display(
             mask,
             dims=roi.dims,
-            indices=workspace.session.active_indices,
-            plane_dims=workspace.session.image_plane_dims,
+            indices=context.active_indices,
+            plane_dims=source_dims or context.image_plane_dims,
         )
     sampled = resample_mask_with_transform(
         mask, reference, result["transform"], inverse=inverse, output_dtype=mask.dtype
@@ -459,21 +651,45 @@ def transform_roi(workspace, options):
     active = session.selected_experiment
     session.select_experiment(target)
     try:
-        if sampled.ndim == 2 and len(session.spatial_shape) == 3:
+        if session.experiment_dims.get("slice_package", 1) > 1:
+            raise ValueError(
+                "Label transfer requires a target experiment with a single slice package"
+            )
+        spatial_dims = tuple(
+            dim
+            for dim in target_grid.get("dims", session.experiment_dims)
+            if dim in {"x", "y", "z"}
+        )
+        spatial_shape = tuple(
+            target_grid.get("dims", session.experiment_dims)[dim] for dim in spatial_dims
+        )
+        target_indices = meta.get(
+            "moving_indices" if inverse else "indices", session.active_indices
+        )
+        if sampled.ndim == 2 and len(spatial_shape) == 3:
             sampled = embed_mask_slice(
                 sampled,
-                spatial_shape=session.spatial_shape,
-                spatial_dims=session.spatial_dim_names,
-                indices=session.active_indices,
-                plane_dims=session.image_plane_dims,
+                spatial_shape=spatial_shape,
+                spatial_dims=spatial_dims,
+                indices=target_indices,
+                plane_dims=target_dims or session.image_plane_dims,
             )
-        if sampled.shape != session.spatial_shape:
+        elif sampled.ndim == 2 and target_dims:
+            sampled = sampled.transpose([target_dims.index(dim) for dim in spatial_dims])
+        if sampled.shape != spatial_shape:
             raise ValueError("Transformed mask does not match the target native grid")
+        name = str(options.get("new_name") or roi.name + " transformed")
+        existing = {value.name for value in session.shared_rois}
+        if options.get("new_name") and name in existing:
+            raise ValueError("Choose a unique name for the transferred ROI")
+        base, number = name, 2
+        while name in existing:
+            name, number = f"{base} {number}", number + 1
         session.add_roi(
             ROI(
-                str(options.get("new_name") or roi.name + " transformed"),
+                name,
                 sampled,
-                dims=tuple(session.spatial_dim_names),
+                dims=spatial_dims,
                 metadata={
                     **roi.metadata,
                     "kind": "mask",
@@ -481,12 +697,25 @@ def transform_roi(workspace, options):
                     "source_roi": roi.name,
                     "registration_transform": result["key"],
                     "source_experiment": target,
+                    "registration_space": target_grid.get("space", target),
+                    "registration_steps": [],
                 },
             )
         )
-    finally:
+        from .scene import scene_settings
+
+        style = scene_settings(workspace, source_name)["roi_styles"].get(roi.name)
+        if style is not None:
+            target_scene = scene_settings(workspace, target)
+            target_scene["roi_styles"][name] = copy.deepcopy(style)
+            workspace.display_settings.setdefault(target, {})["scene"] = target_scene
+        session.fit_settings.selected_roi = name
+        session._save_current_view_state()
+        workspace.view_label = "Image"
+    except Exception:
         if active:
             session.select_experiment(active)
+        raise
 
 
 def run_operation(workspace, operation, options, progress):
@@ -610,7 +839,7 @@ def run_operation(workspace, operation, options, progress):
 
         result["pipeline_signature"] = signature(workspace)
         result["pipeline_grid"] = {
-            k: v for k, v in snapshot(session).items() if k in {"dims", "geometry", "unit"}
+            k: v for k, v in snapshot(session).items() if k in {"dims", "geometry", "unit", "space"}
         }
         session.current_experiment["fit_grid"] = copy.deepcopy(result["pipeline_grid"])
         session.current_experiment.setdefault("extra_metadata", {})["fit_grid"] = copy.deepcopy(
@@ -634,34 +863,76 @@ def run_operation(workspace, operation, options, progress):
             "loss_history": json_value(np.asarray(result["loss_history"])),
         }
     if operation == "_drift_step":
-        fields = options.get("settings") or {}
+        fields = dict(options.get("settings") or {})
+        method = fields.pop("method", "linear")
+        registration_fields = fields.pop("registration", {})
+        estimation_dimensions = fields.pop("estimation_dimensions", ())
         if set(fields) - {f.name for f in dataclasses.fields(DriftCorrectionOptions)}:
             raise ValueError("Unknown drift setting")
         drift_options = DriftCorrectionOptions(**fields)
+        if not 1 <= drift_options.num_steps <= 1000000 or not np.isfinite(drift_options.step_size) or drift_options.step_size <= 0:
+            raise ValueError("Choose a positive drift step count and step size")
         if drift_options.reference == "current":
-            drift_options = dataclasses.replace(drift_options, reference=session.active_frame)
+            experiment = session.build_experiment()
+            names = experiment.non_spatial_dim_names
+            indices = np.unravel_index(session.active_frame, experiment.non_spatial_shape)
+            chosen = names if drift_options.dimensions is None else drift_options.dimensions
+            selected = tuple(name for name in names if name in chosen and name != "slice_package")
+            current = dict(zip(names, indices, strict=True))
+            index = np.ravel_multi_index(tuple(current[name] for name in selected),
+                tuple(experiment.dims[name] for name in selected)) if selected else 0
+            drift_options = dataclasses.replace(drift_options, reference=int(index))
         mask = session.roi(options.get("roi_name")) if options.get("roi_name") else None
-        progress(0, 2, "Fitting MRax linear drift model")
-        result = run_drift_correction(
-            session.build_experiment(),
-            session.build_dataset(),
-            drift_options,
-            mask=None if mask is None else mask.mask,
-        )
-        failed = _failed_linear_drift_groups(result)
+        if options.get("roi_name") and mask is None:
+            raise ValueError("Choose an available drift mask")
+        progress(0, 2, "Preparing series alignment")
+        if method == "linear":
+            result = run_drift_correction(
+                session.build_experiment(), session.build_dataset(), drift_options,
+                mask=None if mask is None else mask.mask, mask_dims=None if mask is None else mask.dims)
+            failed = _failed_linear_drift_groups(result)
+            summary = _linear_drift_result_summary(result, {})
+            result_kind = "mrax_linear_drift"
+        elif method == "framewise":
+            from mrax.preprocessing.motion import motion_correct_dataset
+
+            registration_options = RegistrationOptions(**registration_fields)
+            result = motion_correct_dataset(session.build_experiment(), session.build_dataset(),
+                dimensions=drift_options.dimensions, reference=drift_options.reference,
+                estimation_dimensions=estimation_dimensions,
+                mask=None if mask is None else mask.mask, mask_dims=None if mask is None else mask.dims,
+                registration_method=registration_method_factory(registration_options),
+                interpolator=registration_options.interpolator,
+                normalize_intensity=registration_options.normalize_intensity,
+                validate_alignment=registration_options.validate_alignment,
+                max_displacement_voxels=registration_options.max_displacement_voxels,
+                progress_callback=lambda index, count: progress(index, max(1, count), "Aligning series frames"))
+            failed = []
+            result_kind = "mrax_framewise_motion"
+            summary = {"kind": result_kind, "dimensions": list(result.dimensions),
+                "group_dimensions": list(result.group_dimensions), "group_indices": list(result.group_indices),
+                "estimation_dimensions": list(result.estimation_dimensions),
+                "groups": [{"reference_index": group.reference_index,
+                    "diagnostics": [{"metric_value": value.metric_value,
+                        "optimizer_stop_condition": value.optimizer_stop_condition,
+                        "transform_parameters": list(value.transform_parameters),
+                        "iterations": len(value.iteration_metrics)} for value in group.diagnostics]}
+                    for group in result.groups]}
+        else:
+            raise ValueError("Choose frame-wise alignment or linear drift correction")
         if failed or not np.any(np.isfinite(result.corrected)):
             raise ValueError("Drift optimization did not produce valid diagnostics")
         key = "drift-" + uuid4().hex[:12]
         metadata = {"experiment": session.selected_experiment, "dims": session.experiment_dims}
-        summary = _linear_drift_result_summary(result, metadata)
+        summary["metadata"] = metadata
         workspace.drift_results[key] = {
             "key": key,
-            "kind": "mrax_linear_drift",
+            "kind": result_kind,
             "corrected": np.asarray(result.corrected),
             "metadata": metadata,
             "summary": summary,
         }
-        progress(2, 2, "Drift correction stored")
+        progress(2, 2, "Series alignment stored")
         return workspace, {"key": key, "summary": json_value(summary)}
     if operation in {"reconstruct", "_reconstruct_step"}:
         if options.get("view") != "k_space":

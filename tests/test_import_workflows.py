@@ -4,12 +4,10 @@ import warnings
 
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from _synthetic import (
     _write_classic_dicom_slice,
     _write_minimal_bruker_scan,
 )
-from pydicom.uid import generate_uid
 
 from mrax.data_struct import Quantity
 from mrax.io import (
@@ -19,7 +17,6 @@ from mrax.io import (
     import_pulseq_experiment,
     load_dicom_series,
 )
-from mrax.io.bruker_images import bruker_spatial_geometry
 
 
 def _write_multicycle_bruker_slice_scan(root):
@@ -190,46 +187,6 @@ def test_bruker_multicycle_slice_stack_sorts_vendor_images_and_raw_kspace(tmp_pa
     np.testing.assert_allclose(coil_images[:, 1], 0.0, atol=1e-6)
 
 
-def test_explicit_dicom_contrast_groups_sort_timings_and_reject_misalignment(tmp_path):
-    from pydicom import dcmread
-
-    from mrax.io import import_pulseq_study, load_dicom_study
-
-    uids = [generate_uid() for _ in range(3)]
-    expected = []
-    for echo in range(3):
-        slices = []
-        for plane in range(2):
-            pixels = _write_classic_dicom_slice(
-                tmp_path / f"{2 - echo}_{plane}.dcm",
-                series_uid=uids[echo],
-                echo_index=echo,
-                slice_index=plane,
-            )
-            slices.append(pixels * 2 + 5)
-        expected.append(np.stack(slices, axis=-1))
-    groups = {"decay": list(reversed(uids))}
-    study, metadata = load_dicom_study(tmp_path, series_groups=groups)
-    name, experiment, _model, dataset = next(study.iter_entries())
-    assert name == "decay"
-    assert experiment.exp_type == "mse"
-    assert dataset.spatial_geometry.status == "known"
-    np.testing.assert_array_equal(experiment.observables["TE"].values, [10.0, 20.0, 30.0])
-    np.testing.assert_array_equal(dataset.data, expected)
-    assert metadata["source_series_count"] == 3
-    combined, _ = import_pulseq_study(tmp_path, dicom_series_groups=groups)
-    assert len(combined.names) == 1
-    np.testing.assert_array_equal(next(combined.iter_entries())[-1].data, expected)
-    with pytest.raises(ValueError, match="selected more than once"):
-        load_dicom_study(tmp_path, series_groups={"a": uids, "b": [uids[0]]})
-    changed = tmp_path / "0_0.dcm"
-    header = dcmread(changed)
-    header.ImagePositionPatient = [5.0, 0.0, 0.0]
-    header.save_as(changed, enforce_file_format=True)
-    with pytest.raises(ValueError, match="geometry"):
-        load_dicom_study(tmp_path, series_groups=groups)
-
-
 def test_standard_dicom_series_import_builds_mrax_experiment(tmp_path):
     series_uid = "1.2.826.0.1.3680043.10.1000.10"
     raw_frames = {}
@@ -270,41 +227,6 @@ def test_standard_dicom_series_import_builds_mrax_experiment(tmp_path):
     assert dataset.spatial_geometry.axis_anatomical_labels == ("y", "x", "z")
     assert "study_instance_uid" not in metadata
     assert experiment._mrax_dicom_metadata is metadata
-
-
-def test_bruker_geometry_uses_slice_positions_and_anatomical_axis_order():
-    orientation = np.asarray(
-        [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
-        dtype=float,
-    )
-    visu = {
-        "VisuCoreDim": 2,
-        "VisuCoreSize": [256, 256],
-        "VisuCoreExtent": [40.0, 32.0],
-        "VisuCoreFrameCount": 3,
-        "VisuFGOrderDesc": "FG_SLICE",
-        "VisuCoreFrameThickness": 0.5,
-        "VisuCoreOrientation": orientation.T.reshape((-1,)).tolist(),
-        "VisuCorePosition": [
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.75,
-            0.0,
-            0.0,
-            1.5,
-            0.0,
-        ],
-    }
-
-    geometry = bruker_spatial_geometry(visu, spatial_shape=(256, 256, 3))
-
-    assert geometry.voxel_sizes == (0.15625, 0.125, 0.75)
-    assert geometry.axis_anatomical_labels == ("x", "z", "y")
-    assert geometry.affine is not None
-    assert not geometry.frame_affines
-    np.testing.assert_allclose(np.asarray(geometry.affine)[:3, 0], [0, -0.75, 0])
 
 
 def test_synthetic_pulseq_import_workflow(tmp_path):

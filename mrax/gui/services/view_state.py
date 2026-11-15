@@ -34,7 +34,7 @@ class ViewStateFitMixin:
                     result["input_roi"] = project_roi(self.workspace, roi)
             return result
         if not self.session.fit_settings.use_view_state_data:
-            return {}
+            return {} if roi_override is None else {"input_roi": roi_override}
         state = self.session.visual_state
         if state.show_original:
             if not self.session.image_data_is_original():

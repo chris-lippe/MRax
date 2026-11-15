@@ -70,7 +70,7 @@ export function AnalysisPanel(
         {props.workspace?.loaded && (
           <span className="inspector-context">{props.workspace.experiment}</span>
         )}
-        {['denoise', 'registration', 'analyze'].includes(section) && (
+        {section === 'analyze' && (
           <button
             className="secondary small workflow-library-trigger"
             data-tutorial="processing-workflows"
@@ -78,7 +78,7 @@ export function AnalysisPanel(
             onClick={() => props.openWorkflows?.('processing')}
           >
             <WorkbenchIcon name="pipeline" />
-            Processing workflows
+            Workflows
           </button>
         )}
       </header>

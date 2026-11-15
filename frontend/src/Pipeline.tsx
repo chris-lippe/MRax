@@ -351,7 +351,7 @@ export function Pipeline({
                     : undefined
                 }
               >
-                {reconstruction ? label(reconstruction) : 'Reconstruction (.mrec)'}
+                {reconstruction ? label(reconstruction) : 'Reconstruction (.mflow)'}
               </option>
             </select>
           </label>
@@ -555,8 +555,8 @@ export function Pipeline({
                 ) && <p className="control-note">Input: {String(step.options.input)}</p>}
                 {step.kind === 'fit' && (
                   <small className="control-note">
-                    Fitting workflow (.mfit) · {step.result_maps?.length ?? 0} maps stored alongside
-                    image data
+                    Fitting workflow (.mflow) · {step.result_maps?.length ?? 0} maps stored
+                    alongside image data
                   </small>
                 )}
                 <div className="pipeline-step-actions">
@@ -683,9 +683,9 @@ export function Pipeline({
                   value="reconstruct"
                   disabled={!w.can_reconstruct || Boolean(reconstruction)}
                 >
-                  Reconstruction workflow (.mrec)
+                  Reconstruction workflow (.mflow)
                 </option>
-                <option value="fit">Fitting workflow (.mfit)</option>
+                <option value="fit">Fitting workflow (.mflow)</option>
               </select>
             </label>
             {insertion === 'reconstruct' && (

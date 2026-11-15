@@ -1,10 +1,9 @@
 {
   "format": "mrax.workflow",
-  "format_version": 1,
   "kind": "reconstruction",
   "mrax_version": "0.4.0",
-  "name": "Cartesian Fourier with POCS",
-  "description": "Complete partially acquired Cartesian k-space with POCS before the inverse Fourier transform.",
+  "name": "Acquisition Fourier",
+  "description": "Fourier reconstruction with the acquisition's configured corrections and output geometry.",
   "bindings": [],
   "steps": [
     {
@@ -16,8 +15,8 @@
         "component": "magnitude",
         "pipeline": {
           "schema_version": 1,
-          "name": "Cartesian Fourier with POCS",
-          "encoding": "cartesian",
+          "name": "Acquisition Fourier",
+          "encoding": "any",
           "stages": [
             {
               "kind": "profile_inversion",
@@ -52,11 +51,14 @@
             {
               "kind": "partial_fourier",
               "enabled": true,
-              "when": "always",
-              "options": {
-                "partial_fourier": "pocs",
-                "partial_fourier_iterations": 12
-              }
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "gridding",
+              "enabled": true,
+              "when": "sampled",
+              "options": {}
             },
             {
               "kind": "fft",

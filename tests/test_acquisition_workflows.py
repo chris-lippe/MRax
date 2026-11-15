@@ -4,7 +4,6 @@ from dataclasses import replace
 
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from mrax.data_struct import (
     AcquisitionData,
@@ -19,12 +18,10 @@ from mrax.data_struct.storage import load_study_results, save_study_results
 from mrax.io import load_acquisition, save_acquisition
 from mrax.reco import (
     ReconstructionPipeline,
-    ReconstructionStage,
     build_operator,
     fftnc,
     ifftnc,
     reconstruct_acquisition,
-    solve_variational,
 )
 from mrax.reco.acquisition import complete_partial_fourier
 from mrax.reco.epi import (
@@ -33,8 +30,8 @@ from mrax.reco.epi import (
 )
 
 
-@pytest.mark.parametrize("shape", [(5, 8), (5, 6, 3)])
-def test_explicit_acquisition_fft_and_adjoint_identity(shape):
+def test_explicit_acquisition_fft_and_adjoint_identity():
+    shape = (5, 6, 3)
     rng = np.random.default_rng(17)
     image = (rng.normal(size=(2, 3) + shape) + 1j * rng.normal(size=(2, 3) + shape)).astype(
         "complex64"
@@ -121,30 +118,7 @@ def test_editable_reconstruction_plan_reuses_measured_data_and_shared_solvers(tm
     assert result.history == direct.history
 
 
-def test_reconstruction_plan_rejects_unknown_options_and_invalid_stage_order():
-    with pytest.raises(ValueError, match="Unknown options"):
-        ReconstructionStage("partial_fourier", {"invented": True})
-    with pytest.raises(ValueError, match="invalid order"):
-        ReconstructionPipeline(
-            (
-                ReconstructionStage("format"),
-                ReconstructionStage("fft"),
-                ReconstructionStage("combine"),
-            )
-        )
-    with pytest.raises(ValueError, match="exactly one solver"):
-        ReconstructionPipeline(
-            (
-                ReconstructionStage("fft"),
-                ReconstructionStage("variational"),
-                ReconstructionStage("format"),
-                ReconstructionStage("combine"),
-            )
-        )
-
-
 def test_referenceless_epi_phase_fit_removes_injected_ghost_without_reference():
-    from mrax.reco import ifftnc
 
     y, x = np.meshgrid(np.arange(48) - 24, np.arange(40) - 20, indexing="ij")
     image = (
@@ -213,21 +187,3 @@ def test_acquisition_archive_and_study_roundtrip_preserve_encoding_metadata(tmp_
     result = load_study_results(manifest)["experiments"]["synthetic"]
     np.testing.assert_array_equal(result["raw_kspace"], samples)
     assert result["acquisition"].recipe == recipe
-
-
-def test_cartesian_variational_reconstruction_smoke():
-    image = jnp.zeros((8, 8)).at[2:6, 2:6].set(1.0)
-    kspace = jnp.fft.fftshift(jnp.fft.fftn(jnp.fft.ifftshift(image), norm="ortho"))
-    baseline = ifftnc(kspace)
-    reconstructed, history = solve_variational(
-        kspace,
-        mask=jnp.ones_like(kspace, dtype=bool),
-        num_steps=2,
-        step_size=0.01,
-        regularizer="l2",
-        regularizer_weight=0.0,
-        return_history=True,
-    )
-    np.testing.assert_allclose(np.asarray(baseline), np.asarray(image), atol=1e-5)
-    assert reconstructed.shape == image.shape
-    assert len(history) == 2

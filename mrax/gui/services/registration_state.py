@@ -116,7 +116,7 @@ def _restore_drift_results(
         try:
             restored[result_key] = {
                 "key": result_key,
-                "kind": "mrax_linear_drift",
+                "kind": str(row.get("kind") or "mrax_linear_drift"),
                 "corrected": np.asarray(arrays[array_key]),
                 "metadata": dict(row.get("metadata") or {}),
                 "summary": dict(row.get("summary") or {}),

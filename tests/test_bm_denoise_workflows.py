@@ -16,11 +16,7 @@ def phantom(ndim):
 
 
 @pytest.mark.parametrize("method,ndim", [("bm3d", 2), ("bm4d", 3)])
-@pytest.mark.parametrize("sigma", [None])
-@pytest.mark.parametrize("stage", ["full"])
-def test_external_denoisers_reduce_noise_consistently_at_both_intensity_scales(
-    method, ndim, sigma, stage
-):
+def test_external_denoisers_reduce_noise_consistently_at_both_intensity_scales(method, ndim):
     module = pytest.importorskip(method)
     profile = getattr(module, method.upper() + "Profile")()
     profile.num_threads = 1
@@ -32,8 +28,8 @@ def test_external_denoisers_reduce_noise_consistently_at_both_intensity_scales(
         result = (
             function(
                 noisy * scale,
-                sigma=None if sigma is None else sigma * scale,
-                stage=stage,
+                sigma=None,
+                stage="full",
                 profile=profile,
             )
             / scale

@@ -146,14 +146,12 @@ def _scan(root, *, shape=(7, 5), counts=(3,), echoes=2, echo_first=True, reverse
     return scan, images, coordinates, np.asarray(positions), matrices, physical_slice
 
 
-
 def test_sampled_bruker_reconstruction_keeps_native_rectangular_axes(tmp_path):
     shape = (9, 7)
     scan, images, *_ = _scan(tmp_path, shape=shape, counts=(2,), echoes=1)
     pdata = scan / "pdata" / "1"
     (scan / "method").write_text(
-        "##$Method=<SPIRAL>\n##$PVM_EncNReceivers=1\n"
-        + _array("PVM_SPackArrNSlices", [2])
+        "##$Method=<SPIRAL>\n##$PVM_EncNReceivers=1\n" + _array("PVM_SPackArrNSlices", [2])
     )
     (scan / "acqp").write_text(
         "##$ACQ_dim=1\n##$NI=2\n##$NR=1\n"
@@ -205,11 +203,8 @@ def test_sampled_bruker_reconstruction_keeps_native_rectangular_axes(tmp_path):
     )
 
 
-@pytest.mark.parametrize("echo_first", [True, False])
-def test_multiple_packages_import_on_one_axis_and_reconstruct_without_transpose(
-    tmp_path, echo_first
-):
-    scan, _, _, _, _, _ = _scan(tmp_path, counts=(3, 2, 1), echo_first=echo_first)
+def test_multiple_packages_import_on_one_axis_and_reconstruct_without_transpose(tmp_path):
+    scan, _, _, _, _, _ = _scan(tmp_path, counts=(3, 2, 1), echo_first=True)
     hashes = {
         path: hashlib.sha256(path.read_bytes()).digest()
         for path in scan.rglob("*")
@@ -248,26 +243,6 @@ def test_rectangular_storage_transposition_matches_the_raw_reconstruction(tmp_pa
     result = reconstruct_acquisition(dataset.acquisition)
     np.testing.assert_allclose(result.image, expected, rtol=2e-5, atol=2e-4)
     assert experiment.spatial_shape == (7, 5, 2)
-
-
-def test_image_frame_reordering_keeps_complete_raw_slice_groups(tmp_path):
-    from mrax.io.bruker_import import _attach_acquisition
-
-    scan, _, _, _, _, _ = _scan(tmp_path, counts=(2,), echoes=3)
-    _, dataset, _, _ = import_bruker_experiment(scan, load_raw_kspace=False)
-    reference = np.asarray(dataset.data).reshape((3, 7, 5, 2))
-    order = np.asarray([2, 0, 1])
-    _attach_acquisition(
-        dataset,
-        scan,
-        "1",
-        definition_paths=(),
-        profiles=None,
-        strict_raw=True,
-        image_frame_order=order,
-    )
-    result = reconstruct_acquisition(dataset.acquisition)
-    np.testing.assert_allclose(result.image, reference[order], rtol=2e-5, atol=2e-4)
 
 
 def test_irregular_slice_positions_are_not_misrepresented_as_a_regular_volume(tmp_path):

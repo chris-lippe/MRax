@@ -23,7 +23,7 @@ from mrax.gui.models import (
     model_fit_inputs,
     model_parameter_specs,
 )
-from mrax.gui.registration import DriftCorrectionOptions, RegistrationOptions
+from mrax.gui.registration import DriftCorrectionOptions, RegistrationOptions, registration_presets
 from mrax.gui.services.analysis_workflows import set_fit_settings, transform_roi, update_metadata
 from mrax.gui.services.cloning import clone_workspace
 from mrax.gui.services.export import (
@@ -86,6 +86,7 @@ def register_routes(app, get_record, check_revision, add_record):
             "models": [{"key": m.key, "label": m.label} for m in model_choices()],
             "devices": devices,
             "registration": dataclasses.asdict(RegistrationOptions()),
+            "registration_presets": registration_presets(),
             "drift": dataclasses.asdict(DriftCorrectionOptions()),
         }
 

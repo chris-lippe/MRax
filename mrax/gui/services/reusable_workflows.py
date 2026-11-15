@@ -4,25 +4,20 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import math
 
 import numpy as np
 
 from mrax.gui.registration import DriftCorrectionOptions, RegistrationOptions
 from mrax.gui.session import FrameMask, VisualViewState
-from mrax.workflows import WorkflowDocument, new_workflow
+from mrax.workflows import WorkflowDocument, new_workflow, single_operation
 
 from .analysis_workflows import set_fit_settings
 from .cloning import clone_workspace
+from .fit_resources import capture_fit_inputs, resolve_fit_inputs
 from .pipeline import _commit, _evaluate, current_pipeline, ensure_pipeline
 from .processing import FILTERS, _settings, processing_methods
 from .state import _fit_settings_to_dict
-
-FIT_REFERENCES = (
-    "sat_trans_reference_scan",
-    "ab_mt_t1_map_ref",
-    "ab_mt_b1_map_ref",
-    "ab_mt_b0_map_ref",
-)
 
 
 def _json_settings(value):
@@ -44,19 +39,12 @@ def resource_choices(workspace):
         session = context.session
         values = {
             "experiment": [{"value": n, "label": n} for n in session.experiment_names],
+            "image": [{"value": n, "label": n} for n in session.experiment_names],
             "roi": [
                 {"value": roi.name, "label": roi.name} for roi in session.rois if np.any(roi.mask)
             ],
             "map": [{"value": name, "label": name} for name in session.map_names],
-            "sat_trans_reference_scan": [
-                {"value": name, "label": name} for name in session.sat_trans_reference_choices()
-            ],
         }
-        for key in FIT_REFERENCES[1:]:
-            values[key] = [
-                {"value": row["ref"], "label": row["label"]}
-                for row in session.ab_mt_map_choices(key.split("_")[2])
-            ]
         choices.append(
             {
                 "experiment": name,
@@ -72,11 +60,23 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
     if not session.is_loaded:
         raise ValueError("Load an experiment before capturing a workflow")
     draft = draft or {}
-    bindings, suggested, seen = [], {}, {}
+    if draft.get("operation") == "register":
+        moving = (draft.get("options") or {}).get("moving_experiment")
+        if moving and moving != session.selected_experiment:
+            workspace = clone_workspace(workspace, share_sources=True)
+            workspace.session.select_experiment(moving)
+            session = workspace.session
+    bindings, suggested, seen, produced = [], {}, {}, {}
 
-    def bind(kind, value, *, experiment=None):
+    def bind(kind, value, *, experiment=None, label=None):
         if value is None or value == "":
             return None
+        if (
+            kind == "map"
+            and value in produced
+            and (experiment is None or suggested.get(experiment) == session.selected_experiment)
+        ):
+            return copy.deepcopy(produced[value])
         key = (kind, value, experiment)
         if key not in seen:
             binding = "input_" + str(len(bindings) + 1)
@@ -84,18 +84,20 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
             row = {
                 "id": binding,
                 "kind": kind,
-                "label": {
-                    "roi": "ROI",
-                    "map": "Map",
-                    "experiment": "Reference experiment",
-                    "sat_trans_reference_scan": "Reference scan",
-                    "ab_mt_t1_map_ref": "T1 prior map",
-                    "ab_mt_b1_map_ref": "B1 prior map",
-                    "ab_mt_b0_map_ref": "B0 prior map",
-                }[kind]
-                + " "
-                + str(len(bindings) + 1),
+                "label": label
+                or (
+                    {
+                        "roi": "ROI",
+                        "map": "Map",
+                        "experiment": "Reference experiment",
+                        "image": "Image",
+                    }[kind]
+                    + " "
+                    + str(len(bindings) + 1)
+                ),
             }
+            if any(value["label"] == row["label"] for value in bindings):
+                row["label"] += " " + str(len(bindings) + 1)
             if experiment is not None:
                 row["experiment"] = experiment
             if kind == "experiment" and value == session.selected_experiment:
@@ -105,9 +107,26 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
         return {"$binding": seen[key]}
 
     steps = []
-    if kind == "processing":
+    if kind in {"processing", "denoising", "registration"}:
         pipeline = current_pipeline(workspace)
-        rows = [] if pipeline is None else pipeline["steps"]
+        if draft.get("operation"):
+            if draft["operation"] not in {"process", "register", "drift"}:
+                raise ValueError("Choose a denoising or registration configuration")
+            rows = [
+                {"kind": draft["operation"], "options": draft.get("options", {}), "enabled": True}
+            ]
+        else:
+            rows = [] if pipeline is None else pipeline["steps"]
+            if kind != "processing":
+                rows = [
+                    s
+                    for s in rows
+                    if (
+                        s["kind"] == "process"
+                        if kind == "denoising"
+                        else s["kind"] in {"register", "drift"}
+                    )
+                ][-1:]
         if not rows:
             raise ValueError("Apply processing before capturing a pipeline")
         for step in rows:
@@ -116,10 +135,38 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
                 from .pipeline_blocks import block_document, capture_block_bindings
 
                 child, mapping = block_document(workspace, operation, step["options"])
-                assignments = capture_block_bindings(child, mapping, bind, session.selected_experiment)
-                steps.append({"id": "step_" + str(len(steps) + 1), "operation": operation,
-                              "version": 1, "enabled": step["enabled"],
-                              "settings": {"workflow": child.model_dump(), "bindings": assignments}})
+                assignments = capture_block_bindings(
+                    child, mapping, bind, session.selected_experiment
+                )
+
+                def flatten(value, assignments=assignments):
+                    if isinstance(value, dict):
+                        if set(value) == {"$binding"}:
+                            return copy.deepcopy(assignments[value["$binding"]])
+                        return {key: flatten(item) for key, item in value.items()}
+                    if isinstance(value, list):
+                        return [flatten(item) for item in value]
+                    return value
+
+                block_id = "step_" + str(len(steps) + 1)
+                steps.append(
+                    {
+                        "id": block_id,
+                        "operation": operation,
+                        "version": 1,
+                        "enabled": step["enabled"],
+                        "settings": flatten(child.steps[0].settings),
+                    }
+                )
+                if operation == "fit" and step["enabled"]:
+                    record = (pipeline or {}).get("fits", {}).get(step.get("id"), {})
+                    prefix = record.get("prefix", "") + " / "
+                    for field in record.get("maps", []):
+                        produced[field] = {
+                            "$output": block_id,
+                            "port": "map",
+                            "name": field[len(prefix) :] if field.startswith(prefix) else field,
+                        }
                 continue
             if operation == "stored_registration":
                 raise ValueError(
@@ -162,10 +209,17 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
                     **options.get("settings", {}),
                 }
             if operation == "drift":
-                options["settings"] = {
-                    **dataclasses.asdict(DriftCorrectionOptions()),
-                    **options.get("settings", {}),
-                }
+                saved = options.get("settings", {})
+                if saved.get("method") == "framewise":
+                    options["settings"] = {
+                        **saved,
+                        "registration": {
+                            **dataclasses.asdict(RegistrationOptions()),
+                            **saved.get("registration", {}),
+                        },
+                    }
+                else:
+                    options["settings"] = {**dataclasses.asdict(DriftCorrectionOptions()), **saved}
                 if options["settings"].get("reference") == "current":
                     options["settings"]["reference"] = session.active_frame
             reference = options.get("reference_experiment")
@@ -201,9 +255,7 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
             (s for s in (pipeline or {}).get("steps", []) if s["kind"] == "reconstruct"), None
         )
         previous_options = reconstruction_settings((previous or {}).get("options", {}))
-        component = draft.get("component") or previous_options.get(
-            "component", "magnitude"
-        )
+        component = draft.get("component") or previous_options.get("component", "magnitude")
         plan = draft.get("pipeline") or previous_options.get("pipeline")
         if name is None and plan:
             name = plan["name"]
@@ -212,7 +264,10 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
                 "id": "reconstruction",
                 "operation": "reconstruct",
                 "version": 1,
-                "settings": {"component": component, **({"pipeline": copy.deepcopy(plan)} if plan else {})},
+                "settings": {
+                    "component": component,
+                    **({"pipeline": copy.deepcopy(plan)} if plan else {}),
+                },
             }
         )
     elif kind == "fitting":
@@ -221,9 +276,7 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
         settings["model_name"] = settings.get("model_name") or session.current_model_name
         for key in ("output_dir", "selected_roi", "use_view_state_data"):
             settings.pop(key, None)
-        for key in FIT_REFERENCES:
-            if settings.get(key):
-                settings[key] = bind(key, settings[key])
+        inputs = capture_fit_inputs(settings, bind, session.selected_experiment)
         scene = workspace.display_settings.get(session.selected_experiment, {}).get("scene", {})
         use_roi = draft.get("use_roi", scene.get("fit_region", "rois") == "rois")
         rois = draft.get("roi_names", scene.get("fit_rois"))
@@ -234,6 +287,7 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
                 "version": 1,
                 "settings": {
                     "settings": settings,
+                    "inputs": inputs,
                     "use_roi": use_roi,
                     "roi_names": None if rois is None else [bind("roi", value) for value in rois],
                     "excluded_frames": draft.get(
@@ -251,7 +305,9 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
     return document, suggested
 
 
-def resolve_settings(document, workspace, values):
+def resolve_settings(
+    document, workspace, values, *, outputs=None, only=None, target=None, references=None
+):
     session = workspace.session
     if not isinstance(values, dict) or set(values) - {b.id for b in document.bindings}:
         raise ValueError("Unknown workflow binding")
@@ -267,10 +323,10 @@ def resolve_settings(document, workspace, values):
         if binding.kind == "experiment" and (
             value == "$target" or (not value and binding.default == "target")
         ):
-            value = session.selected_experiment
+            value = target or session.selected_experiment
         if not isinstance(value, str) or not value:
             raise ValueError("Assign " + binding.label + " for this target")
-        if binding.kind == "experiment":
+        if binding.kind in {"experiment", "image"}:
             if value not in session.experiment_names:
                 raise ValueError("The reference experiment is unavailable")
         else:
@@ -287,10 +343,48 @@ def resolve_settings(document, workspace, values):
         resolved[binding.id] = value
         return value
 
+    def resolve_resource(reference):
+        if "$binding" in reference:
+            binding = next(b for b in document.bindings if b.id == reference["$binding"])
+            value = resolve_binding(binding.id)
+            owner = (
+                value
+                if binding.kind in {"image", "experiment"}
+                else resolve_binding(binding.experiment)
+                if binding.experiment
+                else session.selected_experiment
+            )
+            return {"kind": binding.kind, "experiment": owner, "name": value}
+        if outputs is None:
+            return copy.deepcopy(reference)
+        result = outputs.get(reference["$output"])
+        if result is None:
+            raise ValueError("The required workflow output is unavailable")
+        owner = result["experiment"]
+        if reference["port"] == "image":
+            if owner == session.selected_experiment:
+                raise ValueError("A named reference image must belong to another experiment")
+            if references is not None:
+                references[owner] = result["grid"]
+            return {"kind": "image", "experiment": owner, "name": owner}
+        field = result["maps"].get(reference["name"])
+        if field is None:
+            raise ValueError("The fitting block did not produce map " + reference["name"])
+        return {"kind": "map", "experiment": owner, "name": field}
+
     def replace(value, key=None):
         if key == "workflow":
             return copy.deepcopy(value)
         if isinstance(value, dict):
+            if "$output" in value:
+                resource = resolve_resource(value)
+                if "$output" in resource:
+                    return resource
+                if resource["kind"] == "image":
+                    return resource["experiment"]
+                if resource["experiment"] != session.selected_experiment:
+                    raise ValueError("This map input requires a result on the target experiment")
+                return "map:" + resource["name"] if key == "input" else resource["name"]
             if set(value) == {"$binding"}:
                 binding_id = value["$binding"]
                 resolved_value = resolve_binding(binding_id)
@@ -300,16 +394,29 @@ def resolve_settings(document, workspace, values):
             return [replace(item, key) for item in value]
         return value
 
-    return [(step, replace(step.settings)) for step in document.steps]
+    result = []
+    for step in document.steps:
+        if only is not None and step.id != only:
+            continue
+        options = replace({key: value for key, value in step.settings.items() if key != "inputs"})
+        if step.operation == "fit":
+            options["settings"] = resolve_fit_inputs(
+                options["settings"], step.settings.get("inputs", {}), resolve_resource
+            )
+        result.append((step, options))
+    return result
 
 
-def _validate_target(workspace, document, bindings):
+def _validate_target(workspace, document, bindings, *, resolved=None):
     session = workspace.session
     if not session.is_loaded:
         raise ValueError("The target experiment has no image data")
-    resolved = resolve_settings(document, workspace, bindings)
+    resolved = resolve_settings(document, workspace, bindings) if resolved is None else resolved
     for step, options in resolved:
         if not step.enabled:
+            continue
+        if _has_output(options):
+            # Output resources are checked against the actual preceding result at execution.
             continue
         if "workflow" in options:
             from .pipeline_blocks import resolved_block
@@ -367,11 +474,56 @@ def _validate_target(workspace, document, bindings):
 
             validate_reconstruction(workspace, options)
         elif step.operation in {"register", "drift"}:
-            cls = RegistrationOptions if step.operation == "register" else DriftCorrectionOptions
-            if set(options.get("settings", {})) - {f.name for f in dataclasses.fields(cls)}:
+            settings = options.get("settings", {})
+            if step.operation == "drift":
+                from mrax.preprocessing.motion import _normalize_registration_dimensions
+
+                available = tuple(
+                    name
+                    for name in session.experiment_dims
+                    if name not in session.spatial_dim_names
+                )
+                dimensions = _normalize_registration_dimensions(
+                    settings.get("dimensions"), available
+                )
+                if math.prod(session.experiment_dims[name] for name in dimensions) < 2:
+                    raise ValueError("Series alignment requires at least two acquisition frames")
+                groups = tuple(name for name in available if name not in dimensions)
+                _normalize_registration_dimensions(
+                    settings.get("estimation_dimensions", []), groups
+                )
+            if step.operation == "drift" and settings.get("method") == "framewise":
+                if set(settings) - {
+                    "method",
+                    "dimensions",
+                    "estimation_dimensions",
+                    "reference",
+                    "registration",
+                }:
+                    raise ValueError("Unknown series alignment setting")
+                cls, settings = RegistrationOptions, settings.get("registration", {})
+            else:
+                cls = (
+                    RegistrationOptions if step.operation == "register" else DriftCorrectionOptions
+                )
+                settings = {key: value for key, value in settings.items() if key != "method"}
+            if set(settings) - {f.name for f in dataclasses.fields(cls)}:
                 raise ValueError("Unknown alignment setting")
-            cls(**options.get("settings", {}))
+            cls(**settings)
             if step.operation == "register":
+                if (
+                    options.get("reference_experiment", session.selected_experiment)
+                    == session.selected_experiment
+                    and options.get("moving_source", "image")
+                    == options.get("reference_source", "image")
+                    and options.get("moving_frame", session.active_frame)
+                    == options.get("reference_frame", 0)
+                    and options.get("moving_map") == options.get("reference_map")
+                    and options.get("moving_aggregation", "frame")
+                    == options.get("reference_aggregation", "frame")
+                    and not options.get("manual")
+                ):
+                    raise ValueError("Choose a different reference experiment or frame")
                 if options.get("plane") is not None:
                     session.set_image_plane(options["plane"])
                 indices = options.get("indices", {})
@@ -383,7 +535,9 @@ def _validate_target(workspace, document, bindings):
                 ):
                     raise ValueError("Registration slice indices are incompatible with this target")
                 for field in ("moving_frame", "reference_frame"):
-                    value = options.get(field, 0)
+                    value = options.get(
+                        field, session.active_frame if field == "moving_frame" else 0
+                    )
                     experiment = (
                         options.get("reference_experiment", session.selected_experiment)
                         if field == "reference_frame"
@@ -410,7 +564,19 @@ def _validate_target(workspace, document, bindings):
                     if options.get("roi_names") is not None
                     else [roi.name for roi in session.rois if np.any(roi.mask)],
                 )
-            session.build_fit_inputs()
+            from mrax.core.fit_sanity import check_fit_sanity
+
+            experiment, model, dataset, study = session.build_fit_inputs()
+            report = check_fit_sanity(
+                experiment, model, dataset, study_globals=study.study_globals, check_data=False
+            )
+            errors = (
+                report.errors
+                + ["Missing observable: " + name for name in report.missing_observables]
+                + ["Provide one of: " + ", ".join(group) for group in report.missing_any_of]
+            )
+            if errors:
+                raise ValueError(". ".join(errors))
     return resolved
 
 
@@ -429,12 +595,36 @@ def validate_workflow_targets(workspace, document, experiments, bindings, *, mod
             if name not in context.session.experiment_names:
                 raise ValueError("The target experiment is unavailable")
             context.session.select_experiment(name)
-            if document.kind == "processing" and mode == "append":
-                existing = (current_pipeline(context) or {}).get("steps", [])
-                kinds = [s["kind"] for s in existing] + [s.operation for s in document.steps]
-                if [i for i, kind in enumerate(kinds) if kind == "reconstruct"] not in ([], [0]):
-                    raise ValueError("A reconstruction block must occur once at the start. Replace the pipeline to load it")
-            _validate_target(context, document, bindings.get(name, {}))
+            target_kinds = {}
+            for step in document.steps:
+                context.session.select_experiment(
+                    _step_target(step, bindings.get(name, {}), document, name)
+                )
+                target_name = context.session.selected_experiment
+                if target_name not in target_kinds:
+                    pipeline = current_pipeline(context)
+                    existing = (pipeline or {}).get("steps", [])
+                    if pipeline and (
+                        (mode == "replace" and not single_operation(document, "fit"))
+                        or single_operation(document, "reconstruct")
+                    ):
+                        from .pipeline import install
+
+                        install(context, pipeline["source"], update_model=False)
+                    target_kinds[target_name] = (
+                        [s["kind"] for s in existing]
+                        if mode == "append" and not single_operation(document, "reconstruct")
+                        else []
+                    )
+                if step.operation == "reconstruct" and target_kinds[target_name]:
+                    raise ValueError(
+                        "Reconstruction must come first on its target. Replace that processing chain"
+                    )
+                target_kinds[target_name].append(step.operation)
+                resolved = resolve_settings(
+                    document, context, bindings.get(name, {}), only=step.id, target=name
+                )
+                _validate_target(context, document, bindings.get(name, {}), resolved=resolved)
             results.append({"experiment": name, "ready": True, "errors": []})
         except (ValueError, TypeError, KeyError, RuntimeError) as exc:
             results.append({"experiment": name, "ready": False, "errors": [str(exc)]})
@@ -444,17 +634,50 @@ def validate_workflow_targets(workspace, document, experiments, bindings, *, mod
 def validate_application_options(document, mode, run):
     if mode not in {"replace", "append"} or type(run) is not bool:
         raise ValueError("Choose a supported workflow application mode")
-    if document.kind != "processing" and mode != "replace":
-        raise ValueError("Append is available only for processing workflows")
-    if document.kind != "fitting" and not run:
+    if not single_operation(document, "fit") and not run:
         raise ValueError("Loading without execution is available only for fitting workflows")
+
+
+def _has_output(value):
+    if isinstance(value, dict):
+        return "$output" in value or any(_has_output(item) for item in value.values())
+    return isinstance(value, (list, tuple)) and any(_has_output(item) for item in value)
+
+
+def _output_dependencies(document):
+    needed = set()
+
+    def inspect(value):
+        if isinstance(value, dict):
+            if "$output" in value:
+                needed.add(value["$output"])
+            for item in value.values():
+                inspect(item)
+        elif isinstance(value, list):
+            for item in value:
+                inspect(item)
+
+    for step in document.steps:
+        inspect(step.settings)
+    return needed
+
+
+def _step_target(step, bindings, document, target):
+    if step.target is None:
+        return target
+    binding = next(b for b in document.bindings if b.id == step.target["$binding"])
+    value = bindings.get(binding.id)
+    if value == "$target" or (not value and binding.default == "target"):
+        return target
+    if not isinstance(value, str) or not value:
+        raise ValueError("Assign " + binding.label + " for this target")
+    return value
 
 
 def apply_workflow(
     workspace, document, experiments, bindings, progress, *, mode="replace", run=True, device="cpu"
 ):
     """All selected experiments in one workspace succeed together or remain untouched."""
-    from .analysis_workflows import run_operation
     from .pipeline import _make_step
     from .pipeline_blocks import validate_chain
 
@@ -469,6 +692,8 @@ def apply_workflow(
     candidate = clone_workspace(workspace, readonly_arrays=True)
     original_experiment = candidate.session.selected_experiment
     original_view = candidate.view_label
+    changed_targets, fitted_targets = set(), set()
+    needed_outputs = _output_dependencies(document)
     for index, name in enumerate(experiments):
         candidate.session.select_experiment(name)
 
@@ -478,42 +703,68 @@ def apply_workflow(
             )
 
         report(0, 1, "Applying " + document.name)
-        steps = resolve_settings(document, candidate, bindings.get(name, {}))
-        if document.kind == "fitting":
+        if not run:
+            target = _step_target(document.steps[0], bindings.get(name, {}), document, name)
+            candidate.session.select_experiment(target)
+            steps = resolve_settings(document, candidate, bindings.get(name, {}), target=name)
             options = steps[0][1]
             set_fit_settings(candidate, options["settings"])
             mask = FrameMask.all(candidate.session.frame_count)
             mask.exclude(*options.get("excluded_frames", []))
             candidate.session.frame_mask = mask
-            candidate.display_settings.setdefault(name, {}).setdefault("scene", {}).update(
+            candidate.display_settings.setdefault(target, {}).setdefault("scene", {}).update(
                 {
                     "fit_region": "rois" if options.get("use_roi", True) else "all",
                     "fit_rois": options.get("roi_names"),
                 }
             )
             candidate.session._save_current_view_state()
-            if run:
-                run_operation(
-                    candidate,
-                    "full_fit",
-                    {
-                        **options,
-                        "device": device,
-                        "roi_names": options.get("roi_names")
-                        if options.get("roi_names") is not None
-                        else [roi.name for roi in candidate.session.rois if np.any(roi.mask)],
-                    },
-                    report,
-                )
-                candidate.fit_results_by_experiment[name]["workflow"] = document.model_dump()
         else:
-            pipeline = ensure_pipeline(candidate)
-            if document.kind == "reconstruction":
-                pipeline["steps"] = [s for s in pipeline["steps"] if s["kind"] != "reconstruct"]
-            elif mode == "replace":
-                pipeline["steps"] = []
+            from .pipeline import install, snapshot
+
+            outputs, initialized, previous = {}, set(), {}
             for step in document.steps:
-                options = next(options for item, options in steps if item.id == step.id)
+                target = _step_target(step, bindings.get(name, {}), document, name)
+                candidate.session.select_experiment(target)
+                changed_targets.add(target)
+                pipeline = ensure_pipeline(candidate)
+                pipeline["enabled"] = True
+                if target not in initialized:
+                    previous[target] = list(pipeline["steps"])
+                    if single_operation(document, "reconstruct"):
+                        pipeline["steps"] = [
+                            s for s in pipeline["steps"] if s["kind"] != "reconstruct"
+                        ]
+                    elif single_operation(document, "fit"):
+                        pipeline["steps"] = [
+                            s
+                            for s in pipeline["steps"]
+                            if not (
+                                s["kind"] == "fit"
+                                and s.get("workflow_name") == document.name
+                                and s.get("workflow_step_id") == step.id
+                            )
+                        ]
+                    elif mode == "replace":
+                        pipeline["steps"] = []
+                        install(candidate, pipeline["source"], update_model=False)
+                    initialized.add(target)
+                frozen = {}
+                options = resolve_settings(
+                    document,
+                    candidate,
+                    bindings.get(name, {}),
+                    outputs=outputs,
+                    only=step.id,
+                    target=name,
+                    references=frozen,
+                )[0][1]
+                context = clone_workspace(candidate, readonly_arrays=True)
+                for reference, state in frozen.items():
+                    context.session.select_experiment(reference)
+                    install(context, state)
+                context.session.select_experiment(target)
+                _validate_target(context, document, {}, resolved=[(step, options)])
                 if step.operation == "fit":
                     options = {**options, "device": device}
                 if step.operation == "reconstruct":
@@ -522,22 +773,54 @@ def apply_workflow(
                     if options.get("plane") is not None:
                         candidate.session.set_image_plane(options["plane"])
                     candidate.session.active_indices.update(options.get("indices", {}))
-                block = _make_step(candidate, options, kind=step.operation, enabled=step.enabled)
-                if document.kind == "reconstruction":
+                retained = {s["id"] for s in pipeline["steps"]}
+                prior = next(
+                    (
+                        s
+                        for s in previous[target]
+                        if s["id"] not in retained
+                        and s.get("workflow_step_id") == step.id
+                        and s.get("workflow_name") == document.name
+                    ),
+                    None,
+                )
+                block = _make_step(
+                    context, options, kind=step.operation, enabled=step.enabled, previous=prior
+                )
+                block["workflow_step_id"], block["workflow_name"] = step.id, document.name
+                block["references"].update(frozen)
+                if step.operation == "fit":
+                    block["map_prefix"] = step.id
+                start_at = sum(s["enabled"] for s in pipeline["steps"])
+                if single_operation(document, "reconstruct"):
                     pipeline["steps"].insert(0, block)
+                    start_at = 0
                 else:
                     pipeline["steps"].append(block)
-            validate_chain(candidate, pipeline["steps"])
-            _evaluate(candidate, report)
+                validate_chain(candidate, pipeline["steps"])
+                _evaluate(candidate, report, start_at=start_at)
+                if step.operation == "fit" and step.enabled:
+                    fitted_targets.add(target)
+                record = pipeline.get("fits", {}).get(block["id"], {})
+                if step.id in needed_outputs:
+                    outputs[step.id] = {
+                        "experiment": target,
+                        "grid": snapshot(candidate.session) if step.operation != "fit" else None,
+                        "maps": {
+                            key: record.get("prefix", step.id) + " / " + key
+                            for key in record.get("result", {}).get("fields", {})
+                        },
+                    }
+            candidate.session.select_experiment(name)
             candidate.view_label = "Image"
         candidate.session._save_current_view_state()
         report(1, 1, "Workflow applied")
     candidate.session.select_experiment(original_experiment)
     candidate.view_label = (
         "Map"
-        if document.kind == "fitting" and run and original_experiment in experiments
+        if document.kind == "fitting" and run and original_experiment in fitted_targets
         else "Image"
-        if document.kind != "fitting" and original_experiment in experiments
+        if run and original_experiment in changed_targets
         else original_view
     )
     _commit(workspace, candidate)

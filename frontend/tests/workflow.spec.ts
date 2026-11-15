@@ -109,6 +109,11 @@ test('View, Segment, Fit and Register share layers and independent ROI selection
 
   await selectExperiment(page, 'Motion shifted');
   await selectWorkflow(page, 'Register');
+  await page.getByLabel('Registration preset', { exact: true }).selectOption('different_contrasts');
+  await expect(
+    page.getByLabel('Registration translation initialization', { exact: true }),
+  ).toBeChecked();
+  await expect(page.getByLabel('Maximum registration motion', { exact: true })).toHaveValue('12');
   await page.getByLabel('Reference experiment', { exact: true }).selectOption('Motion reference');
   await page.getByLabel('Moving experiment', { exact: true }).selectOption('Motion shifted');
   await expect(
@@ -117,12 +122,14 @@ test('View, Segment, Fit and Register share layers and independent ROI selection
   await page.getByLabel('Moving frame', { exact: true }).fill('3');
   await page.getByLabel('Manual affine transform', { exact: true }).check();
   await page.getByLabel('Horizontal shift', { exact: true }).fill('3');
+  await page.getByLabel('Moving image selection', { exact: true }).selectOption('mean');
   await page.getByRole('button', { name: 'Run registration', exact: true }).click();
   await expect.poll(async () => (await current(request)).registrations.length).toBe(1);
   await expect(page.locator('.job-status strong')).toHaveText('Operation complete', {
     timeout: 60000,
   });
   const completed = await current(request);
+  expect(completed.pipeline.steps[0].options.moving_aggregation).toBe('mean');
   expect(completed.experiment).toBe('Motion shifted');
   expect(completed.registrations[0].diagnostics).toMatchObject({
     post: { mse: expect.any(Number) },
@@ -133,6 +140,43 @@ test('View, Segment, Fit and Register share layers and independent ROI selection
     'registered',
   );
   await expect(page.getByRole('img', { name: /32 by 40 quantitative image/ })).toBeVisible();
+
+  await selectWorkflow(page, 'Register', 'Series alignment');
+  await expect(page.getByLabel('Series alignment method', { exact: true })).toHaveValue(
+    'framewise',
+  );
+  await expect(page.getByLabel('Drift dimension frame', { exact: true })).toBeChecked();
+  await expect(
+    page
+      .getByLabel('Series alignment preset', { exact: true })
+      .locator('option[value="dynamic_contrast"]'),
+  ).toHaveJSProperty('disabled', true);
+  await page
+    .getByLabel('Series alignment preset', { exact: true })
+    .selectOption('small_translation');
+  await expect(page.getByLabel('Maximum series motion', { exact: true })).toHaveValue('6');
+  await page.getByLabel('Drift transform', { exact: true }).selectOption('translation');
+  await page.getByRole('button', { name: 'Run series alignment', exact: true }).click();
+  await expect(page.locator('.job-status strong')).toHaveText('Operation complete');
+  const series = await current(request);
+  expect(series.pipeline.steps).toHaveLength(1);
+  expect(series.pipeline.steps[0]).toMatchObject({
+    label: 'Series alignment',
+    options: { settings: { method: 'framewise', dimensions: ['frame'] } },
+  });
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click();
+  const recipes = page.getByRole('dialog', { name: 'Reusable workflows', exact: true });
+  await recipes.getByRole('button', { name: 'Capture current configuration', exact: true }).click();
+  await recipes.getByRole('button', { name: 'Edit definition', exact: true }).click();
+  const recipe = JSON.parse(
+    await recipes.getByLabel('Workflow JSON definition', { exact: true }).inputValue(),
+  );
+  expect(recipe).toMatchObject({ mrax_version: expect.any(String), kind: 'registration' });
+  expect(recipe.steps[0]).toMatchObject({
+    operation: 'drift',
+    settings: { settings: { method: 'framewise', registration: { max_displacement_voxels: 6 } } },
+  });
+  await recipes.getByRole('button', { name: 'Done', exact: true }).click();
 
   await selectExperiment(page, 'T2 phantom');
   await selectWorkflow(page, 'Fit');

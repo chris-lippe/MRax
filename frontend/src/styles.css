@@ -4620,8 +4620,22 @@ input[type='file'].visually-hidden {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
+  overflow: hidden;
 }
-.workflow-library > button,
+.workflow-library > label {
+  margin: 0;
+  gap: 6px;
+}
+.workflow-library-source button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.workflow-library-actions {
+  display: grid;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.workflow-library-actions > button,
 .workflow-document-toolbar button {
   display: inline-flex;
   align-items: center;
@@ -4632,6 +4646,11 @@ input[type='file'].visually-hidden {
   list-style: none;
   padding: 0;
   margin: 0;
+}
+.workflow-library .workflow-library-list {
+  flex: 1;
+  min-height: 90px;
+  overflow: auto;
 }
 .workflow-library-item {
   width: 100%;
@@ -4727,6 +4746,7 @@ input[type='file'].visually-hidden {
 }
 .workflow-dialog .settings-footer {
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 :root[data-opaque-panels='true'] .workflow-dialog {
   backdrop-filter: none;

@@ -100,26 +100,40 @@ class FitDebugReport:
             lines.append(f"frame_data: {self.frame_data_summary}")
         if self.merged_observable_summaries:
             lines.append("merged_observables:")
-            lines.extend(f"  - {key}: {value}" for key, value in sorted(self.merged_observable_summaries.items()))
+            lines.extend(
+                f"  - {key}: {value}"
+                for key, value in sorted(self.merged_observable_summaries.items())
+            )
         if self.expanded_observable_summaries:
             lines.append("expanded_observables:")
-            lines.extend(f"  - {key}: {value}" for key, value in sorted(self.expanded_observable_summaries.items()))
+            lines.extend(
+                f"  - {key}: {value}"
+                for key, value in sorted(self.expanded_observable_summaries.items())
+            )
         if self.initial_param_summaries:
             lines.append("initial_params:")
-            lines.extend(f"  - {key}: {value}" for key, value in sorted(self.initial_param_summaries.items()))
+            lines.extend(
+                f"  - {key}: {value}" for key, value in sorted(self.initial_param_summaries.items())
+            )
         if self.initial_field_summaries:
             lines.append("initial_fields:")
-            lines.extend(f"  - {key}: {value}" for key, value in sorted(self.initial_field_summaries.items()))
+            lines.extend(
+                f"  - {key}: {value}" for key, value in sorted(self.initial_field_summaries.items())
+            )
         if self.initial_loss is not None:
             lines.append(f"initial_loss={self.initial_loss:.6g}")
         if self.predicted_before_summary:
             lines.append(f"predicted_before: {self.predicted_before_summary}")
         if self.gradient_summaries:
             lines.append("gradients:")
-            lines.extend(f"  - {key}: {value}" for key, value in sorted(self.gradient_summaries.items()))
+            lines.extend(
+                f"  - {key}: {value}" for key, value in sorted(self.gradient_summaries.items())
+            )
         if self.update_summaries:
             lines.append("updates:")
-            lines.extend(f"  - {key}: {value}" for key, value in sorted(self.update_summaries.items()))
+            lines.extend(
+                f"  - {key}: {value}" for key, value in sorted(self.update_summaries.items())
+            )
         if self.optimizer_state_init_summary:
             lines.append(f"optimizer_state_init: {self.optimizer_state_init_summary}")
         if self.optimizer_state_after_step_summary:
@@ -198,10 +212,11 @@ def _summarize_quantity_map(mapping: Mapping[str, Quantity]) -> dict[str, str]:
     }
 
 
-def _summarize_array_map(mapping: Mapping[str, Any], *, include_norm: bool = False) -> dict[str, str]:
+def _summarize_array_map(
+    mapping: Mapping[str, Any], *, include_norm: bool = False
+) -> dict[str, str]:
     return {
-        key: _summarize_array(value, include_norm=include_norm)
-        for key, value in mapping.items()
+        key: _summarize_array(value, include_norm=include_norm) for key, value in mapping.items()
     }
 
 
@@ -253,8 +268,9 @@ def check_fit_sanity(
     dataset: DataSet,
     *,
     study_globals: Mapping[str, Quantity] | None = None,
+    check_data: bool = True,
 ) -> FitSanityReport:
-    """Validate experiment/model/dataset consistency before running a fit."""
+    """Validate fitting inputs. Disable check_data for metadata-only preflight."""
 
     report = FitSanityReport(
         experiment_name=experiment.exp_type or "experiment",
@@ -304,9 +320,10 @@ def check_fit_sanity(
         if not any(_has_observable(name, merged_keys) for name in group):
             report.missing_any_of.append(tuple(group))
 
-    data = np.asarray(dataset.data)
-    if not np.isfinite(data).all():
-        report.warnings.append("dataset contains NaNs/Infs. Consider auto_mask_nan_observables=True or a mask")
+    if check_data and not np.isfinite(np.asarray(dataset.data)).all():
+        report.warnings.append(
+            "dataset contains NaNs/Infs. Consider auto_mask_nan_observables=True or a mask"
+        )
 
     frame_count = frame_count_from_dims(experiment.dims)
     non_spatial = non_spatial_names(experiment.dims)
@@ -377,7 +394,9 @@ def debug_fit_prototype(
         field_shape=field_shape,
         field_dim_names=tuple(field_dim_names),
         data_summary=_summarize_array(dataset.data),
-        frame_data_summary=_summarize_array(_flatten_to_frames(np.asarray(dataset.data), experiment)),
+        frame_data_summary=_summarize_array(
+            _flatten_to_frames(np.asarray(dataset.data), experiment)
+        ),
     )
 
     if not sanity.ok:
@@ -440,47 +459,89 @@ def debug_fit_prototype(
         report.predicted_before_summary = _summarize_array(predicted_before)
 
         _, _, info = run_fit(
-            experiment, model, dataset, optimizer_name=optimizer_name, step_size=step_size,
-            num_steps=1, return_fit_info=True, regularizer_weight=regularizer_weight,
-            regularizer_prox=regularizer_prox, optimizer_base_factory=optimizer_base_factory,
-            box_constraints=box_constraints, initial_params=initial_params,
-            regularizer_configs=regularizer_configs, regularizer_type=regularizer_type,
-            regularizer_weights=regularizer_weights, optimizer_factory=optimizer_factory,
+            experiment,
+            model,
+            dataset,
+            optimizer_name=optimizer_name,
+            step_size=step_size,
+            num_steps=1,
+            return_fit_info=True,
+            regularizer_weight=regularizer_weight,
+            regularizer_prox=regularizer_prox,
+            optimizer_base_factory=optimizer_base_factory,
+            box_constraints=box_constraints,
+            initial_params=initial_params,
+            regularizer_configs=regularizer_configs,
+            regularizer_type=regularizer_type,
+            regularizer_weights=regularizer_weights,
+            optimizer_factory=optimizer_factory,
             device=device,
-            optimizer=optimizer, mask=mask, mask_dims=mask_dims, mask_fill_value=mask_fill_value,
-            study_globals=dict(global_obs), frame_mask=frame_mask, data_variance=data_variance,
+            optimizer=optimizer,
+            mask=mask,
+            mask_dims=mask_dims,
+            mask_fill_value=mask_fill_value,
+            study_globals=dict(global_obs),
+            frame_mask=frame_mask,
+            data_variance=data_variance,
             variance_estimation_mask=variance_estimation_mask,
             variance_estimation_mask_dims=variance_estimation_mask_dims,
             auto_mask_nan_observables=auto_mask_nan_observables,
         )
         raw_before = params
         loss_fn, _, unpack = build_loss(
-            experiment, model, dataset, regularizer_configs=regularizer_configs,
-            regularizer_type=regularizer_type, regularizer_weights=regularizer_weights,
-            mask=mask, mask_dims=mask_dims, mask_fill_value=mask_fill_value,
-            study_globals=dict(global_obs), frame_mask=frame_mask, data_variance=data_variance,
+            experiment,
+            model,
+            dataset,
+            regularizer_configs=regularizer_configs,
+            regularizer_type=regularizer_type,
+            regularizer_weights=regularizer_weights,
+            mask=mask,
+            mask_dims=mask_dims,
+            mask_fill_value=mask_fill_value,
+            study_globals=dict(global_obs),
+            frame_mask=frame_mask,
+            data_variance=data_variance,
             variance_estimation_mask=variance_estimation_mask,
             variance_estimation_mask_dims=variance_estimation_mask_dims,
             auto_mask_nan_observables=auto_mask_nan_observables,
-            parameter_space=info.parameter_space, physical_scales=info.state.parameter_scales,
+            parameter_space=info.parameter_space,
+            physical_scales=info.state.parameter_scales,
             smoothed_tv=info.regularization_mode == "smoothed_tv",
             device=device,
         )
         report.optimizer_name = info.optimizer_name
         if info.parameter_space == "physical":
             params = unpack._mrax_from_raw(raw_before)
-            opt = make_optimizer(info.optimizer_name, step_size, device=device,
-                proximal_context=(loss_fn, unpack._mrax_smooth_loss,
-                                  unpack._mrax_physical_bounds, unpack._mrax_tv_operators))
+            opt = make_optimizer(
+                info.optimizer_name,
+                step_size,
+                device=device,
+                proximal_context=(
+                    loss_fn,
+                    unpack._mrax_smooth_loss,
+                    unpack._mrax_physical_bounds,
+                    unpack._mrax_tv_operators,
+                ),
+            )
             gradient_loss = unpack._mrax_smooth_loss
-            report.notes.append("TV is applied proximally. Gradient summaries describe the smooth objective")
+            report.notes.append(
+                "TV is applied proximally. Gradient summaries describe the smooth objective"
+            )
         else:
             params = raw_before
-            opt = optimizer or (optimizer_factory(step_size) if optimizer_factory is not None else make_optimizer(
-                info.optimizer_name, step_size, regularizer_weight=regularizer_weight,
-                regularizer_prox=regularizer_prox, base_optimizer_factory=optimizer_base_factory,
-                device=device,
-                box_constraints=box_constraints))
+            opt = optimizer or (
+                optimizer_factory(step_size)
+                if optimizer_factory is not None
+                else make_optimizer(
+                    info.optimizer_name,
+                    step_size,
+                    regularizer_weight=regularizer_weight,
+                    regularizer_prox=regularizer_prox,
+                    base_optimizer_factory=optimizer_base_factory,
+                    device=device,
+                    box_constraints=box_constraints,
+                )
+            )
             gradient_loss = loss_fn
         report.initial_param_summaries = _summarize_array_map(params)
         opt = place_optimizer(opt, device)

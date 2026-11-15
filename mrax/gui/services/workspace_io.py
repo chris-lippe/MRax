@@ -274,15 +274,17 @@ def load_workspace_root(root, *, key):
         workspace.view_label = str(workflow.get("view_label") or "Image")
         workspace.plot_x_axis_key = str(workflow.get("plot_axis") or "auto")
         workspace.diagnostics.extend(list(workflow.get("diagnostics") or [])[-200:])
+        from .pipeline import decode_pipelines, install
+
         for name, row in dict(workflow.get("fits") or {}).items():
+            if isinstance(row.get("workflow"), dict):
+                row = {**row, "workflow": decode_pipelines(row["workflow"], arrays)}
             fields = ((session.data or {}).get("experiments", {}).get(name, {})).get(
                 "fitted_maps", {}
             )
             workspace.fit_results_by_experiment[name] = {**row, "fields": fields}
             if row.get("pipeline_grid"):
                 session.data["experiments"][name]["fit_grid"] = row["pipeline_grid"]
-        from .pipeline import decode_pipelines, install
-
         workspace.pipelines = decode_pipelines(workflow.get("pipelines", {}), arrays)
         selected = session.selected_experiment
         for name, pipeline in workspace.pipelines.items():

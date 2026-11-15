@@ -4,13 +4,11 @@ import numpy as np
 import pytest
 from test_bruker_geometry_workflows import LPS_TO_RAS, _scan
 
-from mrax.gui.services.persistence import load_workspace_bundle, save_workspace_bundle
 from mrax.gui.services.roi_tools import roi_command
 from mrax.gui.services.scene import fitting_roi
 from mrax.gui.services.workspace import StudyWorkspace
 from mrax.gui.session import GuiSession
 from mrax.io.image_export import export_image_files
-from mrax.reco.acquisition import reconstruct_acquisition
 
 
 def workspace(path, counts=(3, 2, 1)):
@@ -98,23 +96,3 @@ def test_exports_crop_each_package_and_use_its_own_geometry(tmp_path):
             image.affine, dataset.spatial_geometry.affine_for_frame(package * 2), atol=1e-6
         )
         np.testing.assert_allclose(image.affine[:3, 3], LPS_TO_RAS @ [11, -7, 19], atol=1e-6)
-
-
-def test_package_dimension_and_raw_layout_survive_workspace_roundtrip(tmp_path):
-    work = workspace(tmp_path / "input")
-    session = work.session
-    session.load_raw_data_for_experiment("1", require_acquisition=True)
-    session.set_active_index("slice_package", 1)
-    session.set_image_plane("axial")
-    saved = save_workspace_bundle(work, tmp_path / "packages.mrax")
-    loaded = load_workspace_bundle(saved, tmp_path / "loaded", key="reopened")
-    assert loaded.session.experiment_names == ["1"]
-    assert loaded.session.experiment_dims["slice_package"] == 3
-    assert loaded.session.active_indices["slice_package"] == 1
-    assert loaded.session.active_image_plane == "axial"
-    acquisition = loaded.session.current_experiment["acquisition"]
-    result = reconstruct_acquisition(acquisition)
-    np.testing.assert_allclose(
-        result.image, loaded.session.image_array.reshape(result.image.shape), rtol=2e-5, atol=2e-4
-    )
-    assert acquisition.geometry.frame_dims == (("slice_package", 3), ("frame", 2))

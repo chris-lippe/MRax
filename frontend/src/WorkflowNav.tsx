@@ -36,7 +36,7 @@ export const workflows = [
     label: 'Register',
     tasks: [
       { id: 'alignment', label: 'Image alignment', icon: 'registration' },
-      { id: 'drift', label: 'Drift correction', icon: 'drift' },
+      { id: 'drift', label: 'Series alignment', icon: 'drift' },
     ],
   },
   {

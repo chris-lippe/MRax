@@ -121,7 +121,7 @@ export async function completeTutorialWorkflow(
   await guide.getByRole('button', { name: 'Expand tutorial guidance', exact: true }).click();
   await advance('Reuse a workflow');
   await open('Show processing workflows');
-  await page.getByRole('button', { name: 'Processing workflows', exact: true }).click();
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(guide).toHaveCount(0);
   await page.keyboard.press('Escape');

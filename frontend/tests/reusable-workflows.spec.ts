@@ -57,6 +57,53 @@ test.afterEach(async ({ request }) => {
   }
 });
 
+test('built-in presets preview requirements, create editable copies and check target inputs', async ({
+  page,
+  request,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await loadExample(page);
+  await selectWorkflow(page, 'Denoise');
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click();
+  const modal = dialog(page);
+  await modal.getByLabel('Search workflows', { exact: true }).fill('light spatial');
+  await modal.getByRole('button', { name: /^Light spatial smoothing/ }).click();
+  await expect(modal.getByRole('region', { name: 'Preset preview', exact: true })).toContainText(
+    'Acquisition dimensions and slice packages stay independent',
+  );
+  await modal.getByRole('button', { name: 'Use preset', exact: true }).click();
+  await expect(modal.getByRole('status')).toContainText('Preset copied');
+  await modal.getByRole('button', { name: 'Edit definition', exact: true }).click();
+  const editor = modal.getByLabel('Workflow JSON definition', { exact: true });
+  const definition = JSON.parse(await editor.inputValue());
+  definition.steps[0].settings.parameters.sigma = 1.2;
+  await editor.fill(JSON.stringify(definition));
+  await modal.getByRole('button', { name: 'Keep workflow changes', exact: true }).click();
+  await modal.getByRole('button', { name: 'Check inputs', exact: true }).click();
+  await expect(modal.getByRole('status')).toHaveText(
+    'Inputs are ready for the selected experiments.',
+  );
+  expect((await workspaces(request))[0].pipeline.steps).toHaveLength(0);
+  await modal.getByRole('button', { name: 'Apply workflow', exact: true }).click();
+  await expect(modal.getByRole('status')).toHaveText('Workflow applied to all selected targets.');
+  expect((await workspaces(request))[0].pipeline.steps).toHaveLength(1);
+  const catalog = await (await request.get('/api/workflow-presets')).json();
+  expect(
+    catalog.find((row: { id: string }) => row.id === 'spatial-gaussian').document.steps[0].settings
+      .parameters.sigma,
+  ).toBe(0.6);
+  await modal.getByLabel('Workflow category', { exact: true }).selectOption('registration');
+  await modal.getByRole('button', { name: 'Presets', exact: true }).click();
+  await modal.getByLabel('Search workflows', { exact: true }).fill('masked');
+  await modal.getByRole('button', { name: /^Masked rigid alignment/ }).click();
+  await modal.getByRole('button', { name: 'Use preset', exact: true }).click();
+  await modal.getByRole('button', { name: 'Check inputs', exact: true }).click();
+  await expect(modal.getByRole('alert')).toContainText('Resolve target compatibility');
+  await expect(modal.locator('.workflow-run-report')).toContainText('Assign Reference experiment');
+  await modal.getByRole('button', { name: 'Done', exact: true }).click();
+});
+
 test('processing workflows save, edit, share across studies and batch experiments without duplicating data', async ({
   page,
   request,
@@ -73,23 +120,22 @@ test('processing workflows save, edit, share across studies and batch experiment
     await route.continue().catch(() => {});
   });
   const loadingTargets = page.waitForRequest('**/api/workflow-targets');
-  await page.getByRole('button', { name: 'Processing workflows', exact: true }).click();
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click();
   await loadingTargets;
   await page.keyboard.press('Escape');
   await expect(dialog(page)).not.toBeVisible();
   releaseTargets();
   await page.unroute('**/api/workflow-targets');
   await page.getByRole('button', { name: 'Apply denoising', exact: true }).click();
-  await page.getByRole('button', { name: 'Processing workflows', exact: true }).click();
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click();
   const modal = dialog(page);
   await modal.getByRole('button', { name: 'Capture current pipeline', exact: true }).click();
   await modal.getByLabel('Workflow name', { exact: true }).fill('Shared Gaussian');
   await modal.getByRole('button', { name: 'Keep workflow changes', exact: true }).click();
-  const saved = await saveWorkflow(page, info, 'denoise.mpip');
+  const saved = await saveWorkflow(page, info, 'denoise.mflow');
   expect(saved.document).toMatchObject({
     format: 'mrax.workflow',
-    format_version: 1,
-    kind: 'processing',
+    kind: 'denoising',
     name: 'Shared Gaussian',
   });
   expect(saved.document.mrax_version).toMatch(/^\d+\.\d+/);
@@ -99,7 +145,7 @@ test('processing workflows save, edit, share across studies and batch experiment
   await loadExample(page, 'multimodal');
   const before = await workspaces(request);
   await selectWorkflow(page, 'Denoise');
-  await page.getByRole('button', { name: 'Processing workflows', exact: true }).click();
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click();
   await modal.getByRole('button', { name: /Shared Gaussian/ }).click();
   await modal
     .getByRole('checkbox', { name: 'Target T2 phantom in Synthetic T2 phantom', exact: true })
@@ -110,7 +156,7 @@ test('processing workflows save, edit, share across studies and batch experiment
       exact: true,
     })
     .check();
-  await modal.getByRole('button', { name: 'Apply processing workflow', exact: true }).click();
+  await modal.getByRole('button', { name: 'Apply workflow', exact: true }).click();
   await expect(modal.getByRole('status')).toHaveText('Workflow applied to all selected targets.');
   await expect(modal.locator('.workflow-run-report li')).toHaveCount(2);
   expect(await workspaces(request)).toHaveLength(2);
@@ -120,16 +166,17 @@ test('processing workflows save, edit, share across studies and batch experiment
   const result = (await workspaces(request)).find((row) => row.id === before[1].id)!;
   expect(result.pipeline.steps.map((step) => step.method)).toEqual(['gaussian']);
   expect(result.experiments).toEqual(before[1].experiments);
-  await page.getByRole('button', { name: 'Processing workflows', exact: true }).click();
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click();
   await modal.getByRole('button', { name: /Shared Gaussian/ }).click();
   await modal.getByRole('button', { name: 'Edit definition', exact: true }).click();
   const editor = modal.getByLabel('Workflow JSON definition', { exact: true });
-  await editor.fill(JSON.stringify({ ...saved.document, format_version: 99 }));
+  await editor.fill(JSON.stringify({ ...saved.document, mrax_version: '9999.0.0' }));
   await modal.getByRole('button', { name: 'Keep workflow changes', exact: true }).click();
-  await expect(modal.getByRole('alert')).toContainText(/Unsupported|format_version/);
+  await expect(modal.getByRole('alert')).toContainText(/version incompatibility|mrax_version/i);
   await modal.getByRole('button', { name: 'Close workflows', exact: true }).click();
   await expect(modal).toBeVisible();
   await modal.getByRole('button', { name: 'Discard workflow edits', exact: true }).click();
+  await expect(modal.getByRole('alert')).toHaveCount(0);
   await modal.getByRole('button', { name: 'Remove from session', exact: true }).click();
   await modal.getByRole('button', { name: 'Open workflow file', exact: true }).click();
   await chooseFilePath(page, saved.path);
@@ -148,10 +195,10 @@ test('fitting workflow captures pending solver settings and requires ROI assignm
   await page.getByLabel('Fit mask ROI 1', { exact: true }).uncheck();
   await page.getByLabel('Fit mask ROI 1', { exact: true }).check();
   await page.getByLabel('Fit steps', { exact: true }).fill('333');
-  await page.getByRole('button', { name: 'Fitting workflows', exact: true }).click();
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click();
   const modal = dialog(page);
   await modal.getByRole('button', { name: 'Capture current configuration', exact: true }).click();
-  const saved = await saveWorkflow(page, info, 't2.mfit');
+  const saved = await saveWorkflow(page, info, 't2.mflow');
   expect(saved.document.steps[0].settings.settings.num_steps).toBe(333);
   expect(saved.document.bindings).toHaveLength(1);
   expect(JSON.stringify(saved.document.steps)).not.toContain('ROI 1');
@@ -160,12 +207,15 @@ test('fitting workflow captures pending solver settings and requires ROI assignm
   await loadExample(page);
   await drawRoi(page);
   await selectWorkflow(page, 'Fit');
-  await page.getByRole('button', { name: 'Fitting workflows', exact: true }).click();
+  await page.getByRole('button', { name: 'Workflows', exact: true }).click();
   await modal.getByRole('button', { name: /Fitting workflow/ }).click();
-  await modal.getByRole('button', { name: 'Apply fitting configuration', exact: true }).click();
+  await modal.getByRole('button', { name: 'Load fitting settings', exact: true }).click();
   await expect(modal.getByRole('alert')).toContainText('Resolve target compatibility');
   await modal.getByLabel('ROI 1 for T2 phantom', { exact: true }).selectOption('ROI 1');
-  await modal.getByRole('button', { name: 'Apply fitting configuration', exact: true }).click();
+  await modal.getByLabel('Workflow name', { exact: true }).fill('Bound T2 fit');
+  await modal.getByRole('button', { name: 'Keep workflow changes', exact: true }).click();
+  await expect(modal.getByLabel('ROI 1 for T2 phantom', { exact: true })).toHaveValue('ROI 1');
+  await modal.getByRole('button', { name: 'Load fitting settings', exact: true }).click();
   await expect(modal.getByRole('status')).toHaveText('Workflow applied to all selected targets.');
   let current = (await workspaces(request))[1];
   expect(current.fit_settings.num_steps).toBe(333);
@@ -173,13 +223,13 @@ test('fitting workflow captures pending solver settings and requires ROI assignm
   await modal
     .getByRole('checkbox', { name: 'Run fits after loading configuration', exact: true })
     .check();
-  await modal.getByRole('button', { name: 'Run fitting workflow', exact: true }).click();
+  await modal.getByRole('button', { name: 'Apply workflow', exact: true }).click();
   await expect(modal.getByRole('status')).toHaveText('Workflow applied to all selected targets.', {
     timeout: 60000,
   });
   current = (await workspaces(request))[1];
-  expect(current.maps.some((map) => map.name === 't2')).toBe(true);
-  expect(current.pipeline.steps).toEqual([]);
+  expect(current.maps.some((map) => String(map.name).endsWith(' / t2'))).toBe(true);
+  expect(current.pipeline.steps.map((step) => step.kind)).toEqual(['fit']);
   await modal.getByRole('button', { name: 'Done', exact: true }).click();
   await expect(page.getByLabel('Map', { exact: true })).toBeVisible();
 });

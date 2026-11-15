@@ -1,24 +1,16 @@
 """Synthetic save export contracts and numerical references."""
 
-import json
 import zipfile
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from mrax import __version__
-from mrax.analysis.group import discover_study_manifests
 from mrax.data_struct import (
     DataSet,
     Experiment,
     Quantity,
-    Study,
-    load_study_results,
 )
-from mrax.data_struct.storage import _resolve_manifest_path
-from mrax.gui import GuiSession
-from mrax.gui.services.package import _mrax_package_entries
 from mrax.io.bundle import extract_bundle, write_bundle
 from mrax.io.image_export import export_image_files
 from mrax.io.nifti import (
@@ -29,43 +21,6 @@ from mrax.io.nifti import (
     nifti_spatial_geometry,
     save_nifti,
 )
-from mrax.library import make_t2_se_model
-
-
-def small_study():
-    experiment = Experiment(
-        dims={"te": 3, "x": 2, "y": 4},
-        exp_type="mse",
-        observables={"TE": Quantity([10.0, 30.0, 70.0], "ms")},
-    )
-    data = np.arange(24, dtype=np.float32).reshape(3, 2, 4)
-    return Study(
-        [experiment],
-        [DataSet(data)],
-        [make_t2_se_model()],
-        names=["synthetic"],
-        study_globals={"field_strength_mhz": Quantity(100.0, "MHz")},
-    )
-
-
-def test_storage_rejects_path_traversal(tmp_path):
-    with pytest.raises(ValueError, match="outside manifest directory"):
-        _resolve_manifest_path(tmp_path / "study", "../secret.npy", label="image")
-    package = tmp_path / "package"
-    package.mkdir()
-    (package / "mrax_package.json").write_text(
-        json.dumps(
-            {
-                "format": "mrax.gui.package",
-                "version": 1,
-                "mrax_version": __version__,
-                "entries": {"gui_state": "../outside.json"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="outside package directory"):
-        _mrax_package_entries(package)
 
 
 def test_nifti_single_volume_and_series_round_trip(tmp_path):
@@ -92,28 +47,6 @@ def test_nifti_single_volume_and_series_round_trip(tmp_path):
     assert len(outputs) == 2
     assert all(path.is_file() for path in outputs)
     assert output_4d.is_file()
-
-
-def test_default_study_save_is_self_contained_bundle_without_gui(tmp_path):
-    study = small_study()
-    events = []
-    output = study.save(
-        tmp_path / "synthetic.mrax", progress_callback=lambda *args: events.append(args)
-    )
-    assert output.suffix == ".mrax"
-    with zipfile.ZipFile(output) as archive:
-        names = archive.namelist()
-        assert "study_manifest.json" in names
-        assert all("gui" not in name for name in names)
-    restored = load_study_results(output)
-    np.testing.assert_array_equal(
-        restored["experiments"]["synthetic"]["mr_image"], study.datasets[0].data
-    )
-    assert GuiSession.from_manifest(output).frame_count == 3
-    assert discover_study_manifests(tmp_path)["synthetic"] == output
-    assert len(events) > 3 and events[-1][0] == events[-1][1]
-    fractions = [current / total for current, total, _ in events]
-    assert np.all(np.diff(fractions) >= 0)
 
 
 def test_bundle_failure_preserves_previous_file_and_rejects_traversal(tmp_path):

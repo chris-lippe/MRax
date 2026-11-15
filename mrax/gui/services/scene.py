@@ -199,8 +199,8 @@ def render_overlay(workspace, layer):
             if not 0 <= frame < len(frames):
                 raise ValueError("The registered sequence has no matching frame")
             corrected = frames[frame]
-            if meta.get("scope") != "volume" and corrected.ndim == 3:
-                corrected = registration_plane(corrected, target)
+            if meta.get("scope") != "volume":
+                corrected = registration_plane(corrected, target, native_2d=True)
         elif meta.get("moving_source") == "map" or frame == meta.get("moving_frame", 0):
             corrected = np.asarray(result["corrected"])
         elif result.get("pipeline_owned"):
@@ -225,7 +225,7 @@ def render_overlay(workspace, layer):
             )
             moving = np.asarray(reshape_dims_to_frames(values, source.experiment_dims))[frame]
             if meta.get("scope") != "volume":
-                moving = registration_plane(moving, source)
+                moving = registration_plane(moving, source, native_2d=bool(meta.get("plane_dims")))
             corrected = apply_transform_to_image(
                 np.abs(moving) if np.iscomplexobj(moving) else moving,
                 result["fixed"],
@@ -459,28 +459,48 @@ def update_scene(workspace, changes):
 
 
 def fitting_roi(workspace, names):
-    """Union selected native masks. Display visibility never changes a fit mask."""
+    """Union selected masks on the current processing grid."""
+    from .pipeline import display_steps, project_roi
+
     session = workspace.session
     if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
         raise ValueError("Choose a list of ROI names for fitting")
     selected = [r for r in session.rois if r.name in names]
     if not names or len(set(names)) != len(names) or len(selected) != len(names):
         raise ValueError("Select at least one enabled ROI for fitting")
-    pipeline = workspace.pipelines.get(session.selected_experiment)
-    native_shape = (
-        tuple(pipeline["source"]["dims"][d] for d in session.roi_dim_names)
-        if pipeline and not getattr(workspace, "_pipeline_evaluating", False)
-        else session.roi_shape
-    )
-    mask = np.zeros(native_shape, dtype=bool)
+    mask = np.zeros(session.roi_shape, dtype=bool)
     dims = tuple(session.roi_dim_names)
+    space = (session.current_experiment.get("extra_metadata") or {}).get(
+        "registration_space", session.selected_experiment
+    )
     for roi in selected:
+        roi = project_roi(workspace, roi)
+        roi_space = roi.metadata.get("registration_space")
+        compatible = roi.metadata.get("compatible_experiments", [])
+        if roi_space and roi_space != space and session.selected_experiment not in compatible:
+            raise ValueError(
+                "A selected ROI belongs to another registration space. Align the experiments or transfer the ROI first"
+            )
         if np.asarray(roi.mask).shape != mask.shape or (roi.dims and tuple(roi.dims) != dims):
-            raise ValueError("Fit ROIs must match the experiment's native grid")
+            raise ValueError("Fit ROIs must match the experiment's current grid")
         mask |= np.asarray(roi.mask) != 0
     if not np.any(mask):
         raise ValueError("Selected fit ROIs are empty")
-    return ROI("Fit selection", mask, dims=dims, metadata={"source_rois": list(names)})
+    applied = [
+        step["id"] + ":" + str(step["version"])
+        for step in display_steps(workspace)
+        if step["enabled"] and step["kind"] in {"register", "stored_registration"}
+    ]
+    return ROI(
+        "Fit selection",
+        mask,
+        dims=dims,
+        metadata={
+            "source_rois": list(names),
+            "registration_space": space,
+            "registration_steps": applied,
+        },
+    )
 
 
 def add_registration_layer(workspace, key):

@@ -32,8 +32,9 @@ Signal previews average the current image until an ROI is available.
 Spectroscopy uses the curve viewer. Declared frequency coordinates label its axis.
 
 Processing changes retain existing fit maps. Rerun fitting to update them.
-The workflow panels save reusable processing (``.mpip``), reconstruction
-(``.mrec``) and fitting (``.mfit``) configurations. See :doc:`workflows`.
+**Register → Series alignment** aligns acquisition frames.
+**Workflows** saves reusable presets and complete chains as ``.mflow`` files.
+See :doc:`workflows`.
 
 **Settings**, at the bottom left, contains appearance, keyboard shortcuts,
 accessibility options and a tutorial using a separate synthetic study.

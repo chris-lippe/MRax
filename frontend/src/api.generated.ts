@@ -243,6 +243,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflow-presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bundled Presets */
+        get: operations["bundled_presets_api_workflow_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflow-presets/{key}/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open Preset */
+        post: operations["open_preset_api_workflow_presets__key__open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflow-targets": {
         parameters: {
             query?: never;
@@ -930,7 +964,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "processing" | "reconstruction" | "fitting";
+            kind: "processing" | "reconstruction" | "fitting" | "registration" | "denoising";
             /** Name */
             name?: string | null;
             /** Revision */
@@ -946,6 +980,8 @@ export interface components {
             /** Revision */
             revision: number;
         };
+        /** Command */
+        Command: Record<string, never>;
         /** ComparisonChoice */
         ComparisonChoice: {
             /** Dimensions */
@@ -1919,7 +1955,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "roi" | "experiment" | "map" | "sat_trans_reference_scan" | "ab_mt_t1_map_ref" | "ab_mt_b1_map_ref" | "ab_mt_b0_map_ref";
+            kind: "roi" | "experiment" | "image" | "map";
             /** Label */
             label: string;
         };
@@ -1942,16 +1978,15 @@ export interface components {
              */
             format: "mrax.workflow";
             /**
-             * Format Version
-             * @enum {integer}
-             */
-            format_version: 1 | 2;
-            /**
              * Kind
+             * @default processing
              * @enum {string}
              */
-            kind: "processing" | "reconstruction" | "fitting";
-            /** Mrax Version */
+            kind: "processing" | "reconstruction" | "fitting" | "registration" | "denoising";
+            /**
+             * Mrax Version
+             * @description MRax release that wrote the workflow and defines its file format.
+             */
             mrax_version: string;
             /** Name */
             name: string;
@@ -1974,6 +2009,14 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** WorkflowPreset */
+        WorkflowPreset: {
+            document: components["schemas"]["WorkflowDocument"];
+            /** Id */
+            id: string;
+            /** Requirements */
+            requirements: string[];
+        };
         /** WorkflowStep */
         WorkflowStep: {
             /**
@@ -1992,6 +2035,10 @@ export interface components {
             settings: {
                 [key: string]: unknown;
             };
+            /** Target */
+            target?: {
+                [key: string]: string;
+            } | null;
             /**
              * Version
              * @constant
@@ -2729,6 +2776,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    bundled_presets_api_workflow_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowPreset"][];
+                };
+            };
+        };
+    };
+    open_preset_api_workflow_presets__key__open_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Command"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowLibraryEntry"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

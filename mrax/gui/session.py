@@ -114,10 +114,50 @@ class FitSettings:
     auto_mask_nan_observables: bool = True
     use_view_state_data: bool = False
     compute_derived_maps: bool | None = None
-    sat_trans_reference_scan: str | None = None
-    ab_mt_t1_map_ref: str | None = None
-    ab_mt_b1_map_ref: str | None = None
-    ab_mt_b0_map_ref: str | None = None
+    sat_trans_reference_scan: str | None = field(
+        default=None,
+        metadata={
+            "workflow_input": {
+                "role": "reference",
+                "kind": "image",
+                "label": "Reference scan",
+                "capability": "reference_scan",
+            }
+        },
+    )
+    ab_mt_t1_map_ref: str | None = field(
+        default=None,
+        metadata={
+            "workflow_input": {
+                "role": "t1",
+                "kind": "map",
+                "label": "T1 prior map",
+                "capability": "prior_maps",
+            }
+        },
+    )
+    ab_mt_b1_map_ref: str | None = field(
+        default=None,
+        metadata={
+            "workflow_input": {
+                "role": "b1",
+                "kind": "map",
+                "label": "B1 prior map",
+                "capability": "prior_maps",
+            }
+        },
+    )
+    ab_mt_b0_map_ref: str | None = field(
+        default=None,
+        metadata={
+            "workflow_input": {
+                "role": "b0",
+                "kind": "map",
+                "label": "B0 prior map",
+                "capability": "prior_maps",
+            }
+        },
+    )
     selected_pools: tuple[str, ...] = ()
     param_overrides: dict[str, dict[str, object]] = field(default_factory=dict)
     pool_overrides: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -567,7 +607,7 @@ class GuiSession:
                 return ref
             text = str(ref)
             prefix = f"{old}{_MAP_REF_SEP}"
-            return f"{new}{_MAP_REF_SEP}{text[len(prefix):]}" if text.startswith(prefix) else text
+            return f"{new}{_MAP_REF_SEP}{text[len(prefix) :]}" if text.startswith(prefix) else text
 
         def update_settings(settings: FitSettings) -> None:
             if settings.sat_trans_reference_scan == old:
@@ -579,6 +619,24 @@ class GuiSession:
         update_settings(self.fit_settings)
         for state in self.view_states.values():
             update_settings(state.fit_settings)
+        for entry in ((self.data or {}).get("experiments") or {}).values():
+            for key in ("extra_metadata", "processed"):
+                if (entry.get(key) or {}).get("registration_space") == old:
+                    entry[key]["registration_space"] = new
+        if self.study is not None:
+            for dataset in self.study.datasets:
+                if (dataset.processed or {}).get("registration_space") == old:
+                    dataset.processed["registration_space"] = new
+        for roi in [
+            *self.shared_rois,
+            *self.rois,
+            *(roi for state in self.view_states.values() for roi in state.rois),
+        ]:
+            for key in ("source_experiment", "registration_space"):
+                if roi.metadata.get(key) == old:
+                    roi.metadata[key] = new
+            if "compatible_experiments" in roi.metadata:
+                roi.metadata["compatible_experiments"] = [new if name == old else name for name in roi.metadata["compatible_experiments"]]
 
     def _rename_study_entry(self, old: str, new: str) -> None:
         if self.study is None or old not in (self.study.names or ()):
@@ -1892,6 +1950,16 @@ class GuiSession:
 
     def add_roi(self, roi: ROI) -> None:
         roi = self._roi_with_inferred_dims(roi)
+        if self.is_loaded:
+            metadata = dict(roi.metadata)
+            metadata.setdefault("source_experiment", self.selected_experiment)
+            metadata.setdefault(
+                "registration_space",
+                (self.current_experiment.get("extra_metadata") or {}).get(
+                    "registration_space", self.selected_experiment
+                ),
+            )
+            roi = ROI(roi.name, roi.mask, dims=roi.dims, metadata=metadata)
         self.rois = [existing for existing in self.rois if existing.name != roi.name]
         self.rois.append(roi)
         self._sync_shared_roi(roi)
@@ -1905,6 +1973,20 @@ class GuiSession:
     def enable_shared_roi(self, name: str) -> bool:
         for roi in self.shared_rois:
             if roi.name == name:
+                current = (self.current_experiment.get("extra_metadata") or {}).get(
+                    "registration_space", self.selected_experiment
+                )
+                source = self.current_experiment.get("pipeline_source_grid") or {}
+                roi_space = roi.metadata.get("registration_space")
+                if (
+                    roi_space
+                    and roi_space not in {current, self.selected_experiment, source.get("space")}
+                    and self.selected_experiment
+                    not in roi.metadata.get("compatible_experiments", [])
+                ):
+                    raise ValueError(
+                        "This ROI belongs to another registration space. Align the experiments or transfer it first"
+                    )
                 self.rois = [existing for existing in self.rois if existing.name != name]
                 self.rois.append(_copy_roi(roi))
                 return True
@@ -2009,6 +2091,8 @@ class GuiSession:
                         "Physical geometry differs. Register experiments before sharing ROIs"
                     )
         current_rois = [_copy_roi(roi) for roi in self.rois]
+        current_rois = [ROI(roi.name, roi.mask, dims=roi.dims,
+            metadata={**roi.metadata, "compatible_experiments":list(self.experiment_names)}) for roi in current_rois]
         selected_roi = self.fit_settings.selected_roi
         current_names = {roi.name for roi in current_rois}
         if selected_roi not in current_names:

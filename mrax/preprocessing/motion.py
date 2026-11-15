@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 import jax.numpy as jnp
@@ -23,6 +23,7 @@ class RegistrationDiagnostics:
     optimizer_stop_condition: str
     iteration_metrics: tuple[float, ...] = ()
     transform_parameters: tuple[float, ...] = ()
+    alignment_check: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ class MotionCorrectionResult:
     group_dimensions: tuple[str, ...]
     group_indices: tuple[tuple[int, ...], ...]
     groups: tuple[FrameStackMotionResult, ...]
+    estimation_dimensions: tuple[str, ...] = ()
 
     @property
     def corrected(self):
@@ -95,7 +97,7 @@ def _check_spatial_array(array: np.ndarray, *, name: str) -> np.ndarray:
     return arr
 
 
-def _registration_array(array: np.ndarray, *, name: str) -> np.ndarray:
+def _registration_array(array: np.ndarray, *, name: str, normalize: bool = False) -> np.ndarray:
     arr = _check_spatial_array(array, name=name)
     if np.iscomplexobj(arr):
         arr = np.abs(arr)
@@ -104,6 +106,13 @@ def _registration_array(array: np.ndarray, *, name: str) -> np.ndarray:
     if not finite.all():
         fill = float(np.nanmedian(arr[finite])) if finite.any() else 0.0
         arr = np.where(finite, arr, fill)
+    if normalize:
+        lo, hi = np.percentile(arr, (1, 99))
+        if hi <= lo:
+            lo, hi = float(arr.min()), float(arr.max())
+        if hi <= lo:
+            raise ValueError(f"{name} image has no intensity variation. Choose a different registration frame")
+        arr = np.clip((arr - lo) / (hi - lo), 0, 1).astype(np.float32)
     return arr
 
 
@@ -195,6 +204,7 @@ def _identity_diagnostics(label: str) -> RegistrationDiagnostics:
 
 
 def _default_registration_method(sitk, fixed_image, moving_image, dimension: int):
+    voxel_size = min(fixed_image.GetSpacing())
     initial_transform = sitk.Euler2DTransform() if dimension == 2 else sitk.Euler3DTransform()
     initial_transform = sitk.CenteredTransformInitializer(
         fixed_image,
@@ -205,18 +215,17 @@ def _default_registration_method(sitk, fixed_image, moving_image, dimension: int
 
     method = sitk.ImageRegistrationMethod()
     method.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
-    method.SetMetricSamplingStrategy(method.RANDOM)
-    method.SetMetricSamplingPercentage(0.2, 1)
+    method.SetMetricSamplingStrategy(method.NONE)
     method.SetInterpolator(sitk.sitkLinear)
-    method.SetOptimizerAsGradientDescent(
-        learningRate=1.0,
+    method.SetOptimizerAsRegularStepGradientDescent(
+        learningRate=voxel_size,
+        minStep=1e-4 * voxel_size,
         numberOfIterations=200,
-        convergenceMinimumValue=1e-6,
-        convergenceWindowSize=10,
+        gradientMagnitudeTolerance=1e-6,
     )
     method.SetOptimizerScalesFromPhysicalShift()
     method.SetShrinkFactorsPerLevel((2, 1))
-    method.SetSmoothingSigmasPerLevel((1.0, 0.0))
+    method.SetSmoothingSigmasPerLevel((voxel_size, 0.0))
     method.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
     method.SetInitialTransform(initial_transform, inPlace=False)
     return method
@@ -271,6 +280,24 @@ def _method_stop_condition(method) -> str:
         return ""
 
 
+def _alignment_scores(fixed, moving, mask):
+    valid = np.isfinite(fixed) & np.isfinite(moving)
+    valid &= np.asarray(mask, dtype=bool) if mask is not None else fixed > 0.05
+    count = int(valid.sum())
+    if count < 32:
+        return None
+    bins = min(32, max(8, int(np.sqrt(count) / 2)))
+    joint = np.histogram2d(fixed[valid], moving[valid], bins=bins, range=((0, 1), (0, 1)))[0]
+    joint /= max(joint.sum(), 1)
+    x, y = joint.sum(axis=1), joint.sum(axis=0)
+    product = x[:, None] * y[None, :]
+    occupied = (joint > 0) & (product > 0)
+    information = float(np.sum(joint[occupied] * np.log(joint[occupied] / product[occupied])))
+    entropy_x = -float(np.sum(x[x > 0] * np.log(x[x > 0])))
+    entropy_y = -float(np.sum(y[y > 0] * np.log(y[y > 0])))
+    return information/max(np.sqrt(entropy_x*entropy_y),1e-12), float(np.mean(moving[valid]>.05))
+
+
 def register_image(
     fixed: np.ndarray,
     moving: np.ndarray,
@@ -281,6 +308,13 @@ def register_image(
     interpolator: str | Any = "linear",
     default_value: float = 0.0,
     output_pixel_type: Any | None = None,
+    normalize_intensity: bool = False,
+    fixed_mask: np.ndarray | None = None,
+    moving_mask: np.ndarray | None = None,
+    moving_pre_transform: Any | None = None,
+    fixed_spacing: Iterable[float] | None = None,
+    validate_alignment: bool = False,
+    max_displacement_voxels: float | None = None,
 ) -> ImageRegistrationResult:
     """Register one moving image to one fixed image with SimpleITK.
 
@@ -288,16 +322,62 @@ def register_image(
     factory accepting ``(fixed_image, moving_image)`` to use any SimpleITK
     registration configuration. ``initial_transform`` can likewise be a
     transform or a factory when it should be set by the wrapper.
+    ``moving_pre_transform`` maps fixed voxel indices into the moving grid.
+    ``fixed_spacing`` gives physical voxel sizes in SimpleITK column-first order.
+    Optimization uses physical distances. The returned transform uses voxel
+    indices, and the final output is sampled once from the original moving data.
+    ``validate_alignment`` rejects large losses of normalized mutual information
+    or signal support in the reference region. This is a heuristic sanity check.
     """
 
     sitk = _require_simpleitk()
     fixed_source = _check_spatial_array(fixed, name="fixed")
     moving_source = _check_spatial_array(moving, name="moving")
+    if max_displacement_voxels is not None and (
+        not np.isfinite(max_displacement_voxels) or max_displacement_voxels <= 0
+    ):
+        raise ValueError("The motion limit must be positive and finite")
     if fixed_source.ndim != moving_source.ndim:
         raise ValueError("fixed and moving images must have the same spatial dimensionality")
 
-    fixed_image = sitk.GetImageFromArray(_registration_array(fixed_source, name="fixed"))
-    moving_image = sitk.GetImageFromArray(_registration_array(moving_source, name="moving"))
+    fixed_image = sitk.GetImageFromArray(
+        _registration_array(fixed_source, name="fixed", normalize=normalize_intensity)
+    )
+    moving_values = _registration_array(moving_source, name="moving", normalize=normalize_intensity)
+    moving_estimation_source = moving_values
+    if moving_pre_transform is not None:
+        moving_values = _resample_array_to_reference(
+            moving_values,
+            reference_image=fixed_image,
+            transform=moving_pre_transform,
+            interpolator="linear",
+            default_value=0,
+        )
+        if moving_mask is not None:
+            if np.shape(moving_mask) != moving_source.shape:
+                raise ValueError("The moving mask must match its source image grid")
+            moving_mask = (
+                _resample_array_to_reference(
+                    np.asarray(moving_mask, dtype=np.float32),
+                    reference_image=fixed_image,
+                    transform=moving_pre_transform,
+                    interpolator="nearest",
+                    default_value=0,
+                )
+                > 0.5
+            )
+    moving_image = sitk.GetImageFromArray(moving_values)
+    output_reference = sitk.Image(fixed_image)
+    scale = None
+    if fixed_spacing is not None:
+        spacing = tuple(float(value) for value in fixed_spacing)
+        if len(spacing) != fixed_source.ndim or not np.isfinite(spacing).all() or min(spacing) <= 0:
+            raise ValueError(
+                "Registration spacing needs one positive finite value per spatial axis"
+            )
+        fixed_image.SetSpacing(spacing)
+        moving_image.SetSpacing(spacing)
+        scale = sitk.ScaleTransform(fixed_source.ndim, spacing)
     method = _registration_method(
         registration_method,
         sitk=sitk,
@@ -312,6 +392,19 @@ def register_image(
         moving_image=moving_image,
         in_place=transform_in_place,
     )
+    for mask, image, setter in (
+        (fixed_mask, fixed_image, method.SetMetricFixedMask),
+        (moving_mask, moving_image, method.SetMetricMovingMask),
+    ):
+        if mask is not None:
+            values = (np.asarray(mask) != 0).astype(np.uint8)
+            if values.shape != tuple(reversed(image.GetSize())) or not np.any(values):
+                raise ValueError(
+                    "Registration masks must match their image grid and contain selected pixels"
+                )
+            mask_image = sitk.GetImageFromArray(values)
+            mask_image.CopyInformation(image)
+            setter(mask_image)
 
     iteration_metrics: list[float] = []
 
@@ -321,20 +414,118 @@ def register_image(
             iteration_metrics.append(metric_value)
 
     method.AddCommand(sitk.sitkIterationEvent, _record_iteration_metric)
-    final_transform = method.Execute(fixed_image, moving_image)
+    try:
+        final_transform = method.Execute(fixed_image, moving_image)
+    except RuntimeError as exc:
+        if "All samples map outside" in str(exc) or "No valid points" in str(exc):
+            raise ValueError(
+                "Registration lost overlap. Try regular-step descent, a smaller step or a broader mask"
+            ) from exc
+        raise
+    if not np.isfinite(final_transform.GetParameters()).all():
+        raise ValueError("Registration produced non-finite transform parameters")
+    estimated_parameters = _transform_parameters(final_transform)
+    if scale is not None:
+        final_transform = sitk.CompositeTransform([scale.GetInverse(), final_transform, scale])
+    motion_check = {}
+    if max_displacement_voxels is not None:
+        if fixed_mask is not None and np.any(fixed_mask):
+            locations = np.argwhere(fixed_mask)
+            lower, upper = locations.min(axis=0), locations.max(axis=0)
+        else:
+            lower, upper = np.zeros(fixed_source.ndim), np.asarray(fixed_source.shape) - 1
+        from itertools import product
+
+        points = [
+            tuple(float(value) for value in point[::-1])
+            for point in product(*zip(lower, upper, strict=True))
+        ]
+        displacement = max(
+            float(np.linalg.norm(np.asarray(final_transform.TransformPoint(point)) - point))
+            for point in points
+        )
+        motion_check["maximum_displacement_voxels"] = displacement
+        if displacement > max_displacement_voxels:
+            raise ValueError(
+                "Estimated motion exceeds the selected motion limit. Review the images and adjust the limit if needed"
+            )
+    if moving_pre_transform is not None:
+        final_transform = sitk.CompositeTransform([moving_pre_transform, final_transform])
+    coverage = _resample_array_to_reference(
+        np.ones(moving_source.shape, dtype=np.float32),
+        reference_image=output_reference,
+        transform=final_transform,
+        interpolator="nearest",
+        default_value=0,
+    )
+    region = (
+        np.ones(fixed_source.shape, dtype=bool)
+        if fixed_mask is None
+        else np.asarray(fixed_mask, dtype=bool)
+    )
+    if not np.any((coverage > 0.5) & region):
+        raise ValueError(
+            "Registration lost image overlap. Choose another reference or restrict the transform"
+        )
     corrected = _resample_array_to_reference(
         moving_source,
-        reference_image=fixed_image,
+        reference_image=output_reference,
         transform=final_transform,
         interpolator=interpolator,
         default_value=default_value,
         output_pixel_type=output_pixel_type,
     )
+    if not np.any((coverage > 0.5) & region & np.isfinite(corrected)):
+        raise ValueError("Registration has no finite signal in the reference region")
+    alignment_check = dict(motion_check)
+    if validate_alignment:
+        fixed_normalized = _registration_array(fixed_source, name="fixed", normalize=True)
+        moving_normalized = (
+            moving_estimation_source
+            if normalize_intensity
+            else _registration_array(moving_source, name="moving", normalize=True)
+        )
+        initial = moving_pre_transform
+        if initial is None:
+            initial = sitk.TranslationTransform(
+                fixed_source.ndim,
+                ((np.asarray(moving_source.shape[::-1]) - fixed_source.shape[::-1]) / 2).tolist(),
+            )
+        before = _resample_array_to_reference(
+            moving_normalized,
+            reference_image=output_reference,
+            transform=initial,
+            interpolator="linear",
+            default_value=0,
+        )
+        after = _resample_array_to_reference(
+            moving_normalized,
+            reference_image=output_reference,
+            transform=final_transform,
+            interpolator="linear",
+            default_value=0,
+        )
+        a = _alignment_scores(fixed_normalized, before, fixed_mask)
+        b = _alignment_scores(fixed_normalized, after, fixed_mask)
+        if a is not None and b is not None:
+            alignment_check.update(
+                normalized_mi_before=a[0],
+                normalized_mi_after=b[0],
+                signal_fraction_before=a[1],
+                signal_fraction_after=b[1],
+            )
+            lost_information = b[0] < a[0] - 0.04 and b[0] < 0.8 * a[0]
+            lost_signal = a[1] > 0.4 and b[1] < 0.8 * a[1]
+            if lost_information or lost_signal:
+                raise ValueError(
+                    "Registration failed its alignment check. Try mutual information or a structural reference image"
+                )
     diagnostics = RegistrationDiagnostics(
         metric_value=_method_metric_value(method),
         optimizer_stop_condition=_method_stop_condition(method),
         iteration_metrics=tuple(iteration_metrics),
-        transform_parameters=_transform_parameters(final_transform),
+        transform_parameters=estimated_parameters,
+        alignment_check=alignment_check,
     )
     return ImageRegistrationResult(
         corrected=corrected,
@@ -381,6 +572,7 @@ def motion_correct_framestack(
     frames: np.ndarray,
     *,
     reference: ReferenceSelector = "first",
+    progress_callback: Callable[[int, int], None] | None = None,
     **registration_kwargs,
 ) -> FrameStackMotionResult:
     """Register a ``(frame, *spatial)`` stack to one reference image."""
@@ -395,6 +587,8 @@ def motion_correct_framestack(
     transforms: list[Any | None] = []
     diagnostics: list[RegistrationDiagnostics] = []
     for index, frame in enumerate(stack):
+        if progress_callback is not None:
+            progress_callback(index, len(stack))
         if reference_index == index:
             corrected.append(np.asarray(frame))
             transforms.append(None)
@@ -404,6 +598,8 @@ def motion_correct_framestack(
         corrected.append(np.asarray(result.corrected))
         transforms.append(result.transform)
         diagnostics.append(result.diagnostics)
+    if progress_callback is not None:
+        progress_callback(len(stack), len(stack))
     return FrameStackMotionResult(
         corrected=np.stack(corrected, axis=0),
         reference_image=np.asarray(reference_image),
@@ -434,7 +630,7 @@ def _normalize_registration_dimensions(
     available: tuple[str, ...],
 ) -> tuple[str, ...]:
     if dimensions is None:
-        return available
+        return tuple(name for name in available if name != "slice_package")
     selected = tuple(str(name) for name in dimensions)
     if len(set(selected)) != len(selected):
         raise ValueError("dimensions must not contain duplicates")
@@ -443,6 +639,8 @@ def _normalize_registration_dimensions(
         raise ValueError(
             f"Registration dimensions {unknown} are not non-spatial experiment dimensions {available}"
         )
+    if "slice_package" in selected:
+        raise ValueError("Slice packages have separate image grids. Select acquisition dimensions within each package")
     return tuple(name for name in available if name in selected)
 
 
@@ -461,6 +659,10 @@ def motion_correct_dataset(
     *,
     dimensions: Iterable[str] | None = None,
     reference: ReferenceSelector = "first",
+    estimation_dimensions: Iterable[str] = (),
+    progress_callback: Callable[[int, int], None] | None = None,
+    mask: np.ndarray | None = None,
+    mask_dims: Iterable[str] | None = None,
     **registration_kwargs,
 ) -> MotionCorrectionResult:
     """Motion-correct MRax dataset data while preserving experiment dimensions.
@@ -469,16 +671,21 @@ def motion_correct_dataset(
     into one frame stack in experiment order. When ``dimensions`` names a subset
     such as ``("t",)``, each combination of the remaining dimensions receives a
     separate registration stack before the corrected data is expanded back.
+    ``estimation_dimensions`` averages magnitude along selected group dimensions
+    to estimate motion. The resulting transforms resample each original image.
+    Slice packages stay independent.
     """
 
     dim_data = _dim_ordered_data(experiment, dataset)
     non_spatial = tuple(experiment.non_spatial_dim_names)
     selected = _normalize_registration_dimensions(dimensions, non_spatial)
     group_dimensions = tuple(name for name in non_spatial if name not in selected)
-    non_spatial_axis = {name: index for index, name in enumerate(non_spatial)}
+    averaged = _normalize_registration_dimensions(estimation_dimensions, group_dimensions)
+    independent = tuple(name for name in group_dimensions if name not in averaged)
+    non_spatial_axis = {name: index for index, name in enumerate(experiment.dims)}
     selected_axes = tuple(non_spatial_axis[name] for name in selected)
     group_axes = tuple(non_spatial_axis[name] for name in group_dimensions)
-    spatial_axes = tuple(range(len(non_spatial), dim_data.ndim))
+    spatial_axes = tuple(non_spatial_axis[name] for name in experiment.spatial_dim_names)
 
     permuted_axes = selected_axes + group_axes + spatial_axes
     permuted = np.transpose(dim_data, permuted_axes) if permuted_axes else dim_data
@@ -489,17 +696,119 @@ def motion_correct_dataset(
     group_count = int(np.prod(group_shape, dtype=int)) if group_shape else 1
     grouped = permuted.reshape((selected_frames, group_count) + spatial_shape)
 
+    estimation_shape = (selected_frames,) + group_shape + spatial_shape
+    estimation_data = grouped.reshape(estimation_shape)
+    if averaged:
+        axes = tuple(1 + group_dimensions.index(name) for name in averaged)
+        estimation_data = np.mean(np.abs(estimation_data), axis=axes)
+    independent_shape = tuple(experiment.dims[name] for name in independent)
+    independent_count = int(np.prod(independent_shape)) if independent_shape else 1
+    progress_total = selected_frames * (independent_count + (group_count if averaged else 0))
+    estimation_data = estimation_data.reshape((selected_frames, independent_count) + spatial_shape)
+    estimation_mask = None
+    if mask is not None:
+        from mrax.analysis import broadcast_mask
+
+        full_mask = broadcast_mask(
+            mask,
+            experiment.shape,
+            mask_dims=tuple(mask_dims) if mask_dims is not None else experiment.spatial_dim_names,
+            target_dims=tuple(experiment.dims),
+        )
+        estimation_mask = np.transpose(full_mask, permuted_axes).reshape(estimation_shape)
+        if averaged:
+            estimation_mask = np.any(
+                estimation_mask, axis=tuple(1 + group_dimensions.index(name) for name in averaged)
+            )
+        estimation_mask = estimation_mask.reshape(
+            (selected_frames, independent_count) + spatial_shape
+        )
     groups: list[FrameStackMotionResult] = []
-    for group_index in range(group_count):
+    for group_index in range(independent_count):
+
+        def report(index, count, group_index=group_index):
+            if progress_callback is not None:
+                progress_callback(group_index * count + index, progress_total)
+
+        group_options = dict(registration_kwargs)
+        geometry = dataset.spatial_geometry
+        if geometry is not None:
+            coordinates = (
+                dict(
+                    zip(independent, np.unravel_index(group_index, independent_shape), strict=True)
+                )
+                if independent
+                else {}
+            )
+            reference_frame = (
+                int(reference)
+                if isinstance(reference, (int, np.integer))
+                and 0 <= int(reference) < selected_frames
+                else 0
+            )
+            if selected_shape:
+                coordinates.update(
+                    zip(selected, np.unravel_index(reference_frame, selected_shape), strict=True)
+                )
+            spacing = geometry.for_frame(geometry.frame_index(coordinates)).voxel_sizes
+            if spacing is not None and len(spacing) == len(spatial_shape):
+                group_options.setdefault("fixed_spacing", tuple(reversed(spacing)))
+        if estimation_mask is not None:
+            masks = estimation_mask[:, group_index]
+            if isinstance(reference, (int, np.integer)):
+                fixed = masks[int(reference)]
+            elif isinstance(reference, str) and reference.lower() in {"first", "frame0"}:
+                fixed = masks[0]
+            else:
+                fixed = np.any(masks, axis=0)
+            group_options["fixed_mask"] = fixed
         groups.append(
             motion_correct_framestack(
-                grouped[:, group_index, ...],
+                estimation_data[:, group_index, ...],
                 reference=reference,
-                **registration_kwargs,
+                progress_callback=report,
+                **group_options,
             )
         )
 
-    corrected_grouped = np.stack([group.corrected for group in groups], axis=1)
+    if not averaged:
+        corrected_grouped = np.stack([group.corrected for group in groups], axis=1)
+    else:
+        corrected_grouped = np.empty(grouped.shape, dtype=np.result_type(grouped.dtype, np.float32))
+        for group_index in range(group_count):
+            coordinates = dict(
+                zip(group_dimensions, np.unravel_index(group_index, group_shape), strict=True)
+            )
+            independent_index = (
+                int(
+                    np.ravel_multi_index(
+                        tuple(coordinates[name] for name in independent), independent_shape
+                    )
+                )
+                if independent
+                else 0
+            )
+            fitted = groups[independent_index]
+            for frame, transform in enumerate(fitted.transforms):
+                corrected_grouped[frame, group_index] = (
+                    grouped[frame, group_index]
+                    if transform is None
+                    else resample_image(
+                        grouped[frame, group_index],
+                        fitted.reference_image,
+                        transform,
+                        interpolator=registration_kwargs.get("interpolator", "linear"),
+                        default_value=registration_kwargs.get("default_value", 0.0),
+                    )
+                )
+                if progress_callback is not None:
+                    progress_callback(
+                        selected_frames * independent_count
+                        + group_index * selected_frames
+                        + frame
+                        + 1,
+                        progress_total,
+                    )
     corrected_permuted = corrected_grouped.reshape(selected_shape + group_shape + spatial_shape)
     if permuted_axes:
         inverse_axes = tuple(np.argsort(permuted_axes))
@@ -507,17 +816,18 @@ def motion_correct_dataset(
     else:
         corrected_dim_data = corrected_permuted
     group_indices = tuple(
-        tuple(int(value) for value in np.unravel_index(index, group_shape))
-        if group_shape
+        tuple(int(value) for value in np.unravel_index(index, independent_shape))
+        if independent_shape
         else ()
-        for index in range(group_count)
+        for index in range(independent_count)
     )
     return MotionCorrectionResult(
         dataset=_clone_dataset(dataset, corrected_dim_data),
         dimensions=selected,
-        group_dimensions=group_dimensions,
+        group_dimensions=independent,
         group_indices=group_indices,
         groups=tuple(groups),
+        estimation_dimensions=averaged,
     )
 
 

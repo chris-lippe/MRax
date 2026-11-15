@@ -1,0 +1,36 @@
+{
+  "format": "mrax.workflow",
+  "kind": "denoising",
+  "mrax_version": "0.4.0",
+  "name": "Light spatial smoothing",
+  "description": "Gaussian smoothing with a width of 0.6 voxels.",
+  "bindings": [],
+  "steps": [
+    {
+      "id": "smooth",
+      "operation": "process",
+      "version": 1,
+      "enabled": true,
+      "settings": {
+        "method": "gaussian",
+        "input": "image",
+        "scope": "dataset",
+        "parameters": {
+          "sigma": 0.6,
+          "preserve_nan": true,
+          "mode": "reflect",
+          "complex_mode": "real_imag"
+        }
+      }
+    }
+  ],
+  "extensions": {
+    "org.mrax.preset": {
+      "requirements": [
+        "Images with one to three spatial dimensions.",
+        "All spatial axes are filtered. Acquisition dimensions and slice packages stay independent.",
+        "Review the smoothing width for anisotropic voxels."
+      ]
+    }
+  }
+}

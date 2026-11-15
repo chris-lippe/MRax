@@ -69,7 +69,16 @@ class WorkflowLibraryEntry(Command):
     origin: dict[str, str] | None
 
 
+class WorkflowPreset(Command):
+    id: str
+    document: WorkflowDocument
+    requirements: list[str]
+
+
 def register_workflow_routes(app, get_record, check_revision):
+    from mrax.workflow_presets import workflow_presets
+
+    presets = {row["id"]: row for row in workflow_presets()}
     library = {}
     lock = threading.RLock()
 
@@ -85,7 +94,7 @@ def register_workflow_routes(app, get_record, check_revision):
         return row
 
     def add(document, *, suggested=None, origin=None):
-        dumps_workflow(document)
+        document = loads_workflow(dumps_workflow(document))
         with lock:
             if len(library) >= 128:
                 raise ValueError("Remove a session workflow before adding another")
@@ -105,6 +114,16 @@ def register_workflow_routes(app, get_record, check_revision):
         with lock:
             return copy.deepcopy(list(library.values()))
 
+    @app.get("/api/workflow-presets", response_model=list[WorkflowPreset])
+    def bundled_presets():
+        return copy.deepcopy(list(presets.values()))
+
+    @app.post("/api/workflow-presets/{key}/open", response_model=WorkflowLibraryEntry)
+    def open_preset(key: str, command: Command):
+        if key not in presets:
+            raise HTTPException(404, "Choose an available workflow preset")
+        return add(WorkflowDocument.model_validate(presets[key]["document"]))
+
     @app.post("/api/workflows", response_model=WorkflowLibraryEntry)
     def create(command: EditWorkflow):
         return add(command.document)
@@ -113,8 +132,8 @@ def register_workflow_routes(app, get_record, check_revision):
     def edit(key: str, command: EditWorkflow):
         with lock:
             row = check_workflow(key, command.revision)
-            dumps_workflow(command.document)
-            row.update(document=command.document.model_dump(), revision=row["revision"] + 1)
+            document = loads_workflow(dumps_workflow(command.document))
+            row.update(document=document.model_dump(), revision=row["revision"] + 1)
             return copy.deepcopy(row)
 
     @app.delete("/api/workflows/{key}", status_code=204)
@@ -156,7 +175,12 @@ def register_workflow_routes(app, get_record, check_revision):
             )
             origin = {
                 "workspace_id": key,
-                "experiment": record.workspace.session.selected_experiment,
+                "experiment": (
+                    (command.draft.get("options") or {}).get("moving_experiment")
+                    if command.draft.get("operation") == "register"
+                    else None
+                )
+                or record.workspace.session.selected_experiment,
             }
         return add(document, suggested=suggested, origin=origin)
 

@@ -97,7 +97,7 @@ correction or regularization choices, also compare resolution, contrast, noise,
 phase and artifacts.
 
 The browser's **Reconstruct** editor exposes the same stages and ships editable
-``.mrec`` presets. For sampled acquisitions, ``method="nufft"`` applies the NUFFT
+``.mflow`` presets. For sampled acquisitions, ``method="nufft"`` applies the NUFFT
 adjoint with optional density compensation. ``method="variational"`` solves the
 measured-sample objective using the NUFFT encoding operator. An adjoint is not an
 iterative inverse. See :doc:`workflows` for saving and sharing stage plans.

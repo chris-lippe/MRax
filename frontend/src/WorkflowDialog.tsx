@@ -7,10 +7,11 @@ import {
   printWorkflow,
   targetKey,
   waitWorkflow,
-  workflowExtensions,
+  workflowExtension,
   type WorkflowDocument,
   type WorkflowEntry,
   type WorkflowKind,
+  type WorkflowPreset,
   type WorkflowTarget,
 } from './reusableWorkflows';
 
@@ -26,8 +27,12 @@ export function WorkflowDialog({
   onUpdated: (operation?: string) => Promise<void>;
 }) {
   const choose = useFileSystem();
-  const [kind, setKind] = useState(request.kind);
+  const [kind, setKind] = useState<WorkflowKind | 'all'>(request.kind);
+  const [source, setSource] = useState<'presets' | 'session'>('presets');
   const [library, setLibrary] = useState<WorkflowEntry[]>([]);
+  const [presets, setPresets] = useState<WorkflowPreset[]>([]);
+  const [preset, setPreset] = useState<WorkflowPreset | null>(null);
+  const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<WorkflowEntry | null>(null);
   const [text, setText] = useState('');
   const [definition, setDefinition] = useState(false);
@@ -49,7 +54,13 @@ export function WorkflowDialog({
   const cancel = useRef(false);
   const dirty = Boolean(selected && text !== printWorkflow(selected.document));
   const entry = selected?.document;
-  const visible = library.filter((item) => item.document.kind === kind);
+  const matches = (item: { document: WorkflowDocument }) =>
+    (kind === 'all' || item.document.kind === kind) &&
+    (item.document.name + ' ' + item.document.description)
+      .toLocaleLowerCase()
+      .includes(search.trim().toLocaleLowerCase());
+  const visible = library.filter(matches);
+  const visiblePresets = presets.filter(matches);
   let fields: Partial<WorkflowDocument> = {};
   try {
     const parsed: unknown = JSON.parse(text);
@@ -63,6 +74,7 @@ export function WorkflowDialog({
     const controller = new AbortController();
     void Promise.all([
       api<WorkflowEntry[]>('/api/workflows', 'GET', undefined, controller.signal),
+      api<WorkflowPreset[]>('/api/workflow-presets', 'GET', undefined, controller.signal),
       api<WorkflowTarget[]>('/api/workflow-targets', 'GET', undefined, controller.signal),
       api<{ devices: { id: string; label: string }[] }>(
         '/api/catalog',
@@ -71,9 +83,19 @@ export function WorkflowDialog({
         controller.signal,
       ),
     ])
-      .then(([library, targets, catalog]) => {
+      .then(([library, presets, targets, catalog]) => {
         if (!stopped) {
           setLibrary(library);
+          setPresets(presets);
+          const saved = library.find((item) => item.document.kind === request.kind);
+          if (saved) {
+            setSource('session');
+            select(saved);
+          } else {
+            setPreset(
+              presets.find((item) => item.document.kind === request.kind) ?? presets[0] ?? null,
+            );
+          }
           setTargets(targets);
           setDevices(catalog.devices);
         }
@@ -88,13 +110,16 @@ export function WorkflowDialog({
       stopped = true;
       controller.abort();
     };
-  }, []);
+  }, [request.kind]);
 
   function select(item: WorkflowEntry) {
+    setPreset(null);
     setSelected(item);
     setText(printWorkflow(item.document));
-    setKind(item.document.kind);
-    if (item.document.kind !== 'processing') setMode('replace');
+    setExecute(false);
+    setMode(
+      ['denoising', 'registration', 'fitting'].includes(item.document.kind) ? 'append' : 'replace',
+    );
     setBindings({});
     setError('');
     setMessage('');
@@ -117,6 +142,9 @@ export function WorkflowDialog({
     }
   }
   function remember(item: WorkflowEntry) {
+    setSource('session');
+    setKind('all');
+    setSearch('');
     setLibrary((old) =>
       old.some((row) => row.id === item.id)
         ? old.map((row) => (row.id === item.id ? item : row))
@@ -124,14 +152,14 @@ export function WorkflowDialog({
     );
     select(item);
   }
-  async function capture() {
+  async function capture(captureKind: WorkflowKind = request.kind) {
     if (!workspace) return;
     await operation(async () =>
       remember(
         await api<WorkflowEntry>('/api/workspaces/' + workspace.id + '/workflows', 'POST', {
           revision: workspace.revision,
-          kind,
-          draft: kind === request.kind ? (request.draft ?? {}) : {},
+          kind: captureKind,
+          draft: captureKind === request.kind ? (request.draft ?? {}) : {},
         }),
       ),
     );
@@ -140,7 +168,7 @@ export function WorkflowDialog({
     const file = await choose({
       title: 'Open workflow',
       mode: 'file',
-      extensions: Object.values(workflowExtensions),
+      extensions: [workflowExtension],
     });
     if (file)
       await operation(async () =>
@@ -158,7 +186,11 @@ export function WorkflowDialog({
       revision: selected.revision,
       content: text,
     });
-    remember(updated);
+    setLibrary((old) => old.map((item) => (item.id === updated.id ? updated : item)));
+    setSelected(updated);
+    setText(printWorkflow(updated.document));
+    setDefinition(false);
+    setReport([]);
     return updated;
   }
   async function saveFile() {
@@ -175,8 +207,8 @@ export function WorkflowDialog({
             .map((character) => (character.charCodeAt(0) < 32 ? '-' : character))
             .join('')
             .replace(/[<>:"/\\|?*]/g, '-')
-            .slice(0, 100) + workflowExtensions[item.document.kind],
-        extensions: [workflowExtensions[item.document.kind]],
+            .slice(0, 100) + workflowExtension,
+        extensions: [workflowExtension],
       });
       if (!file) return;
       await api('/api/workflows/' + item.id + '/save-file', 'POST', {
@@ -224,48 +256,60 @@ export function WorkflowDialog({
       setError('Fix the JSON definition before editing these fields.');
     }
   }
+  async function checkedApplications() {
+    if (!selected || dirty) throw new Error('Keep workflow changes before checking inputs.');
+    const groups = targets
+      .map((study) => ({
+        study,
+        experiments: study.experiments
+          .filter((row) => selection.includes(targetKey(study.workspace_id, row.experiment)))
+          .map((row) => row.experiment),
+      }))
+      .filter((row) => row.experiments.length);
+    if (!groups.length) throw new Error('Select at least one target experiment.');
+    const commands = groups.map(({ study, experiments }) => ({
+      revision: study.revision,
+      workflow_revision: selected.revision,
+      experiments,
+      bindings: Object.fromEntries(
+        experiments.map((experiment) => [experiment, mapping(study, experiment)]),
+      ),
+      mode,
+      run: entry?.kind === 'fitting' ? execute : true,
+      device,
+    }));
+    const problems: string[] = [];
+    for (const [index, { study }] of groups.entries()) {
+      const checks = await api<{
+        targets: { experiment: string; ready: boolean; errors: string[] }[];
+      }>(
+        '/api/workspaces/' + study.workspace_id + '/workflows/' + selected.id + '/validate',
+        'POST',
+        commands[index],
+      );
+      for (const row of checks.targets)
+        if (!row.ready)
+          problems.push(study.label + ' / ' + row.experiment + ': ' + row.errors.join('. '));
+    }
+    if (problems.length) {
+      setReport(problems);
+      throw new Error('Resolve target compatibility and input assignments before applying.');
+    }
+    return { groups, commands };
+  }
+  async function checkInputs() {
+    setReport([]);
+    await operation(async () => {
+      await checkedApplications();
+      setMessage('Inputs are ready for the selected experiments.');
+    });
+  }
   async function apply() {
     if (!selected || dirty) return;
     cancel.current = false;
     setReport([]);
     await operation(async () => {
-      const groups = targets
-        .map((study) => ({
-          study,
-          experiments: study.experiments
-            .filter((row) => selection.includes(targetKey(study.workspace_id, row.experiment)))
-            .map((row) => row.experiment),
-        }))
-        .filter((row) => row.experiments.length);
-      if (!groups.length) throw new Error('Select at least one target experiment.');
-      const commands = groups.map(({ study, experiments }) => ({
-        revision: study.revision,
-        workflow_revision: selected.revision,
-        experiments,
-        bindings: Object.fromEntries(
-          experiments.map((experiment) => [experiment, mapping(study, experiment)]),
-        ),
-        mode,
-        run: entry?.kind === 'fitting' ? execute : true,
-        device,
-      }));
-      const problems: string[] = [];
-      for (const [index, { study }] of groups.entries()) {
-        const checks = await api<{
-          targets: { experiment: string; ready: boolean; errors: string[] }[];
-        }>(
-          '/api/workspaces/' + study.workspace_id + '/workflows/' + selected.id + '/validate',
-          'POST',
-          commands[index],
-        );
-        for (const row of checks.targets)
-          if (!row.ready)
-            problems.push(study.label + ' / ' + row.experiment + ': ' + row.errors.join('. '));
-      }
-      if (problems.length) {
-        setReport(problems);
-        throw new Error('Resolve target compatibility and input assignments before applying.');
-      }
+      const { groups, commands } = await checkedApplications();
       let changed = false;
       try {
         for (const [index, { study, experiments }] of groups.entries()) {
@@ -314,6 +358,11 @@ export function WorkflowDialog({
         <Dialog.Overlay className="drawer-overlay" />
         <Dialog.Content
           className="workflow-dialog"
+          onChangeCapture={() => {
+            setError('');
+            setMessage('');
+            setReport([]);
+          }}
           onEscapeKeyDown={(event) => {
             if (working) event.preventDefault();
           }}
@@ -334,65 +383,135 @@ export function WorkflowDialog({
             </Dialog.Close>
           </div>
           <Dialog.Description>
-            Capture settings, apply them to open experiments, or save a workflow file for another
-            session.
+            Choose a preset, capture settings or open a workflow file.
           </Dialog.Description>
           <div className="workflow-library-layout">
-            <nav className="workflow-library" aria-label="Session workflow library">
+            <nav className="workflow-library" aria-label="Workflow library">
+              <div
+                className="button-row workflow-library-source"
+                role="group"
+                aria-label="Library source"
+              >
+                <button
+                  className="secondary"
+                  aria-pressed={source === 'presets'}
+                  disabled={busy || dirty}
+                  onClick={() => setSource('presets')}
+                >
+                  Presets
+                </button>
+                <button
+                  className="secondary"
+                  aria-pressed={source === 'session'}
+                  disabled={busy || dirty}
+                  onClick={() => setSource('session')}
+                >
+                  Session
+                </button>
+              </div>
               <label>
-                Workflow kind
+                Show workflows
                 <select
-                  aria-label="Workflow kind"
+                  aria-label="Workflow category"
                   value={kind}
                   disabled={busy || dirty}
                   onChange={(event) => {
-                    setKind(event.target.value as WorkflowKind);
+                    setKind(event.target.value as WorkflowKind | 'all');
                     setSelected(null);
+                    setPreset(null);
                   }}
                 >
-                  <option value="processing">Processing (.mpip)</option>
-                  <option value="reconstruction">Reconstruction (.mrec)</option>
-                  <option value="fitting">Fitting (.mfit)</option>
+                  <option value="all">All workflows</option>
+                  <option value="processing">Processing and analysis</option>
+                  <option value="reconstruction">Reconstruction</option>
+                  <option value="denoising">Denoising</option>
+                  <option value="registration">Registration</option>
+                  <option value="fitting">Fitting</option>
                 </select>
               </label>
-              <button
-                className="secondary"
-                disabled={busy || dirty || !workspace?.loaded}
-                onClick={() => void capture()}
+              <label>
+                Search workflows
+                <input
+                  type="search"
+                  value={search}
+                  disabled={busy || dirty}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </label>
+              <ul
+                className="workflow-library-list"
+                aria-label={source === 'presets' ? 'Built-in presets' : 'Session workflows'}
               >
-                <WorkbenchIcon name="add" />
-                Capture current {kind === 'processing' ? 'pipeline' : 'configuration'}
-              </button>
-              <button
-                className="secondary"
-                disabled={busy || dirty}
-                onClick={() => void openFile()}
-              >
-                <WorkbenchIcon name="open" />
-                Open workflow file
-              </button>
-              <p className="control-note">Session workflows</p>
-              <ul>
-                {visible.map((item) => (
-                  <li key={item.id}>
-                    <button
-                      className="workflow-library-item"
-                      aria-current={selected?.id === item.id ? 'true' : undefined}
-                      disabled={busy || dirty}
-                      onClick={() => select(item)}
-                    >
-                      {item.document.name}
-                      <small>
-                        {item.document.steps.length}{' '}
-                        {item.document.steps.length === 1 ? 'step' : 'steps'}
-                      </small>
-                    </button>
-                  </li>
-                ))}
+                {source === 'presets'
+                  ? visiblePresets.map((item) => (
+                      <li key={item.id}>
+                        <button
+                          className="workflow-library-item"
+                          aria-current={preset?.id === item.id ? 'true' : undefined}
+                          disabled={busy || dirty}
+                          onClick={() => {
+                            setSelected(null);
+                            setPreset(item);
+                            setError('');
+                            setMessage('');
+                            setReport([]);
+                          }}
+                        >
+                          {item.document.name}
+                          <small>{item.document.kind}</small>
+                        </button>
+                      </li>
+                    ))
+                  : visible.map((item) => (
+                      <li key={item.id}>
+                        <button
+                          className="workflow-library-item"
+                          aria-current={selected?.id === item.id ? 'true' : undefined}
+                          disabled={busy || dirty}
+                          onClick={() => select(item)}
+                        >
+                          {item.document.name}
+                          <small>
+                            {item.document.steps.length}{' '}
+                            {item.document.steps.length === 1 ? 'step' : 'steps'}
+                          </small>
+                        </button>
+                      </li>
+                    ))}
               </ul>
-              {!visible.length && (
-                <p className="hint">Capture an applied pipeline or open a saved file.</p>
+              {!(source === 'presets' ? visiblePresets : visible).length && (
+                <p className="hint">
+                  No matching {source === 'presets' ? 'presets' : 'session workflows'}.
+                </p>
               )}
+              <div className="workflow-library-actions">
+                <button
+                  className="secondary"
+                  disabled={busy || dirty || !workspace?.loaded}
+                  onClick={() => void capture()}
+                >
+                  <WorkbenchIcon name="add" />
+                  Capture current {request.kind === 'processing' ? 'pipeline' : 'configuration'}
+                </button>
+                {request.kind !== 'processing' && (
+                  <button
+                    className="secondary"
+                    disabled={busy || dirty || !workspace?.loaded}
+                    onClick={() => void capture('processing')}
+                  >
+                    <WorkbenchIcon name="pipeline" />
+                    Capture current pipeline
+                  </button>
+                )}
+                <button
+                  className="secondary"
+                  disabled={busy || dirty}
+                  onClick={() => void openFile()}
+                >
+                  <WorkbenchIcon name="open" />
+                  Open workflow file
+                </button>
+              </div>
             </nav>
             <div className="workflow-library-content">
               {entry ? (
@@ -414,9 +533,10 @@ export function WorkflowDialog({
                     </button>
                   </div>
                   <p className="control-note">
-                    {workflowExtensions[entry.kind]} · format {entry.format_version} · MRax{' '}
-                    {entry.mrax_version}
+                    {workflowExtension} · MRax {entry.mrax_version}
                   </p>
+                  {entry.description && <p>{entry.description}</p>}
+                  <WorkflowRequirements document={entry} />
                   {definition ? (
                     <section aria-label="Workflow editor">
                       <label>
@@ -431,9 +551,8 @@ export function WorkflowDialog({
                         />
                       </label>
                       <p className="hint">
-                        UTF-8 JSON · format {entry.format_version} · recorded with MRax{' '}
-                        {entry.mrax_version}. Resource bindings are assigned on the target, outside
-                        the file.
+                        UTF-8 JSON · MRax {entry.mrax_version}. Resource bindings are assigned on
+                        the target, outside the file.
                       </p>
                     </section>
                   ) : (
@@ -575,7 +694,7 @@ export function WorkflowDialog({
                         ))}
                       </section>
                       <div className="workflow-apply-options">
-                        {entry.kind === 'processing' && (
+                        {['processing', 'registration', 'denoising'].includes(entry.kind) && (
                           <label>
                             Existing processing
                             <select
@@ -601,8 +720,12 @@ export function WorkflowDialog({
                             Run fits after loading configuration
                           </label>
                         )}
-                        {(entry.kind === 'reconstruction' ||
-                          (entry.kind === 'fitting' && execute)) && (
+                        {entry.steps.some(
+                          (step) =>
+                            step.enabled &&
+                            (step.operation === 'reconstruct' ||
+                              (step.operation === 'fit' && (entry.kind !== 'fitting' || execute))),
+                        ) && (
                           <label>
                             Compute device
                             <select
@@ -624,11 +747,11 @@ export function WorkflowDialog({
                         )}
                       </div>
                       <p className="hint">
-                        {entry.kind === 'processing'
-                          ? 'Reconstruction and existing fit maps are retained. Replace starts from the source data. Append starts from the current pipeline output.'
-                          : entry.kind === 'reconstruction'
-                            ? 'Reconstruction is replaced. Existing processing is reapplied. Fit maps are retained.'
-                            : 'Fitting uses the current processing state. Maps are replaced only when fits run.'}
+                        {entry.kind === 'reconstruction'
+                          ? 'Reconstruction is replaced. Later processing is reapplied. Fit maps are retained.'
+                          : entry.kind === 'fitting'
+                            ? 'Fitting uses the current images. Results are stored as named maps.'
+                            : 'Replace starts from imported images. Append continues the current pipeline. Existing fit maps are retained.'}
                       </p>
                     </>
                   )}
@@ -649,33 +772,62 @@ export function WorkflowDialog({
                       <button
                         className="secondary"
                         disabled={busy}
-                        onClick={() => setText(printWorkflow(entry))}
+                        onClick={() => {
+                          setText(printWorkflow(entry));
+                          setError('');
+                          setMessage('');
+                          setReport([]);
+                        }}
                       >
                         Discard workflow edits
                       </button>
                     </div>
                   )}
-                  {!definition && (
-                    <button
-                      className="primary"
-                      disabled={busy || dirty || !selection.length}
-                      onClick={() => void apply()}
-                    >
-                      {entry.kind === 'fitting'
-                        ? execute
-                          ? 'Run fitting workflow'
-                          : 'Apply fitting configuration'
-                        : entry.kind === 'reconstruction'
-                          ? 'Apply reconstruction workflow'
-                          : 'Apply processing workflow'}
-                    </button>
-                  )}
                 </>
+              ) : preset ? (
+                <section aria-label="Preset preview">
+                  <h3>{preset.document.name}</h3>
+                  <p>{preset.document.description}</p>
+                  <h4>Input requirements</h4>
+                  <ul>
+                    {preset.requirements.map((requirement) => (
+                      <li key={requirement}>{requirement}</li>
+                    ))}
+                  </ul>
+                  <ol className="workflow-step-list">
+                    {preset.document.steps.map((step, index) => (
+                      <li key={step.id}>
+                        {index + 1}.{' '}
+                        {step.operation === 'process'
+                          ? String(step.settings.method)
+                          : step.operation}
+                      </li>
+                    ))}
+                  </ol>
+                  <button
+                    className="primary"
+                    disabled={busy}
+                    onClick={() =>
+                      void operation(async () => {
+                        remember(
+                          await api<WorkflowEntry>(
+                            '/api/workflow-presets/' + preset.id + '/open',
+                            'POST',
+                            {},
+                          ),
+                        );
+                        setMessage(
+                          'Preset copied to this session. Review its settings and inputs.',
+                        );
+                      })
+                    }
+                  >
+                    Use preset
+                  </button>
+                </section>
               ) : (
                 <p className="workflow-library-empty">
-                  Capture the current{' '}
-                  {kind === 'processing' ? 'processing pipeline' : kind + ' configuration'}, or open
-                  a saved workflow.
+                  Choose a built-in preset or a session workflow from the library.
                 </p>
               )}
             </div>
@@ -726,6 +878,26 @@ export function WorkflowDialog({
                 Remove from session
               </button>
             )}
+            {entry && !definition && (
+              <>
+                <button
+                  className="secondary"
+                  disabled={busy || dirty || !selection.length}
+                  onClick={() => void checkInputs()}
+                >
+                  Check inputs
+                </button>
+                <button
+                  className="primary"
+                  disabled={busy || dirty || !selection.length}
+                  onClick={() => void apply()}
+                >
+                  {entry.kind === 'fitting' && !execute
+                    ? 'Load fitting settings'
+                    : 'Apply workflow'}
+                </button>
+              </>
+            )}
             <Dialog.Close className="secondary" disabled={working || dirty}>
               Done
             </Dialog.Close>
@@ -733,5 +905,25 @@ export function WorkflowDialog({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+function WorkflowRequirements({ document }: { document: WorkflowDocument }) {
+  const metadata = document.extensions['org.mrax.preset'];
+  const requirements =
+    metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>).requirements
+      : undefined;
+  if (!Array.isArray(requirements) || !requirements.every((value) => typeof value === 'string'))
+    return null;
+  return (
+    <details className="control-advanced">
+      <summary>Input requirements</summary>
+      <ul>
+        {requirements.map((value) => (
+          <li key={value}>{value}</li>
+        ))}
+      </ul>
+    </details>
   );
 }

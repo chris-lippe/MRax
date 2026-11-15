@@ -14,14 +14,22 @@ def block_document(workspace, kind, options):
     expected = "reconstruction" if kind == "reconstruct" else "fitting"
     if "workflow" in options:
         raw = options["workflow"]
-        if not isinstance(raw, dict) or raw.get("kind") != expected:
+        if not isinstance(raw, dict):
             raise ValueError(f"Choose a {expected} workflow for this block")
         document = WorkflowDocument.model_validate(raw)
+        if len(document.steps) != 1 or document.steps[0].operation != kind:
+            raise ValueError(f"Choose a workflow with one {expected} block")
         bindings = options.get("bindings", {})
         if not isinstance(bindings, dict) or set(bindings) != {b.id for b in document.bindings}:
             raise ValueError("Assign every workflow input to this experiment")
         if any(not isinstance(value, str) or not value for value in bindings.values()):
             raise ValueError("Choose an available resource for every workflow input")
+        target = document.steps[0].target
+        if target is not None and bindings[target["$binding"]] not in {
+            "$target",
+            workspace.session.selected_experiment,
+        }:
+            raise ValueError("This block targets another experiment. Apply it from Workflows")
     else:
         draft = copy.deepcopy(options)
         if kind == "reconstruct" and not draft.get("pipeline"):
@@ -99,7 +107,10 @@ def capture_block_bindings(document, mapping, bind, target):
             experiment = assign(parent)["$binding"]
         value = mapping[binding.id]
         assignments[binding.id] = bind(
-            binding.kind, target if value == "$target" else value, experiment=experiment
+            binding.kind,
+            target if value == "$target" else value,
+            experiment=experiment,
+            label=binding.label,
         )
         return assignments[binding.id]
 
@@ -190,7 +201,7 @@ def run_fitting_block(workspace, step, progress):
                 or {
                     key: value
                     for key, value in pipeline["source"].items()
-                    if key in {"dims", "geometry", "unit"}
+                    if key in {"dims", "geometry", "unit", "space"}
                 }
             ),
             "pipeline_steps": [],

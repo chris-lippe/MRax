@@ -1,10 +1,9 @@
 {
   "format": "mrax.workflow",
-  "format_version": 1,
   "kind": "reconstruction",
   "mrax_version": "0.4.0",
-  "name": "Gridded Fourier",
-  "description": "Kaiser–Bessel gridding and inverse Fourier reconstruction for non-Cartesian acquisitions.",
+  "name": "Variational",
+  "description": "Measured-sample reconstruction with total-variation regularization and FISTA.",
   "bindings": [],
   "steps": [
     {
@@ -16,8 +15,8 @@
         "component": "magnitude",
         "pipeline": {
           "schema_version": 1,
-          "name": "Gridded Fourier",
-          "encoding": "sampled",
+          "name": "Variational",
+          "encoding": "any",
           "stages": [
             {
               "kind": "profile_inversion",
@@ -50,16 +49,27 @@
               "options": {}
             },
             {
-              "kind": "gridding",
+              "kind": "partial_fourier",
               "enabled": true,
-              "when": "always",
+              "when": "configured",
               "options": {}
             },
             {
-              "kind": "fft",
+              "kind": "gridding",
+              "enabled": true,
+              "when": "sampled",
+              "options": {}
+            },
+            {
+              "kind": "variational",
               "enabled": true,
               "when": "always",
-              "options": {}
+              "options": {
+                "num_steps": 50,
+                "regularizer": "tv",
+                "regularizer_weight": 0.01,
+                "optimizer_name": "fista"
+              }
             },
             {
               "kind": "format",

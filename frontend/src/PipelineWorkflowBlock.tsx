@@ -38,7 +38,7 @@ export function PipelineWorkflowBlock({
   const [fileBusy, setFileBusy] = useState(false);
   const choose = useFileSystem();
   const expected = kind === 'reconstruct' ? 'reconstruction' : 'fitting';
-  const extension = kind === 'reconstruct' ? '.mrec' : '.mfit';
+  const extension = kind === 'reconstruct' ? '.mflow' : '.mflow';
   useEffect(() => {
     let cancelled = false;
     void Promise.all([

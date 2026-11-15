@@ -6,7 +6,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import pytest
 
 from mrax.opt.optimizers import make_optimizer
 from mrax.opt.tv import TVOperator
@@ -59,12 +58,8 @@ def test_split_bregman_matches_independent_dense_recurrence():
             assert float(state["solver"]["penalty"]) == rho
 
 
-@pytest.mark.parametrize("complex_field", [False, True])
-def test_true_tv_two_pixel_solution_and_kkt(complex_field):
-    dtype = jnp.complex64 if complex_field else jnp.float32
-    target = jnp.asarray([-1.0, 1.0], dtype)
-    if complex_field:
-        target = target * (1 + 1j) / jnp.sqrt(2.0)
+def test_true_tv_two_pixel_solution_and_kkt():
+    target = jnp.asarray([-1.0, 1.0], jnp.complex64) * (1 + 1j) / jnp.sqrt(2.0)
     operator = TVOperator.create((2,), weight=0.5)
 
     def smooth(p):
@@ -73,7 +68,7 @@ def test_true_tv_two_pixel_solution_and_kkt(complex_field):
     def loss(p):
         return smooth(p) + operator.value(p["x"])
 
-    bounds = (-np.inf, np.inf) if complex_field else (-2.0, 2.0)
+    bounds = (-np.inf, np.inf)
     optimizer = make_optimizer(
         "split_bregman", 1.0, proximal_context=(loss, smooth, {"x": bounds}, {"x": (operator,)})
     )

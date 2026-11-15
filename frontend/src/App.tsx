@@ -927,6 +927,7 @@ export function App() {
     await task(async () => {
       const w = current.current;
       if (!w) return;
+      setJob(null);
       setJob(
         await api<Job>(`/api/workspaces/${w.id}/tasks`, 'POST', {
           revision: w.revision,
