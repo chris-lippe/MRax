@@ -107,8 +107,8 @@ def axis_coordinates(experiment, dimension, indices=None, *, geometry=None, spec
     qty = obs.get(key) if key else None
     if qty is not None:
         values = np.asarray(qty.values)
-        if values.ndim == 1 and values.size == size:
-            result = values
+        if values.ndim <= 1 and values.size == size:
+            result = values.reshape(-1)
         elif values.size == experiment.frame_count:
             grid = values.reshape(experiment.non_spatial_shape)
             selection = tuple(slice(None) if dim == dimension else indices.get(dim, 0)

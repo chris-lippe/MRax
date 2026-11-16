@@ -319,14 +319,17 @@ def curve_for_workspace(workspace):
         (
             (key, value)
             for key, value in experiment.observables.items()
-            if key == dimension or (getattr(value, "dims", None) and dimension in value.dims)
+            if label in {key, f"{key} ({value.si_unit})"}
         ),
         None,
     )
-    if observable is None and session.is_non_imaging:
-        observable = next(((key, value) for key, value in experiment.observables.items()
-                           if label in {key, f"{key} ({value.si_unit})"}), None)
-    if observable is None and not elapsed_time and not session.is_non_imaging and dimension not in session.spatial_dim_names:
+    if (
+        observable is None
+        and not elapsed_time
+        and not session.is_non_imaging
+        and dimension in {"frame", "t"}
+        and label == dimension
+    ):
         from mrax.gui.session import frame_axis_values
 
         frame_label, frame_axis = frame_axis_values(experiment)

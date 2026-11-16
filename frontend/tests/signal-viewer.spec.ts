@@ -11,6 +11,7 @@ import {
   openExport,
   openRoiCoordinates,
   openWorkspace,
+  selectExperiment,
   selectTheme,
   selectWorkflow,
 } from './ui';
@@ -58,7 +59,7 @@ test('scientific viewer inspects samples, customizes axes, summarizes ranges and
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await study(page);
-  const preview = page.locator('.signal-preview .curve-panel');
+  const preview = page.locator('.signal-preview .curve-panel:visible');
   const axis = preview.getByRole('combobox', { name: 'Signal x-axis', exact: true });
   const roi = preview.getByRole('combobox', { name: 'Signal ROI', exact: true });
   const initialProfile = (await current(request)).timecourse!;
@@ -219,6 +220,13 @@ values = 2 + 10 * np.exp(-((frequency - 35) / 25) ** 2)
 session.add_experiment('Spectrum', np.stack([values, 2 * values])[..., None],
     dims={'frame': 2, 'x': 65, 'y': 1}, exp_type='spectroscopy', non_imaging=True,
     data_role='spectrum', observables={'frequency': Quantity(frequency, 'Hz')})
+offsets = np.linspace(-3, 3, 7)
+session.add_experiment('Saturation sweep', np.arange(7*4*3, dtype=np.float32).reshape(1,1,7,4,3),
+    dims={'t':1,'b1':1,'offset':7,'x':4,'y':3}, exp_type='sat_trans',
+    observables={'TR':Quantity(np.linspace(300,360,7),'ms'),
+                 'freq_offsets':Quantity(offsets,'ppm'), 'sat_b1':Quantity([1],'uT'),
+                 'sat_time':Quantity(2,'s')})
+session.select_experiment('Spectrum')
 session.save_imported_study(sys.argv[1])
 `,
       spectrumFile,
@@ -264,5 +272,21 @@ session.save_imported_study(sys.argv[1])
   await expect(
     page.getByRole('status', { name: 'Signal sample values', exact: true }),
   ).toContainText('Sample 65 / 65');
+  await selectExperiment(page, 'Saturation sweep');
+  await selectWorkflow(page, 'View', 'Image display');
+  await page.getByRole('combobox', { name: 'Curve axis', exact: true }).selectOption('offset');
+  await expect(axis).toHaveValue('offset');
+  await expect(preview).toContainText('freq_offsets (ppm)');
+  const saturation = (await (await request.get('/api/workspaces')).json()).find(
+    (w: Workspace) => w.experiment === 'Saturation sweep',
+  ) as Workspace;
+  expect(saturation.timecourse!.x).toEqual([-3, -2, -1, 0, 1, 2, 3]);
+  expect(saturation.timecourse!.x_unit).toBe('ppm');
+  await axis.selectOption('b1');
+  await expect(preview).toContainText('sat_b1 (uT)');
+  await axis.selectOption('offset');
+  await selectWorkflow(page, 'View', 'Signal curves');
+  await expect(page.getByLabel('Signal profile axis', { exact: true })).toHaveValue('offset');
+  await expect(plot).toContainText('freq_offsets (ppm)');
   expect(errors).toEqual([]);
 });

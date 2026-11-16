@@ -145,6 +145,47 @@ def test_signal_profiles_use_whole_images_and_declared_spectral_coordinates(clie
     np.testing.assert_array_equal(planes["image"], processed[2])
     np.testing.assert_array_equal(record.workspace.session.image_array, processed)
 
+    saturation = client.post("/api/workspaces/new").json()
+    record = client.app.state.records[saturation["id"]]
+    offsets = np.linspace(-3, 3, 7, dtype=np.float32)
+    for repetitions, powers, unit, per_frame in ((1, 1, "ppm", False), (2, 2, "Hz", True)):
+        dims = {"t": repetitions, "b1": powers, "offset": len(offsets), "x": 4, "y": 3}
+        values = np.arange(np.prod(list(dims.values())), dtype=np.float32).reshape(tuple(dims.values()))
+        frame_count = repetitions * powers * len(offsets)
+        coordinates = np.broadcast_to(offsets, (repetitions, powers, len(offsets))).copy()
+        if per_frame:
+            coordinates += np.arange(repetitions)[:, None, None] * 0.1
+            coordinates += np.arange(powers)[None, :, None] * 0.01
+        record.workspace.session.add_experiment(
+            f"Saturation sweep {repetitions}", values, dims=dims, exp_type="sat_trans",
+            observables={
+                "TR": Quantity(np.linspace(300, 360, frame_count), "ms"),
+                "freq_offsets": Quantity(coordinates.reshape(-1) if per_frame else offsets, unit),
+                "sat_b1": Quantity(1 if powers == 1 else np.arange(1, powers + 1), "uT"),
+                "sat_time": Quantity(2, "s"),
+            },
+        )
+        record.revision += 1
+        record.info_cache.clear()
+        response = client.patch(
+            f"/api/workspaces/{saturation['id']}/view",
+            json={"revision": record.revision, "plot_axis": "offset",
+                  "indices": {"t": repetitions - 1, "b1": powers - 1, "offset": 4}},
+        )
+        assert response.status_code == 200, response.text
+        curve = response.json()["timecourse"]
+        assert curve["x_name"] == f"freq_offsets ({unit})"
+        assert curve["x_unit"] == unit
+        assert curve["dimension"] == "offset"
+        np.testing.assert_allclose(curve["x"], coordinates[-1, -1])
+        np.testing.assert_allclose(curve["observed"], values[-1, -1].mean(axis=(1, 2)))
+        curve = client.patch(
+            f"/api/workspaces/{saturation['id']}/view",
+            json={"revision": record.revision, "plot_axis": "b1"},
+        ).json()["timecourse"]
+        assert curve["x_name"] == "sat_b1 (uT)" and curve["x_unit"] == "uT"
+        np.testing.assert_array_equal(curve["x"], np.arange(1, powers + 1))
+
     timed = client.post("/api/workspaces/new").json()
     record = client.app.state.records[timed["id"]]
     values = np.arange(6 * 4 * 3, dtype=np.float32).reshape(6, 4, 3)
