@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type Options } from './api';
 import type { AnalysisProps } from './analysisTypes';
 import { JsonEditor, NumberField, Report } from './Controls';
@@ -6,6 +6,7 @@ import type { WorkflowTask } from './WorkflowNav';
 import { InspectorSection, InspectorChoice } from './InspectorSection';
 import { WorkbenchIcon } from './WorkbenchIcon';
 import { WorkflowButton } from './WorkflowButton';
+import { usePipelineOptions } from './usePipelineOptions';
 
 type RegistrationPreset = {
   key: string;
@@ -25,6 +26,7 @@ export function RegistrationControls({
   task,
   editingStep,
   openWorkflows,
+  stagePipelineOptions,
 }: AnalysisProps & { task: WorkflowTask }) {
   const [reference, setReference] = useState(''),
     [moving, setMoving] = useState(''),
@@ -50,12 +52,13 @@ export function RegistrationControls({
     [transform, setTransform] = useState(''),
     [direction, setDirection] = useState('moving_to_reference');
   const [error, setError] = useState('');
+  const edited = useRef('');
   const [driftMask, setDriftMask] = useState('');
   const [seriesMethod, setSeriesMethod] = useState('framewise');
   const [averagedDimensions, setAveragedDimensions] = useState<string[] | null>(null);
   const [presets, setPresets] = useState<RegistrationPreset[]>([]);
-  const editingAlignment =
-    editingStep?.kind === 'register' || editingStep?.kind === 'stored_registration';
+  const editingAlignment = editingStep?.kind === 'register';
+  const editingStored = editingStep?.kind === 'stored_registration';
   const editingDrift = editingStep?.kind === 'drift';
   const editOptions = editingStep ? JSON.stringify(editingStep.options) : '';
   const editKey = editingStep ? editingStep.id + editingStep.version : '';
@@ -334,316 +337,350 @@ export function RegistrationControls({
     roi_name: selectedDriftMask || null,
     step_id: editingDrift ? editingStep?.id : undefined,
   };
+  usePipelineOptions(
+    Boolean(
+      editingStep &&
+      ((editingDrift && task === 'drift') ||
+        ((editingAlignment || editingStored) && task === 'alignment')),
+    ),
+    Boolean(editKey && edited.current === editKey),
+    editingDrift
+      ? seriesOptions
+      : editingStep?.kind === 'stored_registration'
+        ? { key: transform, direction }
+        : alignmentOptions,
+    stagePipelineOptions,
+  );
   return (
-    <div className="registration-controls">
-      <WorkflowButton
-        data-tutorial="processing-workflows"
-        disabled={busy}
-        onClick={() =>
-          openWorkflows?.('registration', {
-            operation: task === 'drift' ? 'drift' : 'register',
-            options: task === 'drift' ? seriesOptions : alignmentOptions,
-          })
-        }
-      />
+    <div
+      className="registration-controls"
+      onChangeCapture={() => {
+        edited.current = editKey;
+      }}
+      onClickCapture={() => {
+        edited.current = editKey;
+      }}
+    >
+      {!editingStored && (
+        <WorkflowButton
+          data-tutorial="processing-workflows"
+          disabled={busy}
+          onClick={() =>
+            openWorkflows?.('registration', {
+              operation: task === 'drift' ? 'drift' : 'register',
+              options: task === 'drift' ? seriesOptions : alignmentOptions,
+            })
+          }
+        />
+      )}
       {error && <p role="alert">{error}</p>}
       <div className="control-layout" hidden={task !== 'alignment'}>
-        {[
-          [
-            'Reference',
-            reference,
-            setReference,
-            referenceSource,
-            setReferenceSource,
-            referenceMap,
-            setReferenceMap,
-            referenceRoi,
-            setReferenceRoi,
-          ] as const,
-          [
-            'Moving',
-            moving,
-            setMoving,
-            movingSource,
-            setMovingSource,
-            movingMap,
-            setMovingMap,
-            movingRoi,
-            setMovingRoi,
-          ] as const,
-        ].map(([label, name, setName, source, setSource, map, setMap, roi, setRoi]) => {
-          const experiment = w?.experiment_catalog.find((e) => e.name === (name || w.experiment));
-          return (
-            <InspectorSection key={label} title={label + ' image'} icon="image">
+        {!editingStored && (
+          <>
+            {[
+              [
+                'Reference',
+                reference,
+                setReference,
+                referenceSource,
+                setReferenceSource,
+                referenceMap,
+                setReferenceMap,
+                referenceRoi,
+                setReferenceRoi,
+              ] as const,
+              [
+                'Moving',
+                moving,
+                setMoving,
+                movingSource,
+                setMovingSource,
+                movingMap,
+                setMovingMap,
+                movingRoi,
+                setMovingRoi,
+              ] as const,
+            ].map(([label, name, setName, source, setSource, map, setMap, roi, setRoi]) => {
+              const experiment = w?.experiment_catalog.find(
+                (e) => e.name === (name || w.experiment),
+              );
+              return (
+                <InspectorSection key={label} title={label + ' image'} icon="image">
+                  <fieldset className="control-form" disabled={!w?.loaded || busy}>
+                    <div className="field-grid registration-image-fields">
+                      <label className="field-wide">
+                        {label} experiment
+                        <select
+                          aria-label={`${label} experiment`}
+                          disabled={editingAlignment && label === 'Moving'}
+                          value={name}
+                          onChange={(e) => {
+                            setName(e.target.value);
+                            setSource('image');
+                            setMap('');
+                            setRoi('');
+                            (label === 'Reference' ? setReferenceFrame : setMovingFrame)(0);
+                          }}
+                        >
+                          <option value="">Current experiment</option>
+                          {w?.experiments.map((v) => (
+                            <option key={v}>{v}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="registration-source">
+                        Data
+                        <select
+                          aria-label={`${label} source`}
+                          value={source}
+                          onChange={(e) => setSource(e.target.value)}
+                        >
+                          <option value="image">Image</option>
+                          <option value="reconstruction" disabled={!experiment?.has_reconstruction}>
+                            {experiment?.reconstruction_label ?? 'Reconstruction'}
+                          </option>
+                          <option value="map" disabled={!experiment?.maps.length}>
+                            Fitted map
+                          </option>
+                        </select>
+                      </label>
+                      {source === 'map' && (
+                        <label>
+                          {label} map
+                          <select
+                            aria-label={`${label} map`}
+                            value={map}
+                            onChange={(e) => setMap(e.target.value)}
+                          >
+                            <option value="">Choose map</option>
+                            {experiment?.maps.map((name) => (
+                              <option key={name}>{name}</option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {source !== 'map' && (
+                        <InspectorChoice
+                          label={`${label} image selection`}
+                          caption="Image selection"
+                          value={label === 'Reference' ? referenceAggregation : movingAggregation}
+                          choices={[
+                            ['frame', 'Single frame'],
+                            ['mean', 'Mean magnitude'],
+                            ['median', 'Median magnitude'],
+                          ]}
+                          onChange={
+                            label === 'Reference' ? setReferenceAggregation : setMovingAggregation
+                          }
+                        />
+                      )}
+                      <NumberField
+                        caption={
+                          (label === 'Reference' ? referenceAggregation : movingAggregation) ===
+                          'frame'
+                            ? 'Frame'
+                            : 'Slice/package frame'
+                        }
+                        className="registration-frame"
+                        label={`${label} frame`}
+                        value={label === 'Reference' ? referenceFrame : movingFrame}
+                        min={0}
+                        step="1"
+                        onChange={label === 'Reference' ? setReferenceFrame : setMovingFrame}
+                      />
+                      <details className="control-advanced field-wide">
+                        <summary>Metric mask{roi ? ' · ' + roi : ''}</summary>
+                        <label>
+                          {label} metric mask
+                          <select
+                            aria-label={`${label} metric mask`}
+                            value={roi}
+                            onChange={(e) => setRoi(e.target.value)}
+                          >
+                            <option value="">None</option>
+                            {experiment?.rois.map((name) => (
+                              <option key={name}>{name}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </details>
+                    </div>
+                  </fieldset>
+                </InspectorSection>
+              );
+            })}
+            <InspectorSection title="Alignment" icon="registration" className="control-wide">
               <fieldset className="control-form" disabled={!w?.loaded || busy}>
-                <div className="field-grid registration-image-fields">
-                  <label className="field-wide">
-                    {label} experiment
-                    <select
-                      aria-label={`${label} experiment`}
-                      value={name}
-                      onChange={(e) => {
-                        setName(e.target.value);
-                        setSource('image');
-                        setMap('');
-                        setRoi('');
-                        (label === 'Reference' ? setReferenceFrame : setMovingFrame)(0);
-                      }}
-                    >
-                      <option value="">Current experiment</option>
-                      {w?.experiments.map((v) => (
-                        <option key={v}>{v}</option>
-                      ))}
-                    </select>
+                {!manual && presetControls(false)}
+                <div className="field-grid">
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={volume}
+                      onChange={(e) => setVolume(e.target.checked)}
+                    />
+                    Register full spatial volume
                   </label>
-                  <label className="registration-source">
-                    Data
-                    <select
-                      aria-label={`${label} source`}
-                      value={source}
-                      onChange={(e) => setSource(e.target.value)}
-                    >
-                      <option value="image">Image</option>
-                      <option value="reconstruction" disabled={!experiment?.has_reconstruction}>
-                        {experiment?.reconstruction_label ?? 'Reconstruction'}
-                      </option>
-                      <option value="map" disabled={!experiment?.maps.length}>
-                        Fitted map
-                      </option>
-                    </select>
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={manual}
+                      onChange={(e) => setManual(e.target.checked)}
+                    />
+                    Manual affine transform
                   </label>
-                  {source === 'map' && (
-                    <label>
-                      {label} map
-                      <select
-                        aria-label={`${label} map`}
-                        value={map}
-                        onChange={(e) => setMap(e.target.value)}
-                      >
-                        <option value="">Choose map</option>
-                        {experiment?.maps.map((name) => (
-                          <option key={name}>{name}</option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  {source !== 'map' && (
+                </div>
+                {!manual && (
+                  <div className="field-grid">
                     <InspectorChoice
-                      label={`${label} image selection`}
-                      caption="Image selection"
-                      value={label === 'Reference' ? referenceAggregation : movingAggregation}
+                      label="Registration transform"
+                      caption="Transform"
+                      value={String(settings.transform ?? '')}
                       choices={[
-                        ['frame', 'Single frame'],
-                        ['mean', 'Mean magnitude'],
-                        ['median', 'Median magnitude'],
+                        ['translation', 'Translation'],
+                        ['rigid', 'Rigid'],
+                        ['similarity', 'Similarity'],
+                        ['affine', 'Affine'],
                       ]}
-                      onChange={
-                        label === 'Reference' ? setReferenceAggregation : setMovingAggregation
+                      onChange={(value) =>
+                        setSettings((previous) => ({ ...previous, transform: value }))
                       }
                     />
+                    <InspectorChoice
+                      label="Registration metric"
+                      caption="Similarity metric"
+                      value={String(settings.metric ?? '')}
+                      choices={[
+                        ['mattes_mi', 'Mutual information (Mattes)'],
+                        ['joint_histogram_mi', 'Mutual information (histogram)'],
+                        ['mean_squares', 'Mean squared difference'],
+                        ['correlation', 'Correlation'],
+                        ['ants_correlation', 'Local correlation'],
+                      ]}
+                      onChange={(value) =>
+                        setSettings((previous) => ({ ...previous, metric: value }))
+                      }
+                    />
+                    <InspectorChoice
+                      label="Registration interpolation"
+                      caption="Interpolation"
+                      value={String(settings.interpolator ?? '')}
+                      choices={[
+                        ['linear', 'Linear'],
+                        ['nearest', 'Nearest neighbour'],
+                        ['bspline', 'B-spline'],
+                      ]}
+                      onChange={(value) =>
+                        setSettings((previous) => ({ ...previous, interpolator: value }))
+                      }
+                    />
+                    <NumberField
+                      label="Registration iterations"
+                      caption="Iterations"
+                      value={Number(settings.iterations ?? 200)}
+                      min={1}
+                      step="1"
+                      onChange={(value) =>
+                        setSettings((previous) => ({ ...previous, iterations: value }))
+                      }
+                    />
+                    <NumberField
+                      label="Registration step size"
+                      caption="Step size (voxels)"
+                      value={Number(settings.learning_rate ?? 0.25)}
+                      min={0.000001}
+                      onChange={(value) =>
+                        setSettings((previous) => ({ ...previous, learning_rate: value }))
+                      }
+                    />
+                  </div>
+                )}
+                {!manual && stabilityControls(false)}
+                {!manual &&
+                  (reference || w?.experiment) !== (moving || w?.experiment) &&
+                  !['mattes_mi', 'joint_histogram_mi'].includes(String(settings.metric)) && (
+                    <p className="control-note">
+                      Correlation and squared difference work best with similar contrast. Use mutual
+                      information for different contrasts.
+                    </p>
                   )}
-                  <NumberField
-                    caption={
-                      (label === 'Reference' ? referenceAggregation : movingAggregation) === 'frame'
-                        ? 'Frame'
-                        : 'Slice/package frame'
-                    }
-                    className="registration-frame"
-                    label={`${label} frame`}
-                    value={label === 'Reference' ? referenceFrame : movingFrame}
-                    min={0}
-                    step="1"
-                    onChange={label === 'Reference' ? setReferenceFrame : setMovingFrame}
+                {manual && (
+                  <div className="field-grid">
+                    <NumberField label="Horizontal shift" value={shiftX} onChange={setShiftX} />
+                    <NumberField label="Vertical shift" value={shiftY} onChange={setShiftY} />
+                    <NumberField
+                      label="Registration rotation"
+                      value={rotation}
+                      onChange={setRotation}
+                    />
+                    <NumberField
+                      label="Horizontal scale"
+                      value={scaleX}
+                      min={0.01}
+                      onChange={setScaleX}
+                    />
+                    <NumberField
+                      label="Vertical scale"
+                      value={scaleY}
+                      min={0.01}
+                      onChange={setScaleY}
+                    />
+                  </div>
+                )}
+                {!manual && (
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(settings.normalize_intensity)}
+                      onChange={(event) =>
+                        setSettings((previous) => ({
+                          ...previous,
+                          normalize_intensity: event.target.checked,
+                        }))
+                      }
+                    />
+                    Scale intensities for estimation
+                  </label>
+                )}
+                <details className="control-advanced">
+                  <summary>Registration optimizer and metric</summary>
+                  <JsonEditor
+                    label="Registration settings"
+                    value={Object.fromEntries(
+                      Object.entries(settings).filter(
+                        ([key]) =>
+                          ![
+                            'transform',
+                            'metric',
+                            'interpolator',
+                            'normalize_intensity',
+                            'iterations',
+                            'learning_rate',
+                            'prealign_translation',
+                            'max_displacement_voxels',
+                          ].includes(key),
+                      ),
+                    )}
+                    onApply={async (value) => {
+                      setSettings((previous) => ({ ...previous, ...value }));
+                    }}
                   />
-                  <details className="control-advanced field-wide">
-                    <summary>Metric mask{roi ? ' · ' + roi : ''}</summary>
-                    <label>
-                      {label} metric mask
-                      <select
-                        aria-label={`${label} metric mask`}
-                        value={roi}
-                        onChange={(e) => setRoi(e.target.value)}
-                      >
-                        <option value="">None</option>
-                        {experiment?.rois.map((name) => (
-                          <option key={name}>{name}</option>
-                        ))}
-                      </select>
-                    </label>
-                  </details>
-                </div>
+                </details>
               </fieldset>
             </InspectorSection>
-          );
-        })}
-        <InspectorSection title="Alignment" icon="registration" className="control-wide">
-          <fieldset className="control-form" disabled={!w?.loaded || busy}>
-            {!manual && presetControls(false)}
-            <div className="field-grid">
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={volume}
-                  onChange={(e) => setVolume(e.target.checked)}
-                />
-                Register full spatial volume
-              </label>
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={manual}
-                  onChange={(e) => setManual(e.target.checked)}
-                />
-                Manual affine transform
-              </label>
+            <div className="inspector-actionbar">
+              <button
+                className="primary full"
+                disabled={!w?.loaded || busy}
+                onClick={() => void run('register', alignmentOptions)}
+              >
+                <WorkbenchIcon name="registration" />
+                Run registration
+              </button>
             </div>
-            {!manual && (
-              <div className="field-grid">
-                <InspectorChoice
-                  label="Registration transform"
-                  caption="Transform"
-                  value={String(settings.transform ?? '')}
-                  choices={[
-                    ['translation', 'Translation'],
-                    ['rigid', 'Rigid'],
-                    ['similarity', 'Similarity'],
-                    ['affine', 'Affine'],
-                  ]}
-                  onChange={(value) =>
-                    setSettings((previous) => ({ ...previous, transform: value }))
-                  }
-                />
-                <InspectorChoice
-                  label="Registration metric"
-                  caption="Similarity metric"
-                  value={String(settings.metric ?? '')}
-                  choices={[
-                    ['mattes_mi', 'Mutual information (Mattes)'],
-                    ['joint_histogram_mi', 'Mutual information (histogram)'],
-                    ['mean_squares', 'Mean squared difference'],
-                    ['correlation', 'Correlation'],
-                    ['ants_correlation', 'Local correlation'],
-                  ]}
-                  onChange={(value) => setSettings((previous) => ({ ...previous, metric: value }))}
-                />
-                <InspectorChoice
-                  label="Registration interpolation"
-                  caption="Interpolation"
-                  value={String(settings.interpolator ?? '')}
-                  choices={[
-                    ['linear', 'Linear'],
-                    ['nearest', 'Nearest neighbour'],
-                    ['bspline', 'B-spline'],
-                  ]}
-                  onChange={(value) =>
-                    setSettings((previous) => ({ ...previous, interpolator: value }))
-                  }
-                />
-                <NumberField
-                  label="Registration iterations"
-                  caption="Iterations"
-                  value={Number(settings.iterations ?? 200)}
-                  min={1}
-                  step="1"
-                  onChange={(value) =>
-                    setSettings((previous) => ({ ...previous, iterations: value }))
-                  }
-                />
-                <NumberField
-                  label="Registration step size"
-                  caption="Step size (voxels)"
-                  value={Number(settings.learning_rate ?? 0.25)}
-                  min={0.000001}
-                  onChange={(value) =>
-                    setSettings((previous) => ({ ...previous, learning_rate: value }))
-                  }
-                />
-              </div>
-            )}
-            {!manual && stabilityControls(false)}
-            {!manual &&
-              (reference || w?.experiment) !== (moving || w?.experiment) &&
-              !['mattes_mi', 'joint_histogram_mi'].includes(String(settings.metric)) && (
-                <p className="control-note">
-                  Correlation and squared difference work best with similar contrast. Use mutual
-                  information for different contrasts.
-                </p>
-              )}
-            {manual && (
-              <div className="field-grid">
-                <NumberField label="Horizontal shift" value={shiftX} onChange={setShiftX} />
-                <NumberField label="Vertical shift" value={shiftY} onChange={setShiftY} />
-                <NumberField
-                  label="Registration rotation"
-                  value={rotation}
-                  onChange={setRotation}
-                />
-                <NumberField
-                  label="Horizontal scale"
-                  value={scaleX}
-                  min={0.01}
-                  onChange={setScaleX}
-                />
-                <NumberField
-                  label="Vertical scale"
-                  value={scaleY}
-                  min={0.01}
-                  onChange={setScaleY}
-                />
-              </div>
-            )}
-            {!manual && (
-              <label className="check-label">
-                <input
-                  type="checkbox"
-                  checked={Boolean(settings.normalize_intensity)}
-                  onChange={(event) =>
-                    setSettings((previous) => ({
-                      ...previous,
-                      normalize_intensity: event.target.checked,
-                    }))
-                  }
-                />
-                Scale intensities for estimation
-              </label>
-            )}
-            <details className="control-advanced">
-              <summary>Registration optimizer and metric</summary>
-              <JsonEditor
-                label="Registration settings"
-                value={Object.fromEntries(
-                  Object.entries(settings).filter(
-                    ([key]) =>
-                      ![
-                        'transform',
-                        'metric',
-                        'interpolator',
-                        'normalize_intensity',
-                        'iterations',
-                        'learning_rate',
-                        'prealign_translation',
-                        'max_displacement_voxels',
-                      ].includes(key),
-                  ),
-                )}
-                onApply={async (value) => {
-                  setSettings((previous) => ({ ...previous, ...value }));
-                }}
-              />
-            </details>
-          </fieldset>
-        </InspectorSection>
-        <div className="inspector-actionbar">
-          <button
-            className="primary full"
-            disabled={!w?.loaded || busy}
-            onClick={() => void run('register', alignmentOptions)}
-          >
-            <WorkbenchIcon name="registration" />
-            {editingAlignment ? 'Stage registration settings' : 'Run registration'}
-          </button>
-        </div>
-        <details className="control-advanced control-wide" open={Boolean(row)}>
+          </>
+        )}
+        <details className="control-advanced control-wide" open={Boolean(row) || editingStored}>
           <summary>Stored transforms</summary>
           <InspectorSection title="Transform tools" icon="layers">
             <div className="field-grid">
@@ -696,7 +733,7 @@ export function RegistrationControls({
                     action: 'registration',
                     key: transform,
                     direction,
-                    step_id: editingAlignment ? editingStep?.id : undefined,
+                    step_id: editingAlignment || editingStored ? editingStep?.id : undefined,
                   });
                 }}
               >
@@ -1051,7 +1088,7 @@ export function RegistrationControls({
               onClick={() => void run('drift', seriesOptions)}
             >
               <WorkbenchIcon name="drift" />
-              {editingDrift ? 'Stage series settings' : 'Run series alignment'}
+              Run series alignment
             </button>
           </div>
         </fieldset>

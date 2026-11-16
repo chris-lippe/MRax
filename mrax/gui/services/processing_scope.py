@@ -56,15 +56,6 @@ def freeze_scope(session, options, dims=None):
     return options
 
 
-def target_key(options):
-    return (
-        options.get("input", "image"),
-        options.get("scope", "dataset"),
-        tuple(sorted(options.get("indices", {}).items())),
-        tuple(options.get("plane_dims", ())) if options.get("scope") == "image" else (),
-    )
-
-
 def region(session, options, dims, geometry):
     """Return a rectangular view, keeping fixed dimensions as singleton axes."""
     options = freeze_scope(session, dict(options), dims)

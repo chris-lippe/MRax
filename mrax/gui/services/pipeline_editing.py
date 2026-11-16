@@ -11,6 +11,8 @@ from .pipeline import _commit, _evaluate, _make_step, ensure_pipeline, pipeline_
 def apply_pipeline_draft(workspace, options, progress):
     candidate = clone_workspace(workspace, readonly_arrays=True)
     pipeline = ensure_pipeline(candidate)
+    if options.get("pipeline_id", pipeline["id"]) != pipeline["id"]:
+        raise ValueError("Select this pipeline before applying its draft")
     generation = options.get("base_generation")
     if type(generation) is not int or generation != pipeline["generation"]:
         raise ValueError("The pipeline changed while this draft was being edited. Reload its steps")
@@ -20,8 +22,8 @@ def apply_pipeline_draft(workspace, options, progress):
     existing = {step["id"]: step for step in pipeline["steps"]}
     result = []
     ids = set()
-    reconstruction = False
-    for index, row in enumerate(rows):
+    run_fits = set()
+    for row in rows:
         if not isinstance(row, dict) or set(row) - {
             "id",
             "source_id",
@@ -52,12 +54,6 @@ def apply_pipeline_draft(workspace, options, progress):
             raise ValueError("Choose a supported pipeline operation")
         if previous is not None and kind != previous["kind"]:
             raise ValueError("Insert a new step to change its operation type")
-        if kind == "reconstruct":
-            if reconstruction or index != 0:
-                raise ValueError(
-                    "Image reconstruction defines the source and must occur once, first"
-                )
-            reconstruction = True
         settings = row.get("options")
         enabled = row.get("enabled")
         if not isinstance(settings, dict) or type(enabled) is not bool:
@@ -85,13 +81,19 @@ def apply_pipeline_draft(workspace, options, progress):
             )
         if previous is None or client_id != source_id:
             step["id"] = uuid4().hex
+            if kind == "fit":
+                step["map_prefix"] = step["label"]
         step.update(enabled=enabled, _draft_id=client_id)
+        if kind == "fit" and (
+            previous is None or client_id != source_id or settings != previous["options"]
+            or not previous["enabled"] or previous.get("pending")
+        ):
+            run_fits.add(step["id"])
         result.append(step)
     pipeline["steps"] = result
     from .pipeline_blocks import validate_chain
-
     validate_chain(candidate, result)
-    _evaluate(candidate, progress)
+    _evaluate(candidate, progress, run_fits=run_fits)
     for step in result:
         step.pop("_draft_id", None)
     candidate.view_label = "Image"

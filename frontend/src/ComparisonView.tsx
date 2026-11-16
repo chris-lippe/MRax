@@ -20,10 +20,14 @@ import { OpacityControl } from './OpacityControl';
 import { imageNavigationHelp, useImageNavigation } from './useImageNavigation';
 
 const sourceKey = (
-  source: Pick<ComparisonSource, 'experiment' | 'kind' | 'map_name' | 'registration_key'>,
+  source: Pick<
+    ComparisonSource,
+    'experiment' | 'pipeline_id' | 'kind' | 'map_name' | 'registration_key'
+  >,
 ) =>
   JSON.stringify([
     source.experiment,
+    source.pipeline_id ?? null,
     source.kind,
     source.map_name ?? null,
     source.registration_key ?? null,
@@ -73,6 +77,7 @@ function ComparisonControls({
             update({
               [side]: {
                 experiment: selected.experiment,
+                pipeline_id: selected.pipeline_id,
                 kind: selected.kind,
                 map_name: selected.map_name,
                 registration_key: selected.registration_key,
@@ -537,9 +542,10 @@ export function ComparisonView({
     const side = index === 0 ? 'left' : 'right';
     const plane = images.planes[index];
     const source = settings[side];
-    const label =
-      workspace.scene.comparison_sources.find((item) => sourceKey(item) === sourceKey(source))
-        ?.label ?? 'Unavailable image';
+    const choice = workspace.scene.comparison_sources.find(
+      (item) => sourceKey(item) === sourceKey(source),
+    );
+    const label = choice?.label ?? 'Unavailable image';
     const level = windowFor(side);
     return (
       <div className={`comparison-pane comparison-${side}`} key={side}>

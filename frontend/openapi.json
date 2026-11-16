@@ -222,6 +222,17 @@
             ],
             "title": "Map Name"
           },
+          "pipeline_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Id"
+          },
           "registration_key": {
             "anyOf": [
               {
@@ -409,6 +420,17 @@
               }
             ],
             "title": "Map Name"
+          },
+          "pipeline_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Id"
           },
           "registration_key": {
             "anyOf": [
@@ -705,6 +727,39 @@
           "revision"
         ],
         "title": "FitCheckCommand",
+        "type": "object"
+      },
+      "FitOptionsCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "pool_edit": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool Edit"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "revision",
+          "settings"
+        ],
+        "title": "FitOptionsCommand",
         "type": "object"
       },
       "FitReadinessResult": {
@@ -1392,8 +1447,87 @@
         "title": "OverlayWindow",
         "type": "object"
       },
+      "PipelineChoice": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "cached": {
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "has_image": {
+            "title": "Has Image",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "maps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Maps",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "active",
+          "cached",
+          "has_image",
+          "maps"
+        ],
+        "title": "PipelineChoice",
+        "type": "object"
+      },
+      "PipelineEditorCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "reconstruct",
+              "fit"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "kind",
+          "options"
+        ],
+        "title": "PipelineEditorCommand",
+        "type": "object"
+      },
       "PipelineInfo": {
         "properties": {
+          "choices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PipelineChoice"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
           "enabled": {
             "default": true,
             "title": "Enabled",
@@ -1408,6 +1542,11 @@
             "default": 0,
             "title": "Generation",
             "type": "integer"
+          },
+          "id": {
+            "default": "main",
+            "title": "Id",
+            "type": "string"
           },
           "signature": {
             "default": "original",
@@ -1438,6 +1577,11 @@
         "properties": {
           "experiment": {
             "title": "Experiment",
+            "type": "string"
+          },
+          "pipeline_id": {
+            "default": "main",
+            "title": "Pipeline Id",
             "type": "string"
           },
           "status": {
@@ -1571,6 +1715,11 @@
               }
             ],
             "title": "Output Grid"
+          },
+          "pending": {
+            "default": false,
+            "title": "Pending",
+            "type": "boolean"
           },
           "plane_dims": {
             "default": [],
@@ -5108,6 +5257,51 @@
           }
         },
         "summary": "Fit Options"
+      },
+      "post": {
+        "operationId": "proposed_fit_options_api_workspaces__key__fit_options_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FitOptionsCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proposed Fit Options"
       }
     },
     "/api/workspaces/{key}/inspect": {
@@ -5329,6 +5523,53 @@
           }
         },
         "summary": "Pipeline Blocks"
+      }
+    },
+    "/api/workspaces/{key}/pipeline-editor": {
+      "post": {
+        "operationId": "pipeline_editor_api_workspaces__key__pipeline_editor_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineEditorCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pipeline Editor"
       }
     },
     "/api/workspaces/{key}/preview-fit": {

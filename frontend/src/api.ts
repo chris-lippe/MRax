@@ -52,7 +52,7 @@ export function comparisonNavigation(workspace: Workspace, settings = workspace.
   const sources = [settings.left, settings.right];
   const choices = sources.map((source) =>
     workspace.scene.comparison_sources.find((choice) =>
-      ['experiment', 'kind', 'map_name', 'registration_key'].every(
+      ['experiment', 'pipeline_id', 'kind', 'map_name', 'registration_key'].every(
         (key) =>
           (choice[key as keyof typeof choice] ?? null) ===
           (source[key as keyof typeof source] ?? null),

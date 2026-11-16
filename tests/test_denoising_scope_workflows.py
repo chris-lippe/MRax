@@ -27,7 +27,7 @@ def filter_data(work, **options):
     return run_processing(work, settings, lambda *_: None)
 
 
-def test_each_package_keeps_its_denoising_step_and_replacement_does_not_erase_others(tmp_path):
+def test_denoising_refreshes_its_target_and_explicit_copies_keep_other_packages(tmp_path):
     work = package_workspace(tmp_path)
     original = work.session.image_array.copy()
     filter_data(work, scope="package")
@@ -37,17 +37,27 @@ def test_each_package_keeps_its_denoising_step_and_replacement_does_not_erase_ot
     work.session.set_active_index("slice_package", 1)
     filter_data(work, scope="package")
     second = work.session.image_array.copy()
-    np.testing.assert_array_equal(second[0], first[0])
+    np.testing.assert_array_equal(second[0], original[0])
     np.testing.assert_array_equal(second[2], original[2])
-    assert len(current_pipeline(work)["steps"]) == 2
+    assert len(current_pipeline(work)["steps"]) == 1
+    from test_pipeline_editor_workflows import draft_step
+
+    step = current_pipeline(work)["steps"][0]
+    duplicate = draft_step(step, client_id="another-package")
+    duplicate["options"]["indices"]["slice_package"] = 0
+    change_pipeline(work, {
+        "action": "replace", "base_generation": current_pipeline(work)["generation"],
+        "steps": [draft_step(step), duplicate],
+    }, lambda *_: None)
+    np.testing.assert_array_equal(work.session.image_array[0], first[0])
     work.session.set_active_index("slice_package", 0)
-    filter_data(work, scope="package", parameters={"sigma": 2})
+    filter_data(work, scope="package", parameters={"sigma": 2}, step_id=current_pipeline(work)["steps"][1]["id"])
     assert len(current_pipeline(work)["steps"]) == 2
     np.testing.assert_array_equal(work.session.image_array[1], second[1])
     assert not np.array_equal(work.session.image_array[0], first[0], equal_nan=True)
     change_pipeline(
         work,
-        {"action": "remove", "step_id": current_pipeline(work)["steps"][0]["id"]},
+        {"action": "remove", "step_id": current_pipeline(work)["steps"][1]["id"]},
         lambda *_: None,
     )
     np.testing.assert_array_equal(work.session.image_array[0], original[0])

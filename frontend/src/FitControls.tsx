@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type Options } from './api';
 import type { AnalysisProps } from './analysisTypes';
 import { JsonEditor, NumberField, Report } from './Controls';
@@ -11,6 +11,7 @@ import { FitParameterEditor, type ParameterSpec } from './FitParameterEditor';
 import type { FitDimension } from './FitDimensionSelector';
 import { FitFrameSelector } from './FitFrameSelector';
 import { WorkflowButton } from './WorkflowButton';
+import { usePipelineOptions } from './usePipelineOptions';
 
 type FitChoices = {
   workspace_id: string;
@@ -30,7 +31,11 @@ export function FitControls({
   changeView,
   run,
   openWorkflows,
+  editingStep,
+  stagePipelineOptions,
 }: AnalysisProps) {
+  const editing = editingStep?.kind === 'fit';
+  const edited = useRef(false);
   const [choices, setChoices] = useState<FitChoices | null>(null);
   const [loadedSetup, setLoadedSetup] = useState('');
   const setupContext = JSON.stringify([w?.id, w?.revision, w?.experiment, w?.model]);
@@ -45,7 +50,7 @@ export function FitControls({
     [excluded, setExcluded] = useState<number[]>([]);
   const [steps, setSteps] = useState(Number(w?.fit_settings.num_steps ?? 600)),
     [rate, setRate] = useState(Number(w?.fit_settings.step_size ?? 0.02));
-  const [device, setDevice] = useState('cpu'),
+  const [device, setDevice] = useState(String(editingStep?.options.device ?? 'cpu')),
     [devices, setDevices] = useState<{ id: string; label: string }[]>([]);
   const useRoi = w?.scene.fit_region !== 'all';
   const selectedRois = w ? fitRois(w) : [];
@@ -59,10 +64,17 @@ export function FitControls({
     let cancelled = false;
     setError('');
     if (w?.loaded) {
-      void Promise.all([
-        api<FitChoices>('/api/workspaces/' + w.id + '/fit-options'),
-        api<Record<string, ParameterSpec>>('/api/workspaces/' + w.id + '/parameters'),
-      ])
+      const request = editing
+        ? api<{ choices: FitChoices; parameters: Record<string, ParameterSpec> }>(
+            '/api/workspaces/' + w.id + '/fit-options',
+            'POST',
+            { revision: w.revision, settings: w.fit_settings },
+          ).then((result) => [result.choices, result.parameters] as const)
+        : Promise.all([
+            api<FitChoices>('/api/workspaces/' + w.id + '/fit-options'),
+            api<Record<string, ParameterSpec>>('/api/workspaces/' + w.id + '/parameters'),
+          ]);
+      void request
         .then(([options, parameters]) => {
           if (cancelled) return;
           setChoices(options);
@@ -96,7 +108,7 @@ export function FitControls({
     return () => {
       cancelled = true;
     };
-  }, [w?.id, w?.revision, w?.experiment, w?.model, setupContext]);
+  }, [w?.id, w?.revision, w?.experiment, w?.model, setupContext, editing]);
   const fitInputs =
     choices?.workspace_id === w?.id &&
     choices?.experiment === w?.experiment &&
@@ -172,6 +184,7 @@ export function FitControls({
       } else plain[name] = value;
     }
     return {
+      ...w?.fit_settings,
       ...settingsDraft,
       num_steps: steps,
       step_size: rate,
@@ -182,6 +195,19 @@ export function FitControls({
     };
   };
   const apply = () => action('fit.settings', { ...configuration(), excluded_frames: excluded });
+  usePipelineOptions(
+    Boolean(editing && !setupLoading),
+    edited.current,
+    {
+      settings: configuration(),
+      use_roi: useRoi,
+      roi_names: selectedRois,
+      device,
+      excluded_frames: excluded,
+    },
+    stagePipelineOptions,
+    useRoi && !selectedRois.length ? 'Choose a fitting ROI or Whole image.' : undefined,
+  );
   const renderParameter = (name: string, spec: ParameterSpec, caption = name) => (
     <FitParameterEditor
       key={name}
@@ -200,7 +226,12 @@ export function FitControls({
     />
   );
   return (
-    <div className="control-layout fit-controls">
+    <div
+      className="control-layout fit-controls"
+      onChangeCapture={() => {
+        edited.current = true;
+      }}
+    >
       <WorkflowButton
         disabled={busy}
         onClick={() =>
@@ -578,6 +609,7 @@ export function FitControls({
           data-tutorial="fit-apply"
           onClick={() =>
             void run('full_fit', {
+              step_id: editing ? editingStep.id : undefined,
               roi_name: w?.selected_roi,
               use_roi: useRoi,
               roi_names: selectedRois,

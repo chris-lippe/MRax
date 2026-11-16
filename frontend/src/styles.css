@@ -177,7 +177,7 @@ label {
   min-width: 0;
   font-size: 14px;
 }
-input:not([type='checkbox']):not([type='range']),
+input:not([type='checkbox']):not([type='radio']):not([type='range']),
 select,
 textarea {
   min-width: 0;
@@ -188,7 +188,7 @@ textarea {
   background-color: var(--field-surface);
   padding: 6px 8px;
 }
-input:not([type='checkbox']):not([type='range']),
+input:not([type='checkbox']):not([type='radio']):not([type='range']),
 select {
   min-height: 34px;
 }
@@ -1178,6 +1178,7 @@ main.pipeline-active .image-preview {
 }
 .comparison-label {
   position: absolute;
+  z-index: 2;
   top: 8px;
   left: 8px;
   display: flex;
@@ -1216,6 +1217,7 @@ main.pipeline-active .image-preview {
 }
 .comparison-pixel {
   position: absolute;
+  z-index: 2;
   bottom: 6px;
   left: 8px;
   font-size: 12px;
@@ -2892,7 +2894,7 @@ main.metadata-active {
 .pipeline-steps {
   display: flex;
   align-items: stretch;
-  gap: 8px;
+  gap: 0;
   overflow-x: auto;
   padding: 0 0 4px;
   margin: 0;
@@ -2970,9 +2972,78 @@ main.metadata-active {
 .pipeline-drag-handle {
   color: var(--muted);
   cursor: grab;
+  touch-action: none;
 }
-.pipeline-step[draggable='true'] {
+.pipeline-selector {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+  min-width: 0;
+}
+.pipeline-selector > svg {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+.pipeline-selector > label {
+  margin: 0;
+  min-width: 100px;
+  max-width: 240px;
+}
+.pipeline-selector select {
+  min-height: 28px;
+  padding: 3px 28px 3px 8px;
+  font-size: 13px;
+}
+.pipeline-selector .icon-button {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 4px;
+}
+.pipeline-manage,
+.pipeline-comparison {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.pipeline-manage {
+  flex-basis: 100%;
+}
+.pipeline-manage label {
+  margin: 0;
+  flex: 1 1 120px;
+}
+.pipeline-comparison {
+  margin: 0 10px 8px;
+  border-top: 1px solid var(--line);
+}
+.pipeline-comparison select {
+  width: auto;
+  max-width: 220px;
+  min-height: 28px;
+  padding-block: 4px;
+}
+.pipeline-comparison button {
+  min-height: 28px;
+  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pipeline-step[data-movable='true'] {
   cursor: grab;
+}
+.pipeline-step[data-dragging='true'] {
+  cursor: grabbing;
+  user-select: none;
 }
 .pipeline-step-actions {
   display: flex;
@@ -3030,12 +3101,6 @@ main.metadata-active {
 .pipeline-settings h3 {
   margin-bottom: 10px;
   font-size: 14px;
-}
-.pipeline-settings .json-editor {
-  margin: 0 0 12px;
-}
-.pipeline-settings textarea {
-  min-height: 160px;
 }
 .pipeline-settings input,
 .pipeline-settings select {
@@ -4794,6 +4859,80 @@ input[type='file'].visually-hidden {
   border-radius: 10px;
   background: var(--surface);
 }
+
+.pipeline-step {
+  flex: 0 0 245px;
+}
+.pipeline-source {
+  flex: 0 0 170px;
+}
+.pipeline-drop-slot {
+  flex: 0 0 24px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  list-style: none;
+}
+.pipeline-drop-slot::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 10px;
+  width: 3px;
+  border-radius: 2px;
+  background: transparent;
+}
+.pipeline-drop-slot[data-drop-active='true']::before {
+  background: var(--accent);
+}
+.pipeline-drop-caption {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 5px;
+  white-space: nowrap;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--surface);
+  font-size: 11px;
+  z-index: 2;
+}
+.pipeline-slot-button {
+  width: 22px;
+  min-width: 22px;
+  min-height: 28px;
+  padding: 2px;
+  opacity: 0;
+  background: transparent;
+  border-color: transparent;
+}
+.pipeline-drop-slot:hover .pipeline-slot-button,
+.pipeline-slot-button:focus-visible {
+  opacity: 1;
+}
+.pipeline-steps[data-dragging='true'] .pipeline-slot-button {
+  visibility: hidden;
+}
+.pipeline-step[data-dragging='true'] {
+  opacity: 0.4;
+}
+.pipeline-insert-actions {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+.pipeline-control-editing {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  color: var(--accent);
+  font-size: 13px;
+}
 .reconstruction-raw summary {
   display: flex;
   align-items: center;
@@ -4890,24 +5029,6 @@ input[type='file'].visually-hidden {
 .reconstruction-insert label {
   flex: 1 1 150px;
   margin: 0;
-}
-.pipeline-workflow-block {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-.pipeline-workflow-block .button-row {
-  flex-wrap: wrap;
-}
-.pipeline-workflow-block details {
-  min-width: 0;
-}
-.pipeline-workflow-block summary {
-  cursor: pointer;
-  padding-block: 6px;
 }
 
 .control-group > summary > svg {

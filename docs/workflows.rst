@@ -15,9 +15,9 @@ selected experiments before running. Review registration overlays and fit qualit
 2. Give the workflow a name. Review its blocks and choose **Keep workflow changes**.
 3. Select target experiments and assign the requested ROIs, maps and reference
    experiments. These inputs come from the target study.
-4. Apply the workflow. Fitting configurations can also be loaded without running
-   a fit. Reconstruction configurations replace the reconstruction stage and
-   retain later processing. A single fitting block uses the current image state.
+4. Apply the workflow, or load fitting and reconstruction settings for a later
+   run. Loading and rerunning refresh the same block. A single fitting block uses
+   the current image state.
 5. Choose **Save workflow file** to keep the recipe for another session.
    **Open workflow file** adds a saved file to the session library.
 
@@ -29,13 +29,23 @@ Applying workflows
 ------------------
 
 **Replace processing steps** starts the chain from the imported image data.
-**Append workflow steps** applies the blocks after the existing chain.
+**Append workflow steps** adds new blocks and refreshes matching workflow blocks.
 Reconstruction requires acquired k-space and must come first on its target.
 The application checks acquisition compatibility before reconstruction.
 
 Fit blocks use the image state at their position in the chain. Their named maps
 are stored alongside the images. Rerunning the same workflow updates its fitting
 blocks. Other fit results remain available.
+Changing an earlier processing step reruns the fit when the pipeline is applied.
+
+Use **Copy** in the pipeline editor to repeat image processing in sequence.
+**Edit** opens the block's settings in the action panel. Both panels share the
+same draft. **Apply** runs the edited chain. **Discard changes** restores its settings.
+
+The pipeline selector belongs to the selected experiment. Use **New pipeline**
+to start from its source data, or **Duplicate pipeline** to copy its current state.
+Switching restores cached images, maps and fit settings. **Compare pipeline results**
+opens an image or map comparison. Workspace bundles retain all pipelines and results.
 
 All selected experiments within a study are applied together. An error or
 cancellation leaves that study unchanged. Studies are processed separately.
@@ -72,6 +82,8 @@ Each block contains its settings directly. Reconstruction settings contain an
 ordered reconstruction plan. Fitting settings contain the model, solver,
 parameters, pools, bounds, regularization and fitting region.
 The ``kind`` field is a category derived from the blocks.
+Each pipeline can contain one reconstruction block and one fitting block.
+Reconstruction comes first. Other processing blocks run in sequence and may repeat.
 
 A resource input uses ``{"$binding": "input_id"}``.
 Bindings describe experiments, images, maps or ROIs. Map and ROI bindings can

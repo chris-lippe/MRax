@@ -595,15 +595,14 @@ def validate_workflow_targets(workspace, document, experiments, bindings, *, mod
             if name not in context.session.experiment_names:
                 raise ValueError("The target experiment is unavailable")
             context.session.select_experiment(name)
-            target_kinds = {}
+            seen_targets = set()
             for step in document.steps:
                 context.session.select_experiment(
                     _step_target(step, bindings.get(name, {}), document, name)
                 )
                 target_name = context.session.selected_experiment
-                if target_name not in target_kinds:
+                if target_name not in seen_targets:
                     pipeline = current_pipeline(context)
-                    existing = (pipeline or {}).get("steps", [])
                     if pipeline and (
                         (mode == "replace" and not single_operation(document, "fit"))
                         or single_operation(document, "reconstruct")
@@ -611,16 +610,7 @@ def validate_workflow_targets(workspace, document, experiments, bindings, *, mod
                         from .pipeline import install
 
                         install(context, pipeline["source"], update_model=False)
-                    target_kinds[target_name] = (
-                        [s["kind"] for s in existing]
-                        if mode == "append" and not single_operation(document, "reconstruct")
-                        else []
-                    )
-                if step.operation == "reconstruct" and target_kinds[target_name]:
-                    raise ValueError(
-                        "Reconstruction must come first on its target. Replace that processing chain"
-                    )
-                target_kinds[target_name].append(step.operation)
+                    seen_targets.add(target_name)
                 resolved = resolve_settings(
                     document, context, bindings.get(name, {}), only=step.id, target=name
                 )
@@ -634,8 +624,8 @@ def validate_workflow_targets(workspace, document, experiments, bindings, *, mod
 def validate_application_options(document, mode, run):
     if mode not in {"replace", "append"} or type(run) is not bool:
         raise ValueError("Choose a supported workflow application mode")
-    if not single_operation(document, "fit") and not run:
-        raise ValueError("Loading without execution is available only for fitting workflows")
+    if not (single_operation(document, "fit") or single_operation(document, "reconstruct")) and not run:
+        raise ValueError("Loading without execution requires a fitting or reconstruction workflow")
 
 
 def _has_output(value):
@@ -689,6 +679,10 @@ def apply_workflow(
         raise ValueError(
             "; ".join(row["experiment"] + ": " + ", ".join(row["errors"]) for row in failures)
         )
+    if len(document.steps) == 1:
+        return _apply_single_workflow(
+            workspace, document, experiments, bindings, progress, run=run, device=device
+        )
     candidate = clone_workspace(workspace, readonly_arrays=True)
     original_experiment = candidate.session.selected_experiment
     original_view = candidate.view_label
@@ -703,118 +697,108 @@ def apply_workflow(
             )
 
         report(0, 1, "Applying " + document.name)
-        if not run:
-            target = _step_target(document.steps[0], bindings.get(name, {}), document, name)
-            candidate.session.select_experiment(target)
-            steps = resolve_settings(document, candidate, bindings.get(name, {}), target=name)
-            options = steps[0][1]
-            set_fit_settings(candidate, options["settings"])
-            mask = FrameMask.all(candidate.session.frame_count)
-            mask.exclude(*options.get("excluded_frames", []))
-            candidate.session.frame_mask = mask
-            candidate.display_settings.setdefault(target, {}).setdefault("scene", {}).update(
-                {
-                    "fit_region": "rois" if options.get("use_roi", True) else "all",
-                    "fit_rois": options.get("roi_names"),
-                }
-            )
-            candidate.session._save_current_view_state()
-        else:
-            from .pipeline import install, snapshot
+        from .pipeline import install, snapshot
 
-            outputs, initialized, previous = {}, set(), {}
-            for step in document.steps:
-                target = _step_target(step, bindings.get(name, {}), document, name)
-                candidate.session.select_experiment(target)
-                changed_targets.add(target)
-                pipeline = ensure_pipeline(candidate)
-                pipeline["enabled"] = True
-                if target not in initialized:
-                    previous[target] = list(pipeline["steps"])
-                    if single_operation(document, "reconstruct"):
-                        pipeline["steps"] = [
-                            s for s in pipeline["steps"] if s["kind"] != "reconstruct"
-                        ]
-                    elif single_operation(document, "fit"):
-                        pipeline["steps"] = [
-                            s
-                            for s in pipeline["steps"]
-                            if not (
-                                s["kind"] == "fit"
-                                and s.get("workflow_name") == document.name
-                                and s.get("workflow_step_id") == step.id
-                            )
-                        ]
-                    elif mode == "replace":
-                        pipeline["steps"] = []
-                        install(candidate, pipeline["source"], update_model=False)
-                    initialized.add(target)
-                frozen = {}
-                options = resolve_settings(
-                    document,
-                    candidate,
-                    bindings.get(name, {}),
-                    outputs=outputs,
-                    only=step.id,
-                    target=name,
-                    references=frozen,
-                )[0][1]
-                context = clone_workspace(candidate, readonly_arrays=True)
-                for reference, state in frozen.items():
-                    context.session.select_experiment(reference)
-                    install(context, state)
-                context.session.select_experiment(target)
-                _validate_target(context, document, {}, resolved=[(step, options)])
-                if step.operation == "fit":
-                    options = {**options, "device": device}
-                if step.operation == "reconstruct":
-                    options = {**options, "view": "mrax_reconstruction", "device": device}
-                if step.operation == "register":
-                    if options.get("plane") is not None:
-                        candidate.session.set_image_plane(options["plane"])
-                    candidate.session.active_indices.update(options.get("indices", {}))
-                retained = {s["id"] for s in pipeline["steps"]}
-                prior = next(
-                    (
-                        s
-                        for s in previous[target]
-                        if s["id"] not in retained
-                        and s.get("workflow_step_id") == step.id
-                        and s.get("workflow_name") == document.name
-                    ),
-                    None,
-                )
-                block = _make_step(
-                    context, options, kind=step.operation, enabled=step.enabled, previous=prior
-                )
-                block["workflow_step_id"], block["workflow_name"] = step.id, document.name
-                block["references"].update(frozen)
-                if step.operation == "fit":
-                    block["map_prefix"] = step.id
-                start_at = sum(s["enabled"] for s in pipeline["steps"])
-                if single_operation(document, "reconstruct"):
-                    pipeline["steps"].insert(0, block)
-                    start_at = 0
-                else:
-                    pipeline["steps"].append(block)
-                validate_chain(candidate, pipeline["steps"])
-                _evaluate(candidate, report, start_at=start_at)
-                if step.operation == "fit" and step.enabled:
-                    fitted_targets.add(target)
-                record = pipeline.get("fits", {}).get(block["id"], {})
-                if step.id in needed_outputs:
-                    outputs[step.id] = {
-                        "experiment": target,
-                        "grid": snapshot(candidate.session) if step.operation != "fit" else None,
-                        "maps": {
-                            key: record.get("prefix", step.id) + " / " + key
-                            for key in record.get("result", {}).get("fields", {})
-                        },
-                    }
-            candidate.session.select_experiment(name)
-            candidate.view_label = "Image"
+        outputs, initialized, previous, consumed = {}, set(), {}, {}
+        for step in document.steps:
+            target = _step_target(step, bindings.get(name, {}), document, name)
+            candidate.session.select_experiment(target)
+            changed_targets.add(target)
+            pipeline = ensure_pipeline(candidate)
+            pipeline["enabled"] = True
+            if target not in initialized:
+                previous[target] = list(pipeline["steps"])
+                consumed[target] = set()
+                if mode == "replace":
+                    pipeline["steps"] = []
+                    pipeline["applied_steps"] = []
+                    install(candidate, pipeline["source"], update_model=False)
+                initialized.add(target)
+            frozen = {}
+            options = resolve_settings(
+                document,
+                candidate,
+                bindings.get(name, {}),
+                outputs=outputs,
+                only=step.id,
+                target=name,
+                references=frozen,
+            )[0][1]
+            context = clone_workspace(candidate, readonly_arrays=True)
+            for reference, state in frozen.items():
+                context.session.select_experiment(reference)
+                install(context, state)
+            context.session.select_experiment(target)
+            _validate_target(context, document, {}, resolved=[(step, options)])
+            if step.operation == "fit":
+                options = {**options, "device": device}
+            if step.operation == "reconstruct":
+                options = {**options, "view": "mrax_reconstruction", "device": device}
+            if step.operation == "register":
+                if options.get("plane") is not None:
+                    candidate.session.set_image_plane(options["plane"])
+                candidate.session.active_indices.update(options.get("indices", {}))
+            retained = {s["id"] for s in pipeline["steps"]}
+            prior = next(
+                (
+                    s
+                    for s in previous[target]
+                    if s.get("workflow_step_id") == step.id
+                    and s.get("workflow_name") == document.name
+                    and s["id"] not in consumed[target]
+                ),
+                None,
+            )
+            if prior is None:
+                from .pipeline import _family
+
+                family = _family(options.get("method") if step.operation == "process" else step.operation)
+                prior = next((s for s in previous[target] if s["family"] == family and s["id"] not in consumed[target]), None)
+            if prior is not None:
+                consumed[target].add(prior["id"])
+            block = _make_step(
+                context, options, kind=step.operation, enabled=step.enabled, previous=prior
+            )
+            block["workflow_step_id"], block["workflow_name"] = step.id, document.name
+            block["references"].update(frozen)
+            if step.operation == "fit":
+                block["map_prefix"] = step.id
+            start_at = (
+                sum(s["enabled"] for s in pipeline["steps"])
+                if pipeline["enabled"] and not any(s.get("pending") for s in pipeline["steps"])
+                else 0
+            )
+            if prior is not None and prior["id"] in retained:
+                pipeline["steps"] = [block if s["id"] == prior["id"] else s for s in pipeline["steps"]]
+                start_at = 0
+            elif step.operation == "reconstruct":
+                pipeline["steps"].insert(sum(s["kind"] == "reconstruct" for s in pipeline["steps"]), block)
+                start_at = 0
+            else:
+                pipeline["steps"].append(block)
+            _evaluate(candidate, report, start_at=start_at,
+                      run_fits={block["id"]} if step.operation == "fit" else set(),
+                      execute={block["id"]})
+            if step.operation == "fit" and step.enabled:
+                fitted_targets.add(target)
+            record = pipeline.get("fits", {}).get(block["id"], {})
+            if step.id in needed_outputs:
+                outputs[step.id] = {
+                    "experiment": target,
+                    "grid": snapshot(candidate.session) if step.operation != "fit" else None,
+                    "maps": {
+                        key: record.get("prefix", step.id) + " / " + key
+                        for key in record.get("result", {}).get("fields", {})
+                    },
+                }
+        candidate.session.select_experiment(name)
+        candidate.view_label = "Image"
         candidate.session._save_current_view_state()
         report(1, 1, "Workflow applied")
+    candidate.session.select_experiment(original_experiment)
+    for target in changed_targets:
+        candidate.session.select_experiment(target)
+        validate_chain(candidate, candidate.pipelines[target]["steps"])
     candidate.session.select_experiment(original_experiment)
     candidate.view_label = (
         "Map"
@@ -828,5 +812,50 @@ def apply_workflow(
         "workflow": document.name,
         "kind": document.kind,
         "experiments": experiments,
-        "configured_only": document.kind == "fitting" and not run,
+        "configured_only": False,
+    }
+
+
+def _apply_single_workflow(workspace, document, experiments, bindings, progress, *, run, device):
+    from .pipeline import apply_step
+    from .pipeline_blocks import configure_block
+
+    candidate = clone_workspace(workspace, readonly_arrays=True)
+    original = candidate.session.selected_experiment
+    view = candidate.view_label
+    step = document.steps[0]
+    for index, name in enumerate(experiments):
+        target = _step_target(step, bindings.get(name, {}), document, name)
+        candidate.session.select_experiment(target)
+        options = resolve_settings(document, candidate, bindings.get(name, {}), target=name)[0][1]
+        if step.operation == "fit":
+            set_fit_settings(candidate, options["settings"])
+            mask = FrameMask.all(candidate.session.frame_count)
+            mask.exclude(*options.get("excluded_frames", []))
+            candidate.session.frame_mask = mask
+            candidate.display_settings.setdefault(target, {}).setdefault("scene", {}).update({
+                "fit_region": "rois" if options.get("use_roi", True) else "all",
+                "fit_rois": options.get("roi_names"),
+            })
+        if step.operation in {"fit", "reconstruct"}:
+            options = {
+                "workflow": document.model_dump(), "bindings": bindings.get(name, {}),
+                "device": device,
+            }
+
+        def report(done, total, detail, index=index, target=target):
+            progress(index + min(1, max(0, done / max(1, total))), len(experiments), target + ": " + detail)
+
+        if run:
+            apply_step(candidate, options, report, kind=step.operation, enabled=step.enabled)
+        else:
+            configure_block(candidate, step.operation, options, report)
+        candidate.session._save_current_view_state()
+    candidate.session.select_experiment(original)
+    if not run:
+        candidate.view_label = view
+    _commit(workspace, candidate)
+    return {
+        "workflow": document.name, "kind": document.kind, "experiments": experiments,
+        "configured_only": not run,
     }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import type { AnalysisProps } from './analysisTypes';
 import { InspectorSection } from './InspectorSection';
@@ -9,6 +9,7 @@ import { useFileSystem } from './FileSystemDialog';
 import type { WorkflowEntry } from './reusableWorkflows';
 import { recoProblem, type RecoCatalog, type RecoPlan } from './reconstructionPlan';
 import { WorkflowButton } from './WorkflowButton';
+import { usePipelineOptions } from './usePipelineOptions';
 
 type Draft = { plan: RecoPlan; component: string; generation: number; submitted?: boolean };
 
@@ -19,18 +20,26 @@ export function ReconstructionControls({
   changeView,
   editingStep,
   openWorkflows,
+  stagePipelineOptions,
   active,
 }: Pick<
   AnalysisProps,
-  'workspace' | 'busy' | 'run' | 'changeView' | 'editingStep' | 'openWorkflows'
+  | 'workspace'
+  | 'busy'
+  | 'run'
+  | 'changeView'
+  | 'editingStep'
+  | 'openWorkflows'
+  | 'stagePipelineOptions'
 > & { active: boolean }) {
-  const context = JSON.stringify([w?.id, w?.experiment]);
+  const context = JSON.stringify([w?.id, w?.experiment, w?.pipeline.id]);
   const requestKey = JSON.stringify([context, w?.revision]);
   const [loaded, setLoaded] = useState<{ context: string; key: string; value: RecoCatalog } | null>(
     null,
   );
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [error, setError] = useState('');
+  const edited = useRef('');
   const [fileBusy, setFileBusy] = useState(false);
   const choose = useFileSystem();
   const editing = editingStep?.kind === 'reconstruct';
@@ -102,10 +111,34 @@ export function ReconstructionControls({
       [context]: { plan, component: output, generation: w.pipeline.generation },
     }));
   };
+  const loadPreset = (plan: RecoPlan, output = component) => {
+    change(plan, output);
+    if (!editing)
+      void run('pipeline', {
+        action: 'configure',
+        kind: 'reconstruct',
+        options: { pipeline: plan, component: output },
+      });
+  };
   const issue = plan && catalog ? recoProblem(plan, catalog.stages, catalog.encoding) : '';
   const rawAvailable = Boolean(w?.can_reconstruct || w?.can_load_raw);
+  usePipelineOptions(
+    Boolean(editing && active && plan && catalog),
+    Boolean(editKey && edited.current === editKey),
+    { view: 'mrax_reconstruction', component, pipeline: plan },
+    stagePipelineOptions,
+    issue || undefined,
+  );
   return (
-    <div className="reconstruction-controls">
+    <div
+      className="reconstruction-controls"
+      onChangeCapture={() => {
+        edited.current = editKey;
+      }}
+      onClickCapture={() => {
+        edited.current = editKey;
+      }}
+    >
       <WorkflowButton
         disabled={busy}
         onClick={() => openWorkflows?.('reconstruction', { component, pipeline: plan })}
@@ -161,7 +194,7 @@ export function ReconstructionControls({
                 }
                 onChange={(event) => {
                   const preset = catalog?.presets.find((item) => item.id === event.target.value);
-                  if (preset) change(structuredClone(preset.plan));
+                  if (preset) loadPreset(structuredClone(preset.plan));
                 }}
               >
                 <option value="" disabled>
@@ -210,7 +243,7 @@ export function ReconstructionControls({
                       const settings = entry.document.steps[0].settings;
                       const imported = (settings.pipeline as RecoPlan | undefined) ?? catalog?.plan;
                       if (imported)
-                        change(
+                        loadPreset(
                           structuredClone(imported),
                           String(settings.component ?? 'magnitude'),
                         );
@@ -225,7 +258,7 @@ export function ReconstructionControls({
                 <WorkbenchIcon name="open" />
                 Open .mflow
               </button>
-              {draft && (
+              {draft && !editing && (
                 <button
                   type="button"
                   onClick={() =>
@@ -282,7 +315,7 @@ export function ReconstructionControls({
               disabled={busy || !w?.loaded || !plan || Boolean(issue) || !rawAvailable}
             >
               <WorkbenchIcon name="reconstruct" />
-              {editing ? 'Stage reconstruction settings' : 'Apply reconstruction'}
+              Apply reconstruction
             </button>
           </div>
         </fieldset>

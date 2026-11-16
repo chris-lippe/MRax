@@ -1,19 +1,26 @@
-import { useEffect, useId, useState } from 'react';
-import { api, type Job, type Options, type PipelineStep, type Workspace } from './api';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import {
+  api,
+  type ComparisonSettings,
+  type Job,
+  type Options,
+  type PipelineStep,
+  type Workspace,
+} from './api';
+import { PipelineSelector } from './PipelineSelector';
+import { PipelineComparison } from './PipelineComparison';
 import { WorkbenchIcon } from './WorkbenchIcon';
-import { DataEditor, dataController, dataDraft } from './Controls';
-import { PipelineWorkflowBlock, type BlockOptions } from './PipelineWorkflowBlock';
 import type { WorkflowDocument } from './reusableWorkflows';
 import {
   activePipelineJob,
   copiedStep,
   draftChanged,
   draftProblem,
+  droppedSteps,
   insertedStep,
   movedSteps,
   newPipelineDraft,
   processDraftStep,
-  stepOptions,
   type DraftStep,
   type PipelineCatalog,
   type PipelineDraft,
@@ -32,7 +39,7 @@ type Props = {
   edit: (step: PipelineStep) => void;
   editing: string | null;
   cancelEdit: () => void;
-  compare: () => void;
+  compare: (settings?: ComparisonSettings) => void;
 };
 const statusLabels: Record<string, string> = {
   pending: 'Waiting',
@@ -57,6 +64,15 @@ function icon(step: PipelineStep) {
             : 'series';
 }
 
+function pointerBoundary(element: HTMLOListElement, x: number) {
+  const cards = Array.from(element.querySelectorAll<HTMLElement>('.pipeline-step'));
+  const next = cards.findIndex((card) => {
+    const box = card.getBoundingClientRect();
+    return x < box.left + box.width / 2;
+  });
+  return Math.max(Number(element.dataset.minimum ?? 0), next < 0 ? cards.length : next);
+}
+
 export function Pipeline({
   workspace: w,
   busy,
@@ -74,17 +90,21 @@ export function Pipeline({
 }: Props) {
   const pipeline = w.pipeline;
   const [expanded, setExpanded] = useState(false);
-  const [settings, setSettings] = useState<string | null>(null);
   const [insertAt, setInsertAt] = useState<number | null>(null);
   const [insertion, setInsertion] = useState('gaussian');
-  const [block, setBlock] = useState<BlockOptions | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+  const list = useRef<HTMLOListElement>(null);
+  const dragged = useRef<string | null>(null);
+  const pointerX = useRef<number | null>(null);
+  const dragOrigin = useRef<{ x: number; y: number } | null>(null);
+  const dropPosition = useRef<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loaded, setLoaded] = useState<{ key: string; catalog: PipelineCatalog } | null>(null);
   const contentId = useId();
-  const context = JSON.stringify([w.id, w.experiment]);
+  const context = JSON.stringify([w.id, w.experiment, w.pipeline.id]);
   const catalogKey = JSON.stringify([w.id, w.experiment, w.revision]);
   useEffect(() => {
     if (!expanded) return;
@@ -101,12 +121,44 @@ export function Pipeline({
     };
   }, [expanded, catalogKey, w.id]);
   useEffect(() => {
-    setSettings(null);
     setInsertAt(null);
     setError('');
     setNotice('');
-    setBlock(null);
   }, [context]);
+  useEffect(() => {
+    if (!dragging) return;
+    let frame = 0;
+    function scroll() {
+      const element = list.current;
+      if (element && pointerX.current !== null) {
+        const box = element.getBoundingClientRect(),
+          x = pointerX.current;
+        const speed =
+          x < box.left + 40
+            ? -Math.min(14, (box.left + 40 - x) / 3)
+            : x > box.right - 40
+              ? Math.min(14, (x - box.right + 40) / 3)
+              : 0;
+        const before = element.scrollLeft;
+        element.scrollLeft += speed;
+        if (element.scrollLeft !== before) indicateDrop(pointerBoundary(element, x));
+      }
+      frame = requestAnimationFrame(scroll);
+    }
+    frame = requestAnimationFrame(scroll);
+    return () => cancelAnimationFrame(frame);
+  }, [dragging]);
+  useEffect(() => {
+    if (!dragging) return;
+    const cancel = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finishDrag();
+      }
+    };
+    window.addEventListener('keydown', cancel);
+    return () => window.removeEventListener('keydown', cancel);
+  }, [dragging]);
   const catalog = loaded?.key === catalogKey ? loaded.catalog : null;
   const current = draft ?? newPipelineDraft(w);
   const changed = draft ? draftChanged(draft) : false;
@@ -121,6 +173,7 @@ export function Pipeline({
     ((signature?.generation ?? 0) > pipeline.generation || draft?.submission === ownRun.id);
   const matchingRun =
     ownRun &&
+    ownRun.pipeline?.pipeline_id === w.pipeline.id &&
     (activePipelineJob(ownRun) ||
       draft?.submission === ownRun.id ||
       (!changed && ownRun.status === 'completed' && signature?.signature === pipeline.signature))
@@ -152,12 +205,13 @@ export function Pipeline({
         )
       : current.steps;
   const reconstruction = steps.find((step) => step.kind === 'reconstruct');
+  const reconstructionCount = steps.filter((step) => step.kind === 'reconstruct').length;
   const sourceKind = reconstruction?.enabled ? 'kspace' : 'image';
   const source = pipeline.sources?.[sourceKind];
   const methods = catalog?.methods.filter((method) => method.id !== 'dti') ?? [];
   function label(step: DraftStep) {
     try {
-      const options = stepOptions(step);
+      const options = step.options;
       const method = options.method;
       if (options.workflow) return (options.workflow as WorkflowDocument).name;
       return step.kind === 'process'
@@ -177,6 +231,10 @@ export function Pipeline({
       steps: current.steps.map((step) => (step.id === id ? { ...step, ...patch } : step)),
     });
   }
+  function openInsert(position: number) {
+    setInsertion('gaussian');
+    setInsertAt(position);
+  }
   function move(id: string, target: number) {
     const next = movedSteps(current.steps, id, target);
     update({ ...current, steps: next });
@@ -188,54 +246,62 @@ export function Pipeline({
   }
   function discard() {
     onDraft(null);
-    setSettings(null);
+    cancelEdit();
     setInsertAt(null);
     setError('');
     setNotice('Pipeline edits discarded.');
   }
-  function add() {
-    if (insertAt === null || !catalog) return;
+  async function add() {
+    if (insertAt === null || !catalog || locked) return;
+    setSubmitting(true);
     try {
-      const step = ['reconstruct', 'fit'].includes(insertion)
-        ? (() => {
-            if (!block) throw Error('Choose a workflow for the block.');
-            return insertedStep(insertion, structuredClone(block), block.workflow.name);
-          })()
-        : insertion === 'register'
-          ? insertedStep(
-              'register',
-              {
-                reference_experiment:
-                  w.experiments.find((name) => name !== w.experiment) ?? w.experiment,
-                moving_experiment: w.experiment,
-                reference_frame: 0,
-                moving_frame: w.frame,
-                scope: 'plane',
-                manual: false,
-                options: {},
-              },
-              'Registration',
-              'register',
-            )
-          : insertion === 'drift'
-            ? insertedStep('drift', { settings: {}, roi_name: w.selected_roi }, 'Drift correction')
-            : processDraftStep(catalog, insertion);
+      let step: DraftStep;
+      if (['reconstruct', 'fit'].includes(insertion)) {
+        if (current.steps.some((row) => row.kind === insertion))
+          throw Error('This operation supports one block per experiment.');
+        const choices = await api<{ defaults: Record<string, Options> }>(
+          '/api/workspaces/' + w.id + '/pipeline-blocks',
+        );
+        step = insertedStep(
+          insertion,
+          choices.defaults[insertion],
+          insertion === 'fit' ? 'Fitting' : 'Reconstruction',
+        );
+      } else if (insertion === 'register') {
+        step = insertedStep(
+          'register',
+          {
+            reference_experiment:
+              w.experiments.find((name) => name !== w.experiment) ?? w.experiment,
+            moving_experiment: w.experiment,
+            reference_frame: 0,
+            moving_frame: w.frame,
+            scope: 'plane',
+            manual: false,
+            options: {},
+          },
+          'Registration',
+          'register',
+        );
+      } else if (insertion === 'drift') {
+        step = insertedStep(
+          'drift',
+          { settings: {}, roi_name: w.selected_roi },
+          'Drift correction',
+        );
+      } else step = processDraftStep(catalog, insertion);
       const next = [...current.steps];
-      const minimum = next[0]?.kind === 'reconstruct' ? 1 : 0;
-      next.splice(
-        insertion === 'reconstruct' ? 0 : Math.max(minimum, Math.min(insertAt, next.length)),
-        0,
-        step,
-      );
+      next.splice(insertion === 'reconstruct' ? 0 : insertAt, 0, step);
       const problem = draftProblem({ ...current, steps: next }, w);
       if (problem) throw Error(problem);
       update({ ...current, steps: next });
-      setSettings(step.id);
       setInsertAt(null);
-      setBlock(null);
-      setNotice('Step inserted. Configure its settings before applying the pipeline.');
+      edit(step);
+      setNotice('Step inserted. Edit its settings in the action controls.');
     } catch (failure) {
       setError(String(failure));
+    } finally {
+      setSubmitting(false);
     }
   }
   async function confirm() {
@@ -244,7 +310,6 @@ export function Pipeline({
     setError('');
     try {
       await apply(draft);
-      setSettings(null);
       setInsertAt(null);
       setNotice('');
     } catch (failure) {
@@ -253,16 +318,6 @@ export function Pipeline({
       setSubmitting(false);
     }
   }
-  const selected = steps.find((step) => step.id === settings);
-  const editor =
-    selected?.editor ?? (selected ? dataDraft(JSON.stringify(selected.options, null, 2)) : null);
-  const controller =
-    editor && selected
-      ? dataController(editor, (next) => {
-          const value = typeof next === 'function' ? next(editor) : next;
-          changeStep(selected.id, { editor: value });
-        })
-      : null;
   const currentStep = activity?.steps.find((step) => step.status === 'running');
   const runText =
     matchingRun?.status === 'completed'
@@ -281,6 +336,41 @@ export function Pipeline({
                   ? 'Preparing pipeline'
                   : '';
 
+  function finishDrag() {
+    dragged.current = null;
+    pointerX.current = null;
+    setDragging(null);
+    dragOrigin.current = null;
+    dropPosition.current = null;
+    setDropAt(null);
+  }
+  function indicateDrop(position: number) {
+    dropPosition.current = position;
+    setDropAt(position);
+  }
+  function dropSlot(position: number) {
+    const available = position >= reconstructionCount && !locked;
+    return (
+      <li
+        className="pipeline-drop-slot"
+        role="presentation"
+        data-position={position}
+        data-drop-active={dragging && dropAt === position ? 'true' : undefined}
+      >
+        <button
+          className="pipeline-slot-button"
+          aria-label={'Insert at position ' + (position + 1)}
+          disabled={!available || steps.length >= 64}
+          onClick={() => openInsert(position)}
+        >
+          <WorkbenchIcon name="add" />
+        </button>
+        {dragging && dropAt === position && (
+          <span className="pipeline-drop-caption">Drop here</span>
+        )}
+      </li>
+    );
+  }
   return (
     <section className="pipeline-panel" aria-label="Processing pipeline">
       <header>
@@ -296,6 +386,7 @@ export function Pipeline({
             {steps.length > 0 && <small>{steps.length}</small>}
           </button>
         </h2>
+        <PipelineSelector key={context} workspace={w} disabled={locked || blocked} run={run} />
         {!expanded && (
           <span className="pipeline-output-state">
             {activePipelineJob(matchingRun) ? (
@@ -304,6 +395,8 @@ export function Pipeline({
               </>
             ) : changed ? (
               'Draft'
+            ) : pipeline.steps.some((step) => step.pending) ? (
+              'Settings pending'
             ) : pipeline.steps.length > 0 ? (
               pipeline.enabled ? (
                 'Processed'
@@ -316,6 +409,7 @@ export function Pipeline({
           </span>
         )}
       </header>
+      <PipelineComparison workspace={w} disabled={locked || blocked} compare={compare} />
       <div id={contentId} hidden={!expanded}>
         <div className="pipeline-toolbar">
           <label className="pipeline-input">
@@ -326,7 +420,13 @@ export function Pipeline({
               value={reconstruction?.enabled ? 'mrax' : 'vendor'}
               onChange={(event) => {
                 const enabled = event.target.value === 'mrax';
-                if (reconstruction) changeStep(reconstruction.id, { enabled });
+                if (reconstruction)
+                  update({
+                    ...current,
+                    steps: current.steps.map((step) =>
+                      step.kind === 'reconstruct' ? { ...step, enabled } : step,
+                    ),
+                  });
                 else if (enabled)
                   update({
                     ...current,
@@ -351,7 +451,7 @@ export function Pipeline({
                     : undefined
                 }
               >
-                {reconstruction ? label(reconstruction) : 'Reconstruction (.mflow)'}
+                {reconstruction ? label(reconstruction) : 'Reconstruction'}
               </option>
             </select>
           </label>
@@ -375,17 +475,20 @@ export function Pipeline({
               </div>
             )}
             {pipeline.steps.length > 0 && (
-              <button className="secondary" disabled={blocked || submitting} onClick={compare}>
+              <button
+                className="secondary"
+                disabled={blocked || submitting}
+                onClick={() => compare()}
+              >
                 <WorkbenchIcon name="split" />
-                Compare
+                Compare original
               </button>
             )}
             <button
               className="secondary"
               disabled={locked || steps.length >= 64}
               onClick={() => {
-                setInsertAt(steps.length);
-                setSettings(null);
+                openInsert(steps.length);
               }}
             >
               {' '}
@@ -397,7 +500,7 @@ export function Pipeline({
               disabled={locked || !steps.length}
               onClick={() => {
                 update({ ...current, steps: [] });
-                setSettings(null);
+                cancelEdit();
               }}
             >
               Remove all processing
@@ -461,7 +564,13 @@ export function Pipeline({
             {['failed', 'stale'].includes(matchingRun.status) && <p>{matchingRun.detail}</p>}
           </div>
         )}
-        <ol className="pipeline-steps" aria-busy={Boolean(activePipelineJob(matchingRun))}>
+        <ol
+          className="pipeline-steps"
+          ref={list}
+          data-minimum={reconstructionCount}
+          data-dragging={Boolean(dragging)}
+          aria-busy={Boolean(activePipelineJob(matchingRun))}
+        >
           <li
             className="pipeline-source"
             aria-label="Pipeline input"
@@ -486,174 +595,216 @@ export function Pipeline({
                 ? 'Not run'
                 : statusLabels[state];
             return (
-              <li
-                key={step.id}
-                className={'pipeline-step' + (!step.enabled ? ' disabled' : '')}
-                aria-label={label(step)}
-                data-step-id={step.id}
-                data-state={state}
-                data-editing={editing === step.id || settings === step.id}
-                draggable={!locked && !blocked && step.kind !== 'reconstruct'}
-                onDragStart={(event) => {
-                  setDragging(step.id);
-                  event.dataTransfer.setData('application/x-mrax-step', step.id);
-                  event.dataTransfer.effectAllowed = 'move';
-                }}
-                onDragEnd={() => setDragging(null)}
-                onDragOver={(event) => {
-                  if (dragging && step.kind !== 'reconstruct') {
+              <Fragment key={step.id}>
+                {dropSlot(index)}
+                <li
+                  className={'pipeline-step' + (!step.enabled ? ' disabled' : '')}
+                  aria-label={label(step)}
+                  data-step-id={step.id}
+                  data-state={state}
+                  data-editing={editing === step.id}
+                  data-dragging={dragging === step.id}
+                  data-movable={!locked && !blocked && step.kind !== 'reconstruct'}
+                  onPointerDown={(event) => {
+                    if (
+                      locked ||
+                      blocked ||
+                      step.kind === 'reconstruct' ||
+                      event.button !== 0 ||
+                      (event.target as Element).closest('button, input, select, textarea, a, label')
+                    )
+                      return;
                     event.preventDefault();
-                    event.dataTransfer.dropEffect = 'move';
-                  }
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const id = event.dataTransfer.getData('application/x-mrax-step');
-                  if (id === dragging && !locked && !blocked) move(id, index);
-                  setDragging(null);
-                }}
-              >
-                <div className="pipeline-step-heading">
-                  <span className="pipeline-order">{index + 1}</span>
-                  <label className="check-label">
-                    <input
-                      type="checkbox"
-                      aria-label={'Enable ' + label(step)}
-                      checked={step.enabled}
-                      disabled={locked}
-                      onChange={(event) => changeStep(step.id, { enabled: event.target.checked })}
-                    />
-                    <WorkbenchIcon name={icon(step)} />
-                    <strong>{label(step)}</strong>
-                  </label>
-                  <span
-                    className="pipeline-drag-handle"
-                    title={
-                      step.kind === 'reconstruct'
-                        ? 'Reconstruction defines the source and stays first.'
-                        : 'Drag to move this step'
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    dragged.current = step.id;
+                    dragOrigin.current = { x: event.clientX, y: event.clientY };
+                  }}
+                  onPointerMove={(event) => {
+                    const origin = dragOrigin.current;
+                    if (dragged.current !== step.id || !origin || !list.current) return;
+                    if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) < 4) return;
+                    const box = list.current.getBoundingClientRect();
+                    if (event.clientY < box.top || event.clientY > box.bottom) {
+                      pointerX.current = null;
+                      dropPosition.current = null;
+                      setDropAt(null);
+                      return;
                     }
-                  >
-                    <WorkbenchIcon name={step.kind === 'reconstruct' ? 'lock' : 'drag'} />
-                  </span>
-                </div>
-                {progress && (
-                  <span className="pipeline-step-status">
-                    {state === 'running' && <i className="pipeline-spinner" aria-hidden="true" />}
-                    {text}
-                  </span>
-                )}
-                {state === 'running' && (
-                  <progress
-                    aria-label={label(step) + ' progress'}
-                    max={1}
-                    value={progress?.progress || undefined}
-                  />
-                )}
-                {!['image', 'view', undefined].includes(
-                  step.options.input as string | undefined,
-                ) && <p className="control-note">Input: {String(step.options.input)}</p>}
-                {step.kind === 'fit' && (
-                  <small className="control-note">
-                    Fitting workflow (.mflow) · {step.result_maps?.length ?? 0} maps stored
-                    alongside image data
-                  </small>
-                )}
-                <div className="pipeline-step-actions">
-                  <button
-                    className="secondary"
-                    data-tutorial={step.family === 'denoise' ? 'pipeline-denoise-edit' : undefined}
-                    disabled={locked}
-                    onClick={() => {
-                      setSettings(settings === step.id ? null : step.id);
-                      setInsertAt(null);
-                      if (!draft) onDraft(current);
-                    }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="secondary"
-                    aria-label={'Move ' + label(step) + ' earlier'}
-                    title="Move earlier"
-                    disabled={
-                      locked || step.kind === 'reconstruct' || index <= (reconstruction ? 1 : 0)
-                    }
-                    onClick={() => move(step.id, index - 1)}
-                  >
-                    <WorkbenchIcon name="back" />
-                  </button>
-                  <button
-                    className="secondary"
-                    aria-label={'Move ' + label(step) + ' later'}
-                    title="Move later"
-                    disabled={locked || step.kind === 'reconstruct' || index === steps.length - 1}
-                    onClick={() => move(step.id, index + 1)}
-                  >
-                    <WorkbenchIcon name="forward" />
-                  </button>
-                  <button
-                    className="secondary"
-                    aria-label={'Copy ' + label(step)}
-                    title={
-                      step.kind === 'reconstruct'
-                        ? 'Reconstruction is the single image source.'
-                        : 'Copy step'
-                    }
-                    disabled={locked || step.kind === 'reconstruct' || steps.length >= 64}
-                    onClick={() => {
-                      try {
-                        const next = [...current.steps];
-                        next.splice(index + 1, 0, copiedStep(step));
-                        update({ ...current, steps: next });
-                      } catch (failure) {
-                        setError(String(failure));
-                      }
-                    }}
-                  >
-                    <WorkbenchIcon name="copy" />
-                  </button>
-                  <button
-                    className="secondary"
-                    aria-label={'Insert after ' + label(step)}
-                    title="Insert after"
-                    disabled={locked || steps.length >= 64}
-                    onClick={() => {
-                      setInsertAt(index + 1);
-                      setSettings(null);
-                    }}
-                  >
-                    <WorkbenchIcon name="add" />
-                  </button>
-                  <button
-                    className="secondary"
-                    disabled={locked}
-                    onClick={() => {
+                    pointerX.current = event.clientX;
+                    setDragging(step.id);
+                    indicateDrop(pointerBoundary(list.current, event.clientX));
+                  }}
+                  onPointerUp={(event) => {
+                    if (
+                      dragged.current === step.id &&
+                      dropPosition.current !== null &&
+                      list.current &&
+                      event.clientX >= list.current.getBoundingClientRect().left &&
+                      event.clientX <= list.current.getBoundingClientRect().right &&
+                      !locked &&
+                      !blocked
+                    ) {
                       update({
                         ...current,
-                        steps: current.steps.filter((row) => row.id !== step.id),
+                        steps: droppedSteps(current.steps, step.id, dropPosition.current),
                       });
-                      if (settings === step.id) setSettings(null);
-                    }}
-                  >
-                    Remove
-                  </button>
-                </div>
-                {step.kind !== 'reconstruct' && index === (reconstruction ? 1 : 0) && (
-                  <button
-                    className="pipeline-insert-before secondary"
-                    disabled={locked || steps.length >= 64}
-                    onClick={() => {
-                      setInsertAt(index);
-                      setSettings(null);
-                    }}
-                  >
-                    Insert before
-                  </button>
-                )}
-              </li>
+                      setNotice('Step moved. Changes are unapplied.');
+                    }
+                    finishDrag();
+                    if (event.currentTarget.hasPointerCapture(event.pointerId))
+                      event.currentTarget.releasePointerCapture(event.pointerId);
+                  }}
+                  onPointerCancel={finishDrag}
+                  onLostPointerCapture={finishDrag}
+                >
+                  <div className="pipeline-step-heading">
+                    <span className="pipeline-order">{index + 1}</span>
+                    <label className="check-label">
+                      <input
+                        type="checkbox"
+                        aria-label={'Enable ' + label(step)}
+                        checked={step.enabled}
+                        disabled={locked}
+                        onChange={(event) => changeStep(step.id, { enabled: event.target.checked })}
+                      />
+                      <WorkbenchIcon name={icon(step)} />
+                      <strong>{label(step)}</strong>
+                    </label>
+                    <span
+                      className="pipeline-drag-handle"
+                      title={
+                        step.kind === 'reconstruct'
+                          ? 'Reconstruction defines the source and stays first.'
+                          : 'Drag to move this step'
+                      }
+                    >
+                      <WorkbenchIcon name={step.kind === 'reconstruct' ? 'lock' : 'drag'} />
+                    </span>
+                  </div>
+                  {step.pending && (
+                    <span className="pipeline-step-status">Configured · awaiting run</span>
+                  )}
+                  {progress && !step.pending && (
+                    <span className="pipeline-step-status">
+                      {state === 'running' && <i className="pipeline-spinner" aria-hidden="true" />}
+                      {text}
+                    </span>
+                  )}
+                  {state === 'running' && (
+                    <progress
+                      aria-label={label(step) + ' progress'}
+                      max={1}
+                      value={progress?.progress || undefined}
+                    />
+                  )}
+                  {!['image', 'view', undefined].includes(
+                    step.options.input as string | undefined,
+                  ) && <p className="control-note">Input: {String(step.options.input)}</p>}
+                  {step.kind === 'fit' && (
+                    <small className="control-note">
+                      {step.result_maps?.length ?? 0} maps stored alongside image data
+                    </small>
+                  )}
+                  <div className="pipeline-step-actions">
+                    <button
+                      className="secondary"
+                      data-tutorial={
+                        step.family === 'denoise' ? 'pipeline-denoise-edit' : undefined
+                      }
+                      disabled={locked}
+                      onClick={() => {
+                        setInsertAt(null);
+                        edit(step);
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="secondary"
+                      aria-label={'Move ' + label(step) + ' earlier'}
+                      title="Move earlier"
+                      disabled={
+                        locked || step.kind === 'reconstruct' || index <= reconstructionCount
+                      }
+                      onClick={() => move(step.id, index - 1)}
+                    >
+                      <WorkbenchIcon name="back" />
+                    </button>
+                    <button
+                      className="secondary"
+                      aria-label={'Move ' + label(step) + ' later'}
+                      title="Move later"
+                      disabled={locked || step.kind === 'reconstruct' || index === steps.length - 1}
+                      onClick={() => move(step.id, index + 1)}
+                    >
+                      <WorkbenchIcon name="forward" />
+                    </button>
+                    <button
+                      className="secondary"
+                      aria-label={'Copy ' + label(step)}
+                      title={
+                        ['fit', 'reconstruct'].includes(step.kind)
+                          ? 'One block per experiment'
+                          : 'Copy step'
+                      }
+                      disabled={
+                        locked || ['fit', 'reconstruct'].includes(step.kind) || steps.length >= 64
+                      }
+                      onClick={() => {
+                        try {
+                          const next = [...current.steps];
+                          next.splice(index + 1, 0, copiedStep(step));
+                          update({ ...current, steps: next });
+                        } catch (failure) {
+                          setError(String(failure));
+                        }
+                      }}
+                    >
+                      <WorkbenchIcon name="copy" />
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={locked}
+                      onClick={() => {
+                        if (editing === step.id) cancelEdit();
+                        update({
+                          ...current,
+                          steps: current.steps.filter((row) => row.id !== step.id),
+                        });
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <div className="pipeline-step-actions pipeline-insert-actions">
+                    <button
+                      className="secondary"
+                      aria-label={'Insert before ' + label(step)}
+                      disabled={locked || index < reconstructionCount || steps.length >= 64}
+                      onClick={() => {
+                        openInsert(index);
+                      }}
+                    >
+                      <WorkbenchIcon name="add" />
+                      Insert before
+                    </button>
+                    <button
+                      className="secondary"
+                      aria-label={'Insert after ' + label(step)}
+                      disabled={locked || steps.length >= 64}
+                      onClick={() => {
+                        openInsert(index + 1);
+                      }}
+                    >
+                      <WorkbenchIcon name="add" />
+                      Insert after
+                    </button>
+                  </div>
+                </li>
+              </Fragment>
             );
           })}
+          {dropSlot(steps.length)}
         </ol>
         {insertAt !== null && (
           <div className="pipeline-settings" role="form" aria-label="Insert pipeline step">
@@ -666,7 +817,6 @@ export function Pipeline({
                 disabled={locked || !catalog}
                 onChange={(event) => {
                   setInsertion(event.target.value);
-                  setBlock(null);
                 }}
               >
                 {methods.map((method) => (
@@ -681,11 +831,13 @@ export function Pipeline({
                 </option>
                 <option
                   value="reconstruct"
-                  disabled={!w.can_reconstruct || Boolean(reconstruction)}
+                  disabled={!w.can_reconstruct || Boolean(reconstruction) || insertAt !== 0}
                 >
-                  Reconstruction workflow (.mflow)
+                  Reconstruction
                 </option>
-                <option value="fit">Fitting workflow (.mflow)</option>
+                <option value="fit" disabled={steps.some((step) => step.kind === 'fit')}>
+                  Fitting
+                </option>
               </select>
             </label>
             {insertion === 'reconstruct' && (
@@ -693,92 +845,17 @@ export function Pipeline({
                 Reconstruction uses acquired k-space and is inserted first.
               </p>
             )}
-            {['reconstruct', 'fit'].includes(insertion) && (
-              <PipelineWorkflowBlock
-                workspace={w}
-                kind={insertion as 'reconstruct' | 'fit'}
-                value={block}
-                onChange={setBlock}
-                disabled={locked}
-              />
-            )}
             <div className="button-row">
               <button
                 type="button"
-                onClick={add}
+                onClick={() => void add()}
                 className="secondary"
-                disabled={
-                  locked || !catalog || (['reconstruct', 'fit'].includes(insertion) && !block)
-                }
+                disabled={locked || !catalog}
               >
                 Insert into draft
               </button>
               <button type="button" className="secondary" onClick={() => setInsertAt(null)}>
                 Cancel insertion
-              </button>
-            </div>
-          </div>
-        )}
-        {selected && controller && (
-          <div className="pipeline-settings">
-            {['reconstruct', 'fit'].includes(selected.kind) ? (
-              <PipelineWorkflowBlock
-                key={selected.id}
-                workspace={w}
-                kind={selected.kind as 'reconstruct' | 'fit'}
-                value={selected.options}
-                onChange={(options) =>
-                  changeStep(selected.id, {
-                    options,
-                    editor: undefined,
-                    version: crypto.randomUUID(),
-                  })
-                }
-                disabled={locked}
-              />
-            ) : (
-              <>
-                <DataEditor
-                  key={selected.id}
-                  label="Pipeline step settings"
-                  controller={controller}
-                  disabled={locked}
-                  applyLabel="Validate draft settings"
-                  onApply={async (options) =>
-                    changeStep(selected.id, {
-                      options,
-                      editor: undefined,
-                      version: crypto.randomUUID(),
-                    })
-                  }
-                />
-              </>
-            )}
-            <p className="control-note">
-              Settings remain in this draft until Apply pipeline. Use action controls for parameter
-              descriptions and dedicated forms.
-            </p>
-            <div className="button-row">
-              {selected.kind !== 'fit' && (
-                <button
-                  className="secondary"
-                  disabled={locked || Boolean(issue)}
-                  onClick={() => {
-                    try {
-                      const options = stepOptions(selected);
-                      changeStep(selected.id, { options, editor: undefined });
-                      setSettings(null);
-                      edit({ ...selected, options });
-                    } catch (failure) {
-                      setError(String(failure));
-                    }
-                  }}
-                >
-                  Use action controls
-                </button>
-              )}
-              <button className="secondary" onClick={() => setSettings(null)}>
-                Close settings
               </button>
             </div>
           </div>
@@ -793,10 +870,7 @@ export function Pipeline({
         )}
         {editing && (
           <div className="pipeline-edit-status">
-            <span>
-              Editing draft step settings in the action controls. Apply the pipeline after updating
-              the draft.
-            </span>
+            <span>Editing settings in the action controls.</span>
             <button className="secondary" onClick={cancelEdit}>
               Stop editing step
             </button>

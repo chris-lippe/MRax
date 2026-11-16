@@ -144,7 +144,9 @@ def update_metadata(workspace, options):
         extra_metadata=options.get("metadata"),
     )
     pipeline = workspace.pipelines.get(session.selected_experiment)
-    if pipeline:
+    stored = [pipeline] if pipeline else []
+    stored += [entry["cache"]["pipeline"] for entry in workspace.pipeline_sets.get(session.selected_experiment, {}).values() if entry.get("cache")]
+    for pipeline in stored:
         # Metadata edits are experiment edits, independent of image processing.
         for state in (pipeline["source"], pipeline["output"]):
             if observables is not None:
@@ -716,6 +718,12 @@ def transform_roi(workspace, options):
 
 
 def run_operation(workspace, operation, options, progress):
+    if operation != "pipeline" and "pipeline_id" in options:
+        from .pipeline_choices import active_id
+
+        if options["pipeline_id"] != active_id(workspace):
+            raise ValueError("Select this pipeline before editing or running it")
+        options = {key: value for key, value in options.items() if key != "pipeline_id"}
     session = workspace.session
     if operation == "workflow":
         from .reusable_workflows import apply_workflow
@@ -740,6 +748,10 @@ def run_operation(workspace, operation, options, progress):
         from .pipeline import apply_step
 
         return workspace, apply_step(workspace, options, progress, kind="reconstruct")
+    if operation == "full_fit" and not getattr(workspace, "_pipeline_evaluating", False):
+        from .pipeline import apply_step
+
+        return workspace, apply_step(workspace, options, progress, kind="fit")
     if operation in {"register", "drift"}:
         from .pipeline import apply_step
 

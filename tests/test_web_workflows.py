@@ -185,6 +185,29 @@ def test_multipool_edits_preserve_parameters_predictions_and_saved_settings(clie
         assert parameter + "_amide" not in workspace["fit_settings"]["regularizer_configs"]
         edit("fit.pool", operation="remove", name="glu")
 
+    # Proposed model and pool edits leave the applied workspace unchanged.
+    unchanged = client.get(path).json()
+    proposed = {**workspace["fit_settings"], "model_name": "multipool_lorentzian", "num_steps": 123}
+    response = client.post(path + "/fit-options", json={
+        "revision": workspace["revision"], "settings": proposed,
+        "pool_edit": {"operation": "add", "name": "test_pool", "template": "glu"},
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"]["model"] == "multipool_lorentzian"
+    assert "amp_test_pool" in response.json()["parameters"]
+    assert response.json()["settings"]["num_steps"] == 123
+    assert client.get(path).json() == unchanged
+    captured = client.post(path + "/workflows", json={
+        "revision": workspace["revision"], "kind": "fitting", "draft": {"use_roi": False},
+    }).json()
+    resolved = client.post(path + "/pipeline-editor", json={
+        "revision": workspace["revision"], "kind": "fit",
+        "options": {"workflow": captured["document"], "bindings": {}},
+    })
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["options"]["settings"]["model_name"] == workspace["model"]
+    assert client.get(path).json() == unchanged
+
     revision = workspace["revision"]
     for options in (
         {"operation": "add", "name": "bad name", "template": "glu"},

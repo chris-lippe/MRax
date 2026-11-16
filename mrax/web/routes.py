@@ -17,10 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from mrax.devices import get_available_devices
 from mrax.gui.masks import import_mask, load_roi_set
 from mrax.gui.models import (
-    model_available_pools,
     model_choices,
-    model_default_pools,
-    model_fit_inputs,
     model_parameter_specs,
 )
 from mrax.gui.registration import DriftCorrectionOptions, RegistrationOptions, registration_presets
@@ -36,7 +33,7 @@ from mrax.gui.services.fit_setup import (
     apply_fit_exclusions,
     check_fit_readiness,
     edit_pool,
-    fitting_dimensions,
+    fit_catalog,
     fitting_frame_page,
 )
 from mrax.gui.services.mask_preview import native_mask_preview
@@ -54,11 +51,13 @@ from .info import workspace_info
 from .schemas import (
     ActionCommand,
     FitCheckCommand,
+    FitOptionsCommand,
     FitReadinessResult,
     ImportCommand,
     JobInfo,
     MaskPreview,
     NoiseEstimateCommand,
+    PipelineEditorCommand,
     ProcessingCatalog,
     TaskCommand,
     TimecourseCommand,
@@ -343,6 +342,7 @@ def register_routes(app, get_record, check_revision, add_record):
                     workspace.display_settings,
                     workspace.visual_undo_stacks,
                     workspace.pipelines,
+                    workspace.pipeline_sets,
                 ):
                     if old in table:
                         table[new] = table.pop(old)
@@ -614,6 +614,28 @@ def register_routes(app, get_record, check_revision, add_record):
         with record.lock:
             return block_catalog(record.workspace)
 
+    @app.post("/api/workspaces/{key}/pipeline-editor")
+    def pipeline_editor(key: str, command: PipelineEditorCommand):
+        from mrax.gui.services.pipeline_blocks import resolved_block
+
+        record = get_record(key)
+        with record.lock:
+            check_revision(record, command.revision)
+            snapshot = clone_workspace(record.workspace, readonly_arrays=True)
+        _document, options = resolved_block(snapshot, command.kind, command.options, validate=False)
+        return {"options": json_value(options)}
+
+    @app.post("/api/workspaces/{key}/fit-options")
+    def proposed_fit_options(key: str, command: FitOptionsCommand):
+        record = get_record(key)
+        with record.lock:
+            check_revision(record, command.revision)
+            snapshot = clone_workspace(record.workspace, readonly_arrays=True)
+        set_fit_settings(snapshot, command.settings)
+        if command.pool_edit is not None:
+            edit_pool(snapshot, {**command.pool_edit, "settings": command.settings})
+        return json_value(fit_catalog(snapshot))
+
     @app.post("/api/workspaces/{key}/noise-estimate")
     def noise_estimate(key: str, command: NoiseEstimateCommand):
         record = get_record(key)
@@ -695,29 +717,7 @@ def register_routes(app, get_record, check_revision, add_record):
     def fit_options(key: str):
         record = get_record(key)
         with record.lock:
-            session = record.workspace.session
-            model = session.fit_settings.model_name or session.current_model_name
-            inputs = model_fit_inputs(model)
-            reference_scan = (
-                inputs.reference_scan and session.current_experiment.get("exp_type") == "sat_trans"
-            )
-            return {
-                "workspace_id": key,
-                "experiment": session.selected_experiment,
-                "model": model,
-                "inputs": {
-                    "reference_scan": reference_scan,
-                    "prior_maps": inputs.prior_maps,
-                    "derived_maps": inputs.derived_maps,
-                },
-                "pools": model_available_pools(model, session.fit_settings.pool_overrides),
-                "default_pools": model_default_pools(model),
-                "field_dimensions": fitting_dimensions(session, model),
-                "reference_scans": session.sat_trans_reference_choices() if reference_scan else [],
-                "prior_maps": {
-                    kind: session.ab_mt_map_choices(kind) for kind in inputs.prior_maps
-                },
-            }
+            return json_value(fit_catalog(record.workspace)["choices"])
 
     @app.get("/api/jobs/{key}/download")
     def download(key: str):

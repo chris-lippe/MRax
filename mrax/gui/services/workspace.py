@@ -28,5 +28,6 @@ class StudyWorkspace:
     diagnostics: list[dict[str, Any]] = field(default_factory=list)
     roi_history: list[dict[str, Any]] = field(default_factory=list, repr=False)
     pipelines: dict[str, dict[str, Any]] = field(default_factory=dict)
+    pipeline_sets: dict[str, dict[str, Any]] = field(default_factory=dict)
     pipeline_mask_cache: dict = field(default_factory=dict, repr=False)
     source_files: list[dict[str, Any]] = field(default_factory=list, repr=False)

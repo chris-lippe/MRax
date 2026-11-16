@@ -26,6 +26,7 @@ export const viewContextKey = (workspace: Workspace, context: ViewingContext) =>
   JSON.stringify([
     workspace.id,
     workspace.experiment,
+    workspace.pipeline.id,
     context.section,
     context.section === 'analyze' ? context.task : '',
   ]);
@@ -83,7 +84,7 @@ export function contextView(
       (!remembered.scene.comparison.enabled ||
         [remembered.scene.comparison.left, remembered.scene.comparison.right].every((source) =>
           workspace.scene.comparison_sources.some((choice) =>
-            ['experiment', 'kind', 'map_name', 'registration_key'].every(
+            ['experiment', 'pipeline_id', 'kind', 'map_name', 'registration_key'].every(
               (key) =>
                 (choice[key as keyof typeof choice] ?? null) ===
                 (source[key as keyof typeof source] ?? null),

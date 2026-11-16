@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { components } from './api.generated';
 import { api, type Options } from './api';
 import type { AnalysisProps } from './analysisTypes';
@@ -8,6 +8,7 @@ import { WorkbenchIcon } from './WorkbenchIcon';
 import { NoiseEstimationControls } from './NoiseEstimationControls';
 import { processingGroups, type ProcessingSection } from './WorkflowNav';
 import { WorkflowButton } from './WorkflowButton';
+import { usePipelineOptions } from './usePipelineOptions';
 
 type Catalog = components['schemas']['ProcessingCatalog'];
 type Draft = {
@@ -66,15 +67,20 @@ export function ProcessControls({
   section,
   active,
   openWorkflows,
-}: Pick<AnalysisProps, 'workspace' | 'busy' | 'run' | 'editingStep' | 'openWorkflows'> & {
+  stagePipelineOptions,
+}: Pick<
+  AnalysisProps,
+  'workspace' | 'busy' | 'run' | 'editingStep' | 'openWorkflows' | 'stagePipelineOptions'
+> & {
   section: ProcessingSection;
   active: boolean;
 }) {
   const [loaded, setLoaded] = useState<{ key: string; value: Catalog } | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [error, setError] = useState('');
+  const edited = useRef('');
   const axesHelpId = useId();
-  const context = JSON.stringify([w?.id, w?.experiment, section]);
+  const context = JSON.stringify([w?.id, w?.experiment, w?.pipeline.id, section]);
   const editing =
     editingStep?.kind === 'process' &&
     (editingStep.family === section ||
@@ -319,9 +325,21 @@ export function ProcessControls({
     noise_roi_names:
       ['bm3d', 'bm4d'].includes(method?.id ?? '') && parameters.sigma == null ? noiseRois : null,
   };
+  usePipelineOptions(
+    Boolean(editing && active && catalog),
+    Boolean(editKey && edited.current === editKey),
+    processOptions,
+    stagePipelineOptions,
+    invalid ? 'Complete the processing settings in the action controls.' : undefined,
+  );
 
   return (
-    <div className="processing-controls">
+    <div
+      className="processing-controls"
+      onChangeCapture={() => {
+        edited.current = editKey;
+      }}
+    >
       {section === 'denoise' && (
         <WorkflowButton
           data-tutorial="processing-workflows"
@@ -606,11 +624,9 @@ export function ProcessControls({
               data-tutorial={section === 'denoise' ? 'denoise-apply' : undefined}
             >
               <WorkbenchIcon name="apply" />
-              {editing
-                ? 'Stage ' + (section === 'denoise' ? 'denoising' : 'time-series') + ' settings'
-                : section === 'denoise'
-                  ? 'Apply denoising'
-                  : (actionLabels[method?.id ?? ''] ?? 'Apply processing')}
+              {section === 'denoise'
+                ? 'Apply denoising'
+                : (actionLabels[method?.id ?? ''] ?? 'Apply processing')}
             </button>
           </div>
         </fieldset>

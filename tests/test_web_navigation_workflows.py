@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mrax.data_struct import Quantity
+from mrax.gui.services.analysis_workflows import run_operation
 from mrax.web.app import create_app
 
 
@@ -115,6 +116,34 @@ def test_signal_profiles_use_whole_images_and_declared_spectral_coordinates(clie
     assert response.status_code == 200, response.text
     assert response.json()["timecourse"]["roi_name"] is None
     np.testing.assert_array_equal(record.workspace.session.original_image_array, data)
+
+    echoes = client.post("/api/workspaces/new").json()
+    record = client.app.state.records[echoes["id"]]
+    values = np.arange(8 * 6 * 5, dtype=np.float32).reshape(8, 6, 5)
+    record.workspace.session.add_experiment(
+        "Echo series", values, dims={"te": 8, "x": 6, "y": 5}, model_name="t2_se",
+        observables={"TE": Quantity(np.arange(1, 9) * 10, "ms")},
+    )
+    run_operation(record.workspace, "process", {
+        "method": "gaussian", "input": "image", "axes": ["te", "x", "y"],
+        "parameters": {"sigma": 0.5},
+    }, lambda *_: None)
+    record.revision += 1
+    record.info_cache.clear()
+    w = client.get(f"/api/workspaces/{echoes['id']}").json()
+    processed = record.workspace.session.image_array.copy()
+    for indices in ({"te": 3, "frame": 0}, {"frame": 0, "te": 3}, {"te": 3}):
+        header, planes = decode(navigate(client, w, indices, commit=False))
+        assert header["workspace"]["frame"] == 3
+        assert header["workspace"]["indices"]["te"] == 3
+        np.testing.assert_array_equal(planes["image"], processed[3])
+    header, _ = decode(navigate(client, w, {"te": 6, "frame": 0}))
+    w = header["workspace"]
+    assert w["indices"]["te"] == 6
+    header, planes = decode(navigate(client, w, {"te": 2, "frame": 6}))
+    assert header["workspace"]["frame"] == 2
+    np.testing.assert_array_equal(planes["image"], processed[2])
+    np.testing.assert_array_equal(record.workspace.session.image_array, processed)
 
     timed = client.post("/api/workspaces/new").json()
     record = client.app.state.records[timed["id"]]

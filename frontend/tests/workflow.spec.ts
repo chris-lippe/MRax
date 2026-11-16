@@ -134,6 +134,26 @@ test('View, Segment, Fit and Register share layers and independent ROI selection
   expect(completed.registrations[0].diagnostics).toMatchObject({
     post: { mse: expect.any(Number) },
   });
+  const pipeline = page.getByRole('region', { name: 'Processing pipeline', exact: true });
+  await pipeline.getByRole('button', { name: 'Show processing steps', exact: true }).click();
+  await pipeline
+    .locator('.pipeline-step')
+    .first()
+    .getByRole('button', { name: 'Edit', exact: true })
+    .click();
+  await expect(page.getByLabel('Horizontal shift', { exact: true })).toHaveValue('3');
+  await page.getByLabel('Horizontal shift', { exact: true }).fill('2.5');
+  await expect(pipeline).toContainText('Unapplied changes');
+  expect((await current(request)).pipeline.steps[0].version).toBe(
+    completed.pipeline.steps[0].version,
+  );
+  await page.getByRole('button', { name: 'Run registration', exact: true }).click();
+  await expect
+    .poll(async () => (await current(request)).pipeline.steps[0].version)
+    .not.toBe(completed.pipeline.steps[0].version);
+  await expect(page.locator('.job-status strong')).toHaveText('Operation complete');
+  expect((await current(request)).pipeline.steps[0].id).toBe(completed.pipeline.steps[0].id);
+  expect((await current(request)).pipeline.steps).toHaveLength(1);
   await page.getByRole('button', { name: 'View registered overlay', exact: true }).click();
   await selectWorkflow(page, 'View', 'Image and ROI overlays');
   await expect(page.getByRole('region', { name: 'Overlay 1', exact: true })).toContainText(

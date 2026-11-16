@@ -139,7 +139,47 @@ test('stages insert, edit, remove and discard. Named reconstruction workflows sa
   await expect(page.getByLabel('Reconstruction pipeline name', { exact: true })).toHaveValue(
     'Imported Fourier',
   );
-  expect((await opened(request))[0].reconstruction_label).toBe('Windowed Fourier');
+  await expect.poll(async () => (await opened(request))[0].pipeline.steps[0].pending).toBe(true);
+  expect((await opened(request))[0].pipeline.steps).toHaveLength(1);
+  expect((await opened(request))[0].pipeline.steps[0].id).toBe(applied.pipeline.steps[0].id);
+  expect(await pixels(request)).not.toEqual(original);
+  await page.getByRole('button', { name: 'Apply reconstruction', exact: true }).click();
+  await expect(page.locator('.job-status strong')).toHaveText('Operation complete');
+  expect((await opened(request))[0].pipeline.steps).toHaveLength(1);
+  expect((await opened(request))[0].pipeline.steps[0].id).toBe(applied.pipeline.steps[0].id);
+  const pipeline = page.getByRole('region', { name: 'Processing pipeline', exact: true });
+  await pipeline.getByRole('button', { name: 'Show processing steps', exact: true }).click();
+  const rows = pipeline.locator('.pipeline-step');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().getByRole('button', { name: /^Copy / })).toBeDisabled();
+  await rows.first().getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'Reconstruct', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByLabel('Reconstruction pipeline name', { exact: true })).toHaveValue(
+    'Imported Fourier',
+  );
+  await page.getByLabel('Reconstruction pipeline name', { exact: true }).fill('Edited Fourier');
+  await expect(pipeline).toContainText('Unapplied changes');
+  expect((await opened(request))[0].pipeline.steps[0].label).toBe('Imported Fourier');
+  await page.getByRole('button', { name: 'Apply reconstruction', exact: true }).click();
+  await expect
+    .poll(async () => (await opened(request))[0].pipeline.steps[0].label)
+    .toBe('Edited Fourier');
+  await expect(page.locator('.job-status strong')).toHaveText('Operation complete');
+  expect((await opened(request))[0].pipeline.steps).toHaveLength(1);
+  expect((await opened(request))[0].pipeline.steps[0].id).toBe(applied.pipeline.steps[0].id);
+  await pipeline.getByRole('button', { name: 'Insert step', exact: true }).click();
+  await expect(
+    pipeline
+      .getByLabel('New pipeline step')
+      .getByRole('option', { name: 'Reconstruction', exact: true }),
+  ).toHaveJSProperty('disabled', true);
+  await expect(
+    pipeline.getByLabel('New pipeline step').getByRole('option', { name: 'Fitting', exact: true }),
+  ).toHaveJSProperty('disabled', false);
+  await pipeline.getByRole('button', { name: 'Cancel insertion', exact: true }).click();
   await page.screenshot({ path: info.outputPath('reconstruction-stages.png') });
 });
 

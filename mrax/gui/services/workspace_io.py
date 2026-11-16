@@ -11,6 +11,7 @@ import numpy as np
 
 from mrax.gui.session import GuiSession
 from mrax.io.bundle import extract_bundle, write_bundle
+from mrax.workflow_rules import validate_pipeline_order
 
 from .cloning import clone_workspace
 from .package import _mrax_package_entries, _write_mrax_package_manifest
@@ -106,7 +107,7 @@ def save_workspace_folder(workspace, root):
             processed_arrays[name][field] = array_key
     from .pipeline import encode_pipelines
 
-    pipelines = encode_pipelines(workspace, arrays)
+    pipelines = encode_pipelines(workspace, arrays, {"pipelines": workspace.pipelines, "pipeline_sets": workspace.pipeline_sets})
     np.savez_compressed(root / "workflow_arrays.npz", **arrays)
     fits = {}
     for name, result in workspace.fit_results_by_experiment.items():
@@ -122,7 +123,7 @@ def save_workspace_folder(workspace, root):
         "diagnostics": workspace.diagnostics[-200:],
         "array_file": "workflow_arrays.npz",
         "processed_arrays": processed_arrays,
-        "pipelines": pipelines,
+        **pipelines,
         "reconstruction_settings": {
             name: {
                 key: value
@@ -286,10 +287,15 @@ def load_workspace_root(root, *, key):
             if row.get("pipeline_grid"):
                 session.data["experiments"][name]["fit_grid"] = row["pipeline_grid"]
         workspace.pipelines = decode_pipelines(workflow.get("pipelines", {}), arrays)
+        workspace.pipeline_sets = decode_pipelines(workflow.get("pipeline_sets", {}), arrays)
+        from .pipeline_choices import validate_sets
+
+        validate_sets(workspace)
         selected = session.selected_experiment
         for name, pipeline in workspace.pipelines.items():
             if name not in session.experiment_names or len(pipeline["steps"]) > 64:
                 raise ValueError("Invalid experiment pipeline")
+            validate_pipeline_order([step["kind"] for step in pipeline["steps"]])
             session.select_experiment(name)
             session.current_experiment["original_mr_image"] = pipeline["source"]["data"]
             session.current_experiment["pipeline_source_grid"] = {

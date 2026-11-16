@@ -9,7 +9,7 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
 
 import { selectWorkflow, selectTheme } from './ui';
 
-import type { Workspace } from '../src/api';
+import type { Job, Workspace } from '../src/api';
 
 async function opened(request: APIRequestContext) {
   return (await (await request.get('/api/workspaces')).json()) as Workspace[];
@@ -95,8 +95,8 @@ test('processing stays in one experiment and an editable pipeline preserves sour
   const viewer = page.getByRole('region', { name: 'Image viewer', exact: true });
   const compactHeight = (await pipeline.boundingBox())!.height;
   expect(compactHeight).toBeLessThanOrEqual(48);
-  await expect(pipeline.locator('header button')).toHaveCount(1);
-  await expect(pipeline.locator('header select')).toHaveCount(0);
+  await expect(pipeline.getByLabel('Active pipeline', { exact: true })).toBeVisible();
+  await expect(pipeline.getByRole('button', { name: 'New pipeline', exact: true })).toBeVisible();
   await expect(pipeline.getByLabel('Pipeline source', { exact: true })).not.toBeVisible();
   await expect(
     pipeline.getByRole('group', { name: 'Pipeline output', exact: true }),
@@ -126,25 +126,37 @@ test('processing stays in one experiment and an editable pipeline preserves sour
   expect((await viewer.boundingBox())!.height).toBeCloseTo(imageHeight, 0);
   const gaussian = pipeline.getByRole('listitem', { name: 'Gaussian denoising', exact: true });
   await gaussian.getByRole('button', { name: 'Edit', exact: true }).click();
-  await pipeline.getByRole('button', { name: 'Use action controls', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'Denoise', exact: true })).toHaveAttribute(
     'aria-selected',
     'true',
   );
   await expect(page.getByLabel('Sigma (voxels)', { exact: true })).toHaveValue('1.2');
   await page.getByLabel('Sigma (voxels)', { exact: true }).fill('0.6');
-  await page.getByRole('button', { name: 'Stage denoising settings', exact: true }).click();
   expect((await opened(request))[0].pipeline.steps[0].version).toBe(denoise.version);
-  await pipeline.getByRole('button', { name: 'Apply pipeline', exact: true }).click();
+  const rerunResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/api/workspaces/${w.id}/tasks`) &&
+      response.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Apply denoising', exact: true }).click();
+  let rerun = (await (await rerunResponse).json()) as Job;
+  await expect
+    .poll(async () => {
+      rerun = (await (await request.get(`/api/jobs/${rerun.id}`)).json()) as Job;
+      return rerun.status;
+    })
+    .toBe('completed');
+  expect(rerun.pipeline?.steps.find((step) => step.kind === 'fit')?.status).toBe('completed');
   await expect
     .poll(async () => (await opened(request))[0].pipeline.steps[0].version)
     .not.toBe(denoise.version);
   [w] = await opened(request);
-  expect(w.pipeline.steps).toHaveLength(2);
+  expect(w.pipeline.steps).toHaveLength(3);
   expect(w.pipeline.steps[0].id).toBe(denoise.id);
   expect(w.pipeline.steps[0].options.parameters).toMatchObject({ sigma: 0.6 });
   expect(w.maps).toEqual(maps);
-  await expect(pipeline).toContainText('retained from an earlier pipeline state');
+  expect(w.pipeline.fits_stale).toBe(false);
+  await expect(pipeline.locator('.pipeline-fit-status')).not.toBeVisible();
   const processed = await slice(w.id);
 
   await pipeline.getByRole('button', { name: 'Original', exact: true }).click();
@@ -153,7 +165,7 @@ test('processing stays in one experiment and an editable pipeline preserves sour
   await pipeline.getByRole('button', { name: 'Hide processing steps', exact: true }).click();
   await expect(pipeline.locator('header')).toContainText('Original');
   await pipeline.getByRole('button', { name: 'Show processing steps', exact: true }).click();
-  await expect(pipeline.locator('.pipeline-step')).toHaveCount(2);
+  await expect(pipeline.locator('.pipeline-step')).toHaveCount(3);
   let releaseRefresh = () => {};
   let observeRefresh = () => {};
   const refreshGate = new Promise<void>((resolve) => {
@@ -205,7 +217,7 @@ test('processing stays in one experiment and an editable pipeline preserves sour
   const file = info.outputPath('pipeline-study.mrax');
   await saveWorkspace(page, file);
   await openWorkspace(page, file);
-  await expect(pipeline.locator('.pipeline-step')).toHaveCount(2);
+  await expect(pipeline.locator('.pipeline-step')).toHaveCount(3);
   await gaussian.getByRole('button', { name: 'Remove', exact: true }).click();
   await pipeline.getByRole('button', { name: 'Apply pipeline', exact: true }).click();
   await expect
@@ -213,8 +225,8 @@ test('processing stays in one experiment and an editable pipeline preserves sour
       async () =>
         (await opened(request)).find((item) => item.id !== initial.id)!.pipeline.steps.length,
     )
-    .toBe(1);
-  await expect(pipeline.locator('.pipeline-step')).toHaveCount(1);
+    .toBe(2);
+  await expect(pipeline.locator('.pipeline-step')).toHaveCount(2);
   await expect(pipeline).toContainText('Baseline correction');
   await pipeline.getByRole('button', { name: 'Remove all processing', exact: true }).click();
   await pipeline.getByRole('button', { name: 'Apply pipeline', exact: true }).click();

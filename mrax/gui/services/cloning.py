@@ -18,6 +18,7 @@ def clone_workspace(workspace, *, readonly_arrays=False, share_sources=False):
             workspace.session.study,
             workspace.session.import_metadata,
             workspace.pipelines,
+            workspace.pipeline_sets,
             workspace.registration_results,
             workspace.drift_results,
         ):

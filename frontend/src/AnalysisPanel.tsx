@@ -29,6 +29,7 @@ export function AnalysisPanel(
       jobStudyLabel?: string;
       onJobChange: (job: Job) => void;
       onTimecourseResult: (result: TimecourseResult | null) => void;
+      editorFormKey?: string;
     },
 ) {
   const body = useRef<HTMLDivElement>(null);
@@ -36,7 +37,7 @@ export function AnalysisPanel(
   const [analysisProcessingOpen, setAnalysisProcessingOpen] = useState(false);
   useEffect(() => {
     body.current?.scrollTo({ top: 0 });
-  }, [props.section, props.task]);
+  }, [props.section, props.task, props.editingStep?.id]);
   const running = props.job && ['queued', 'running', 'cancelling'].includes(props.job.status);
   const blocked = { ...props, busy: props.busy || Boolean(running) };
   const section = props.section;
@@ -52,6 +53,26 @@ export function AnalysisPanel(
           ? 'analyze'
           : null;
   const workflow = workflows.find((item) => item.id === section)!;
+  const fitOptions = props.editingStep?.kind === 'fit' ? props.editingStep.options : null;
+  const fittingWorkspace =
+    props.workspace && fitOptions
+      ? {
+          ...props.workspace,
+          model: String(
+            (fitOptions.settings as Record<string, unknown>)?.model_name ?? props.workspace.model,
+          ),
+          fit_settings: {
+            ...props.workspace.fit_settings,
+            ...(fitOptions.settings as Record<string, unknown>),
+          },
+          frame_exclusions: (fitOptions.excluded_frames as number[] | undefined) ?? [],
+          scene: {
+            ...props.workspace.scene,
+            fit_region: fitOptions.use_roi === false ? ('all' as const) : ('rois' as const),
+            fit_rois: (fitOptions.roi_names as string[] | null) ?? null,
+          },
+        }
+      : props.workspace;
   return (
     <aside
       id="analysis-controls"
@@ -80,6 +101,14 @@ export function AnalysisPanel(
         aria-labelledby={`workflow-${section} workflow-task-heading`}
         tabIndex={0}
       >
+        {props.editingStep && (
+          <div className="pipeline-control-editing">
+            <span>Editing {props.editingStep.label}</span>
+            <button className="secondary" onClick={props.cancelPipelineEdit}>
+              Stop editing
+            </button>
+          </div>
+        )}
         {section === 'analyze' && (
           <div className="workflow-library-row">
             <WorkflowButton
@@ -139,7 +168,11 @@ export function AnalysisPanel(
           <ReconstructionControls {...blocked} active={task === 'reconstruction'} />
         </div>
         <div hidden={section !== 'fit'}>
-          <FitControls {...blocked} />
+          <FitControls
+            key={props.editingStep?.kind === 'fit' ? props.editorFormKey : 'fit'}
+            {...blocked}
+            workspace={fittingWorkspace}
+          />
         </div>
         <div hidden={task !== 'alignment' && task !== 'drift'}>
           <RegistrationControls {...blocked} task={props.task} />

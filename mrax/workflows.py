@@ -80,14 +80,14 @@ class WorkflowDocument(_StrictModel):
 
     @model_validator(mode="after")
     def consistent_document(self):
-        targets = set()
+        from mrax.workflow_rules import validate_pipeline_order
+
+        targets = {}
         for step in self.steps:
             target = json.dumps(step.target, sort_keys=True)
-            if step.operation == "reconstruct" and target in targets:
-                raise ValueError(
-                    "Reconstruction must occur once, before other blocks on its target"
-                )
-            targets.add(target)
+            targets.setdefault(target, []).append(step.operation)
+        for operations in targets.values():
+            validate_pipeline_order(operations)
         if not any(step.enabled for step in self.steps):
             raise ValueError("Enable at least one workflow step")
         for values in (self.steps, self.bindings):

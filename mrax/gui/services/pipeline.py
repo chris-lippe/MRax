@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 from uuid import uuid4
 
 import numpy as np
@@ -41,7 +39,9 @@ def display_steps(workspace, *, fitted=False, map_name=None):
         if "pipeline_steps" in result:
             return result["pipeline_steps"]
     pipeline = current_pipeline(workspace)
-    return pipeline["steps"] if pipeline and pipeline["enabled"] else []
+    from .pipeline_state import image_steps
+
+    return image_steps(pipeline) if pipeline and pipeline["enabled"] else []
 
 
 def display_session(workspace, *, fitted=False, map_name=None):
@@ -98,12 +98,12 @@ def display_session(workspace, *, fitted=False, map_name=None):
 
 
 def signature(workspace):
+    from .pipeline_state import image_signature, image_steps
+
     pipeline = current_pipeline(workspace)
-    steps = [] if not pipeline else [s for s in pipeline["steps"] if s["kind"] != "fit"]
-    if not pipeline or not pipeline["enabled"] or not any(s["enabled"] for s in steps):
+    if not pipeline or not pipeline["enabled"]:
         return "original"
-    values = [(s["id"], s["version"], s["enabled"]) for s in steps]
-    return hashlib.sha256(json.dumps(values).encode()).hexdigest()
+    return image_signature(image_steps(pipeline))
 
 
 def snapshot(session, *, original=False):
@@ -209,13 +209,17 @@ def ensure_pipeline(workspace):
 
         source = snapshot(session, original=True)
         workspace.pipelines[name] = {
+            "id": "main",
             "source": source,
             "output": source,
             "steps": [],
             "enabled": True,
             "generation": 0,
             "sources": pipeline_sources(workspace),
+            "source_processed": dict(session.current_experiment.get("processed") or {}),
         }
+    workspace.pipelines[name].setdefault("id", "main")
+    workspace.pipeline_sets.setdefault(name, {"main": {"name": "Pipeline 1", "cache": None}})
     session.current_experiment["pipeline_source_grid"] = _grid(workspace.pipelines[name]["source"])
     return workspace.pipelines[name]
 
@@ -278,12 +282,14 @@ def _public_step(step):
             "plane_dims",
             "noise_estimate",
             "result_maps",
+            "pending",
         )
         if key in step
     }
 
 
 def pipeline_info(workspace):
+    from .pipeline_choices import active_id, choices
     from .provenance import pipeline_sources
 
     pipeline = current_pipeline(workspace)
@@ -295,11 +301,17 @@ def pipeline_info(workspace):
         [] if pipeline is None else [row["result"] for row in pipeline.get("fits", {}).values()]
     )
     return {
+        "id": active_id(workspace),
+        "choices": choices(workspace),
         "enabled": True if pipeline is None else pipeline["enabled"],
         "generation": 0 if pipeline is None else pipeline["generation"],
         "signature": signature(workspace),
         "sources": pipeline_sources(workspace),
-        "steps": [] if pipeline is None else [_public_step(s) for s in pipeline["steps"]],
+        "steps": [] if pipeline is None else [
+            {**_public_step(step),
+             "result_maps": pipeline.get("fits", {}).get(step["id"], {}).get("maps", step.get("result_maps", []))}
+            for step in pipeline["steps"]
+        ],
         "fits_stale": any(
             result and result.get("pipeline_signature", "original") != signature(workspace)
             for result in (fit, preview, *stored)
@@ -315,7 +327,7 @@ def _grid(state):
     }
 
 
-def _evaluate(workspace, progress, *, start_at=0):
+def _evaluate(workspace, progress, *, start_at=0, run_fits=None, execute=None, original=False):
     from .pipeline_progress import PipelineRun
 
     report = PipelineRun(
@@ -323,16 +335,20 @@ def _evaluate(workspace, progress, *, start_at=0):
         current_pipeline(workspace)["steps"],
         progress,
         start_at,
+        pipeline_id=current_pipeline(workspace).get("id", "main"),
     )
     try:
-        _evaluate_steps(workspace, progress, report, start_at=start_at)
+        _evaluate_steps(
+            workspace, progress, report, start_at=start_at, run_fits=run_fits, execute=execute,
+            original=original,
+        )
         report.finish()
     except BaseException as error:
         report.fail(error)
         raise
 
 
-def _evaluate_steps(workspace, progress, report, *, start_at=0):
+def _evaluate_steps(workspace, progress, report, *, start_at=0, run_fits=None, execute=None, original=False):
     from .processing import apply_processing
 
     session = workspace.session
@@ -340,11 +356,29 @@ def _evaluate_steps(workspace, progress, report, *, start_at=0):
     pipeline = current_pipeline(workspace)
     install(workspace, pipeline["output"] if start_at else pipeline["source"], update_model=False)
     session.current_experiment["original_mr_image"] = pipeline["source"]["data"]
-    enabled = [step for step in pipeline["steps"] if step["enabled"]]
+    previous = {step["id"]: step for step in pipeline.get("applied_steps", [])}
+    enabled = []
+    for step in pipeline["steps"]:
+        if not step["enabled"]:
+            continue
+        if original and step["kind"] != "fit":
+            continue
+        if step.get("pending") and execute is not None and step["id"] not in execute:
+            if step["id"] in previous:
+                enabled.append(copy.copy(previous[step["id"]]))
+            continue
+        enabled.append(step)
     for index, step in enumerate(enabled):
         if index < start_at:
             continue
         report.start(step)
+        if step["kind"] == "fit" and run_fits is not None and step["id"] not in run_fits:
+            from .pipeline_state import image_signature
+
+            result = pipeline.get("fits", {}).get(step["id"], {}).get("result", {})
+            if result.get("pipeline_signature") == image_signature(enabled[:index]):
+                report.complete(unchanged=True)
+                continue
         progress(index, max(1, len(enabled)), step["label"])
 
         def step_progress(done, total, message, index=index):
@@ -354,6 +388,8 @@ def _evaluate_steps(workspace, progress, report, *, start_at=0):
         options = copy.deepcopy(step["options"])
         work = clone_workspace(workspace, readonly_arrays=True)
         work._pipeline_evaluating = True
+        if step["kind"] == "reconstruct":
+            install(work, pipeline["source"], update_model=False)
         if step.get("input") is not None:
             install(work, step["input"])
             options["input"] = "image"
@@ -410,15 +446,23 @@ def _evaluate_steps(workspace, progress, report, *, start_at=0):
             from .pipeline_blocks import run_fitting_block
 
             # A fit sees exactly its image-producing prefix, never later operations.
-            work.pipelines[name]["steps"] = copy.deepcopy(enabled[:index])
+            work.pipelines[name]["enabled"] = not original
+            work.pipelines[name]["steps"] = [copy.copy(row) for row in enabled[:index]]
+            work.pipelines[name]["applied_steps"] = [
+                _public_step(row) for row in enabled[:index]
+            ]
             record = run_fitting_block(work, step, step_progress)
             session.replace_fitted_maps(work.session.fitted_maps)
             session.active_map = work.session.active_map
+            session.fit_settings = copy.deepcopy(work.session.fit_settings)
+            session.frame_mask = copy.deepcopy(work.session.frame_mask)
+            workspace.display_settings = work.display_settings
             pipeline.setdefault("fits", {}).update(work.pipelines[name].get("fits", {}))
             pipeline.setdefault("fits", {})[step["id"]] = record
             workspace.fit_results_by_experiment[name] = record["result"]
             step["result_maps"] = record["maps"]
             step["output_grid"] = step["input_grid"]
+            step["pending"] = False
             report.complete()
             continue
         if step["kind"] == "process":
@@ -435,7 +479,10 @@ def _evaluate_steps(workspace, progress, report, *, start_at=0):
                 step["noise_estimate"] = summary["noise_estimate"]
         else:
             _apply_alignment(work, step, options, step_progress)
-        install(workspace, snapshot(work.session))
+        step["pending"] = False
+        output = snapshot(work.session)
+        step["output_grid"] = _grid(output)
+        install(workspace, output)
         if step["kind"] in {"register", "stored_registration"}:
             step["result_data"] = session.current_experiment["mr_image"]
         if step["kind"] == "reconstruct":
@@ -473,8 +520,10 @@ def _evaluate_steps(workspace, progress, report, *, start_at=0):
                     layer["visible"] = False
         step["output_grid"] = _grid(snapshot(session))
         report.complete()
-    pipeline["output"] = snapshot(session)
-    pipeline["enabled"] = True
+    if not original:
+        pipeline["output"] = snapshot(session)
+        pipeline["applied_steps"] = [copy.copy(step) for step in enabled]
+        pipeline["enabled"] = True
     pipeline["generation"] += 1
     workspace.pipeline_mask_cache.clear()
     session._save_current_view_state()
@@ -512,6 +561,9 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
         from .pipeline_blocks import block_options
 
         clean = block_options(candidate, kind, clean)
+        if kind == "fit" and previous and "workflow" not in options:
+            saved = previous["options"]["workflow"]
+            clean["workflow"].update(name=saved["name"], description=saved.get("description", ""))
     if kind == "stored_registration":
         clean["reference_experiment"] = row["metadata"][
             "moving_experiment"
@@ -546,6 +598,8 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
         "references": references,
         "mask": mask,
     }
+    if previous and "map_prefix" in previous:
+        step["map_prefix"] = previous["map_prefix"]
     if kind == "fit":
         used = {
             row.get("map_prefix")
@@ -555,11 +609,7 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
         prefix, number = label, 2
         while prefix in used:
             prefix, number = f"{label} ({number})", number + 1
-        step["map_prefix"] = (
-            previous.get("map_prefix", prefix)
-            if previous and previous["label"] == label
-            else prefix
-        )
+        step["map_prefix"] = previous.get("map_prefix", prefix) if previous else prefix
     if kind == "process" and clean.get("noise_roi_names") is not None:
         roi = fitting_roi(candidate, clean["noise_roi_names"])
         step["noise_mask"] = {"mask": np.asarray(roi.mask).copy(), "dims": tuple(roi.dims)}
@@ -588,9 +638,10 @@ def _make_step(candidate, options, *, kind="process", previous=None, enabled=Tru
     return step
 
 
-def apply_step(workspace, options, progress, *, kind="process", append=False, enabled=True):
+def apply_step(workspace, options, progress, *, kind="process", enabled=True):
+    from .pipeline_state import primary_step
     from .processing import FILTERS
-    from .processing_scope import freeze_scope, target_key
+    from .processing_scope import freeze_scope
 
     if kind == "process" and options.get("method") in FILTERS:
         dims = workspace.session.experiment_dims
@@ -613,6 +664,10 @@ def apply_step(workspace, options, progress, *, kind="process", append=False, en
         workspace.view_label = "Map"
         return summary
     candidate = clone_workspace(workspace, readonly_arrays=True)
+    if kind == "fit" and options.get("settings") is not None:
+        from .analysis_workflows import set_fit_settings
+
+        set_fit_settings(candidate, options["settings"])
     if kind == "stored_registration":
         row = candidate.registration_results.get(options.get("key"))
         if row is None:
@@ -635,28 +690,19 @@ def apply_step(workspace, options, progress, *, kind="process", append=False, en
             progress_callback=progress, require_acquisition=True
         )
     method = options.get("method") if kind == "process" else kind
-    family = "register" if kind == "stored_registration" else _family(method)
     requested = options.get("step_id")
     previous = (
         next((s for s in pipeline["steps"] if s["id"] == requested), None)
         if requested
-        else None
-        if append
-        else next(
-            (
-                s
-                for s in pipeline["steps"]
-                if s["family"] == family
-                and (family != "denoise" or target_key(s["options"]) == target_key(options))
-            ),
-            None,
-        )
+        else primary_step(pipeline, kind, options)
     )
     if requested and previous is None:
         raise ValueError("The pipeline step no longer exists")
-    if previous is not None and previous["kind"] != kind and previous["family"] != family:
+    if previous is not None and previous["kind"] != kind and {previous["kind"], kind} != {"register", "stored_registration"}:
         raise ValueError("Choose the matching operation to edit this pipeline step")
     step = _make_step(candidate, options, kind=kind, previous=previous, enabled=enabled)
+    if kind == "fit" and previous is None:
+        step["map_prefix"] = ""
     start_at = 0
     if previous is None:
         if len(pipeline["steps"]) >= 64:
@@ -664,15 +710,25 @@ def apply_step(workspace, options, progress, *, kind="process", append=False, en
         if kind == "reconstruct":
             pipeline["steps"].insert(0, step)
         else:
-            start_at = sum(s["enabled"] for s in pipeline["steps"])
+            if pipeline["enabled"] and not any(s.get("pending") for s in pipeline["steps"]):
+                start_at = sum(s["enabled"] for s in pipeline["steps"])
             pipeline["steps"].append(step)
     else:
         pipeline["steps"][pipeline["steps"].index(previous)] = step
+        if kind == "fit" and not requested:
+            # A fit action uses the current image state, including later processing.
+            pipeline["steps"] = [row for row in pipeline["steps"] if row["id"] != step["id"]] + [step]
+            if pipeline["enabled"] and not any(s.get("pending") for s in pipeline["steps"]):
+                start_at = sum(s["enabled"] for s in pipeline["steps"][:-1])
     from .pipeline_blocks import validate_chain
 
     validate_chain(candidate, pipeline["steps"])
-    _evaluate(candidate, progress, start_at=start_at)
-    candidate.view_label = "Image"
+    _evaluate(
+        candidate, progress, start_at=start_at,
+        run_fits={step["id"]} if kind == "fit" else set(), execute={step["id"]},
+        original=kind == "fit" and not pipeline["enabled"],
+    )
+    candidate.view_label = "Map" if kind == "fit" else "Image"
     summary = {
         "experiment": candidate.session.selected_experiment,
         "step_id": step["id"],
@@ -689,11 +745,31 @@ def apply_step(workspace, options, progress, *, kind="process", append=False, en
             summary["diagnostics"] = copy.deepcopy(
                 candidate.registration_results[step["result_key"]]["diagnostics"]
             )
+    if kind == "fit":
+        from .view_data import json_value
+
+        result = pipeline["fits"][step["id"]]["result"]
+        summary.update(
+            maps=candidate.session.map_names,
+            fit_notes=result.get("fit_notes", []),
+            optimizer_name=result.get("optimizer_name"),
+            loss_history=json_value(np.asarray(result["loss_history"])),
+        )
     _commit(workspace, candidate)
     return summary
 
 
 def change_pipeline(workspace, options, progress):
+    from .pipeline_choices import active_id, change_choice
+
+    if options.get("action") not in {"select"} and options.get("pipeline_id") is not None and options["pipeline_id"] != active_id(workspace):
+        raise ValueError("Select this pipeline before editing or running it")
+    if options.get("action") in {"create", "duplicate", "select", "rename", "delete"}:
+        return change_choice(workspace, options)
+    if options.get("action") == "configure":
+        from .pipeline_blocks import configure_block
+
+        return configure_block(workspace, options["kind"], options.get("options", {}), progress)
     if options.get("action") == "replace":
         from .pipeline_editing import apply_pipeline_draft
 
@@ -711,7 +787,7 @@ def change_pipeline(workspace, options, progress):
         candidate.view_label = "Image"
     elif action == "clear":
         pipeline["steps"].clear()
-        _evaluate(candidate, progress)
+        _evaluate(candidate, progress, run_fits=set())
         candidate.view_label = "Image"
     else:
         step = next((s for s in pipeline["steps"] if s["id"] == options.get("step_id")), None)
@@ -723,7 +799,7 @@ def change_pipeline(workspace, options, progress):
             step["enabled"] = options["enabled"]
         else:
             raise ValueError("Unknown pipeline change")
-        _evaluate(candidate, progress)
+        _evaluate(candidate, progress, run_fits=set(), execute=set())
     candidate.pipeline_mask_cache.clear()
     candidate.session._save_current_view_state()
     summary = {
@@ -741,7 +817,9 @@ def project_roi(workspace, roi, *, steps=None, inverse=False):
     if steps is None:
         if not pipeline["enabled"] or getattr(workspace, "_pipeline_evaluating", False):
             return roi
-        steps = pipeline["steps"]
+        from .pipeline_state import image_steps
+
+        steps = image_steps(pipeline)
     transforms = [
         s for s in steps if s["enabled"] and s["kind"] in {"register", "stored_registration"}
     ]
@@ -984,7 +1062,7 @@ def _apply_alignment(workspace, step, options, progress):
     install(workspace, output)
 
 
-def encode_pipelines(workspace, arrays):
+def encode_pipelines(workspace, arrays, value=None):
     buffers = {}
 
     def encode(value):
@@ -999,11 +1077,12 @@ def encode_pipelines(workspace, arrays):
             or hasattr(value, "block_until_ready")
             or isinstance(value, complex)
         ):
-            if id(value) in buffers:
-                return {"__pipeline_type": "array", "key": buffers[id(value)]}
+            identity = (value.__array_interface__["data"][0], value.shape, value.strides, value.dtype.str) if isinstance(value, np.ndarray) else id(value)
+            if identity in buffers:
+                return {"__pipeline_type": "array", "key": buffers[identity]}
             key = "pipeline_" + str(len(arrays))
             arrays[key] = np.asarray(value)
-            buffers[id(value)] = key
+            buffers[identity] = key
             return {"__pipeline_type": "array", "key": key}
         if isinstance(value, dict):
             return {str(k): encode(v) for k, v in value.items()}
@@ -1013,7 +1092,7 @@ def encode_pipelines(workspace, arrays):
             return value.item()
         return value
 
-    return encode(workspace.pipelines)
+    return encode(workspace.pipelines if value is None else value)
 
 
 def decode_pipelines(payload, arrays):

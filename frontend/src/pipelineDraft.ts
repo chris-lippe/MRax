@@ -1,15 +1,14 @@
 import type { Job, Options, PipelineStep, Workspace } from './api';
-import type { DataDraft } from './Controls';
 import type { components } from './api.generated';
-import { parseData, printData } from './structuredData';
 
 export type PipelineCatalog = components['schemas']['ProcessingCatalog'];
 export type DraftStep = PipelineStep & {
   source_id: string | null;
   source_version: string | null;
-  editor?: DataDraft;
+  problem?: string;
 };
 export type PipelineDraft = {
+  pipeline_id: string;
   generation: number;
   steps: DraftStep[];
   baseline: string;
@@ -17,14 +16,6 @@ export type PipelineDraft = {
 };
 const uid = () => crypto.randomUUID();
 
-export function stepOptions(step: DraftStep): Options {
-  if (!step.editor) return step.options;
-  const raw = step.editor.raw || !step.editor.node ? step.editor.text : printData(step.editor.node);
-  const value = parseData(raw);
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    throw Error('Step settings must be a JSON object.');
-  return value as Options;
-}
 export function stepSpec(step: DraftStep) {
   return {
     id: step.id,
@@ -32,7 +23,7 @@ export function stepSpec(step: DraftStep) {
     source_version: step.source_version,
     kind: step.kind,
     enabled: step.enabled,
-    options: stepOptions(step),
+    options: step.options,
   };
 }
 export function newPipelineDraft(w: Workspace): PipelineDraft {
@@ -43,6 +34,7 @@ export function newPipelineDraft(w: Workspace): PipelineDraft {
     source_version: step.version,
   }));
   return {
+    pipeline_id: w.pipeline.id,
     generation: w.pipeline.generation,
     steps,
     baseline: JSON.stringify(steps.map(stepSpec)),
@@ -52,8 +44,9 @@ export function draftProblem(draft: PipelineDraft, workspace?: Workspace) {
   try {
     if (draft.steps.length > 64) return 'Use at most 64 steps.';
     for (const [index, step] of draft.steps.entries()) {
+      if (step.problem) return step.problem;
       try {
-        const options = stepOptions(step);
+        const options = step.options;
         if (step.enabled && ['reconstruct', 'fit'].includes(step.kind)) {
           const document = options.workflow as
             | {
@@ -93,13 +86,18 @@ export function draftProblem(draft: PipelineDraft, workspace?: Workspace) {
       } catch (failure) {
         return 'Step ' + (index + 1) + ': ' + String(failure);
       }
-      if (step.kind === 'reconstruct' && index !== 0)
-        return 'Reconstruction defines the source and stays first.';
       if (
         step.kind === 'reconstruct' &&
-        draft.steps.slice(0, index).some((row) => row.kind === 'reconstruct')
+        draft.steps.slice(0, index).some((row) => row.kind !== 'reconstruct')
       )
-        return 'Use one reconstruction block, first.';
+        return 'Reconstruction defines the source and stays first.';
+    }
+    for (const [kind, label] of [
+      ['reconstruct', 'reconstruction'],
+      ['fit', 'fitting'],
+    ]) {
+      if (draft.steps.filter((step) => step.kind === kind).length > 1)
+        return 'Use one ' + label + ' block per experiment.';
     }
     return '';
   } catch (failure) {
@@ -116,15 +114,23 @@ export function draftChanged(draft: PipelineDraft) {
 export function draftRequest(draft: PipelineDraft): Options {
   const problem = draftProblem(draft);
   if (problem) throw Error(problem);
-  return { action: 'replace', base_generation: draft.generation, steps: draft.steps.map(stepSpec) };
+  return {
+    action: 'replace',
+    pipeline_id: draft.pipeline_id,
+    base_generation: draft.generation,
+    steps: draft.steps.map(stepSpec),
+  };
 }
 export function copiedStep(step: DraftStep): DraftStep {
+  if (['reconstruct', 'fit'].includes(step.kind))
+    throw Error('This operation supports one block per experiment.');
   return {
     ...step,
     id: uid(),
     version: uid(),
-    options: structuredClone(stepOptions(step)),
-    editor: undefined,
+    options: structuredClone(step.options),
+    pending: true,
+    result_maps: [],
   };
 }
 export function insertedStep(
@@ -146,6 +152,7 @@ export function insertedStep(
     options,
     plane_dims: [],
     result_maps: [],
+    pending: true,
   };
 }
 export function movedSteps(steps: DraftStep[], id: string, destination: number) {
@@ -154,11 +161,17 @@ export function movedSteps(steps: DraftStep[], id: string, destination: number) 
   const minimum = steps[0]?.kind === 'reconstruct' ? 1 : 0;
   const target = Math.max(minimum, Math.min(steps.length - 1, destination));
   if (target === index) return steps;
-  const next = [...steps],
-    [step] = next.splice(index, 1);
+  const next = [...steps];
+  const [step] = next.splice(index, 1);
   next.splice(target, 0, step);
   return next;
 }
+
+export function droppedSteps(steps: DraftStep[], id: string, boundary: number) {
+  const source = steps.findIndex((step) => step.id === id);
+  return movedSteps(steps, id, boundary > source ? boundary - 1 : boundary);
+}
+
 export function processDraftStep(catalog: PipelineCatalog, methodId: string) {
   const method = catalog.methods.find((method) => method.id === methodId);
   if (!method || method.id === 'dti' || method.unavailable)

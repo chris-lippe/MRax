@@ -8,7 +8,14 @@ import re
 import numpy as np
 
 from mrax.devices import resolve_device
-from mrax.gui.models import make_model, model_default_pools, model_pool_definitions
+from mrax.gui.models import (
+    make_model,
+    model_available_pools,
+    model_default_pools,
+    model_fit_inputs,
+    model_parameter_specs,
+    model_pool_definitions,
+)
 from mrax.gui.session import FrameMask
 
 from .scene import fitting_roi
@@ -17,6 +24,35 @@ from .view_state import WorkspaceFitInputs
 
 RESERVED_POOLS = {"water", "mt"}
 POOL_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+
+
+def fit_catalog(workspace):
+    session = workspace.session
+    settings = session.fit_settings
+    model = settings.model_name or session.current_model_name
+    inputs = model_fit_inputs(model)
+    reference_scan = inputs.reference_scan and session.current_experiment.get("exp_type") == "sat_trans"
+    choices = {
+        "workspace_id": workspace.key,
+        "experiment": session.selected_experiment,
+        "model": model,
+        "inputs": {"reference_scan": reference_scan, "prior_maps": inputs.prior_maps, "derived_maps": inputs.derived_maps},
+        "pools": model_available_pools(model, settings.pool_overrides),
+        "default_pools": model_default_pools(model),
+        "field_dimensions": fitting_dimensions(session, model),
+        "reference_scans": session.sat_trans_reference_choices() if reference_scan else [],
+        "prior_maps": {kind: session.ab_mt_map_choices(kind) for kind in inputs.prior_maps},
+    }
+    return {
+        "choices": choices,
+        "settings": _fit_settings_to_dict(settings),
+        "parameters": model_parameter_specs(
+            model, pools=settings.selected_pools or None,
+            param_overrides=settings.param_overrides or None,
+            pool_overrides=settings.pool_overrides or None,
+            parameter_constant_dims=settings.parameter_constant_dims or None,
+        ),
+    }
 
 
 def fitting_dimensions(session, model_name=None):

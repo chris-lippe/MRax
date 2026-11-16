@@ -98,6 +98,16 @@ def update_view(workspace, command, *, navigation=False):
         c["key"]: int(c["size"]) for kind in kinds for c in session.dimension_controls(kind)
     }
     indices = dict(command.indices or {})
+    view_kind = (
+        "kspace" if workspace.view_label == "K-space"
+        else "map" if workspace.view_label == "Map"
+        else "image"
+    )
+    if "frame" not in {control["key"] for control in session.dimension_controls(view_kind)} and any(
+        name in indices for name in session.non_spatial_dim_names if name != "frame"
+    ):
+        # Named coordinates take precedence over a flattened frame alias.
+        indices.pop("frame", None)
     if command.z is not None:
         indices[session.image_slice_dim] = command.z
     for key, value in indices.items():

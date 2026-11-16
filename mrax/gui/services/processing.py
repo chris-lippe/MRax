@@ -819,13 +819,15 @@ def rename_processing_sources(workspace, old, new):
 
     for value in (
         workspace.pipelines,
+        workspace.pipeline_sets,
         workspace.registration_results,
         workspace.fit_results_by_experiment,
         workspace.preview_results_by_experiment,
         workspace.session.data,
     ):
         spaces(value)
-    for pipeline in workspace.pipelines.values():
+    pipelines = [*workspace.pipelines.values(), *(entry["cache"]["pipeline"] for group in workspace.pipeline_sets.values() for entry in group.values() if entry.get("cache"))]
+    for pipeline in pipelines:
         for step in pipeline["steps"]:
             for key in ("reference_experiment", "moving_experiment"):
                 if step["options"].get(key) == old:

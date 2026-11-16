@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test';
 
 import type { Workspace } from '../src/api';
 
-import { openWorkspace, selectWorkflow } from './ui';
+import { openWorkspace, selectExperiment, selectWorkflow } from './ui';
 
 test.afterEach(async ({ request }) => {
   const token = (await (await request.get('/api/session')).json()).token;
@@ -30,16 +30,23 @@ test('denoising dimensions and run targets follow the selected slice package', a
     '-c',
     `
 import sys
+import numpy as np
 from pathlib import Path
 sys.path.insert(0, str(Path.cwd().parent / 'tests'))
 from test_bruker_geometry_workflows import _scan
 from mrax.gui.session import GuiSession
 from mrax.gui.services.workspace import StudyWorkspace
 from mrax.gui.services.persistence import save_workspace_bundle
+from mrax.data_struct import Quantity
 source = Path(sys.argv[1])
 _scan(source.parent / 'synthetic', counts=(3, 2, 1))
 session = GuiSession()
 session.import_bruker_study(source.parent / 'synthetic', field_strength_mhz=100, load_raw_kspace=False)
+session.add_experiment('Echo series', np.arange(8*16*12, dtype=np.float32).reshape(8,16,12) + 10,
+                       dims={'te':8,'x':16,'y':12}, model_name='t2_se',
+                       observables={'TE':Quantity(np.arange(1,9)*10,'ms')})
+session.set_active_frame(0)
+session.select_experiment('1')
 save_workspace_bundle(StudyWorkspace('test', 'Independent packages', session), source)
 `,
     source,
@@ -127,8 +134,38 @@ save_workspace_bundle(StudyWorkspace('test', 'Independent packages', session), s
   await scope.selectOption('package');
   await expect(page.getByLabel('Denoising target', { exact: true })).toHaveText('Package 1');
   await page.getByRole('button', { name: 'Apply denoising', exact: true }).click();
-  await expect.poll(async () => (await workspace()).pipeline.steps.length).toBe(2);
-  expect((await workspace()).pipeline.steps[0].options).toEqual(step.options);
-  expect((await workspace()).experiments).toEqual(['1']);
+  await expect
+    .poll(async () => (await workspace()).pipeline.steps[0].options.scope)
+    .toBe('package');
+  expect((await workspace()).pipeline.steps).toHaveLength(1);
+  expect((await workspace()).pipeline.steps[0].id).toBe(step.id);
+  expect((await workspace()).experiments).toEqual(['1', 'Echo series']);
+  await selectExperiment(page, 'Echo series');
+  await expect(scope).toHaveValue('dataset');
+  await page.getByLabel('Filter axis te', { exact: true }).check();
+  await page.getByRole('button', { name: 'Apply denoising', exact: true }).click();
+  await expect(page.locator('.job-status strong')).toHaveText('Operation complete');
+  const echo = page.getByRole('slider', { name: 'te', exact: true });
+  await echo.fill('3');
+  await expect.poll(async () => (await workspace()).indices.te).toBe(3);
+  await echo.press('ArrowRight');
+  await expect.poll(async () => (await workspace()).indices.te).toBe(4);
+  await echo.fill('0');
+  await expect.poll(async () => (await workspace()).indices.te).toBe(0);
+  await echo.scrollIntoViewIfNeeded();
+  const sliderBox = (await echo.boundingBox())!;
+  await page.mouse.move(sliderBox.x + 6, sliderBox.y + sliderBox.height / 2);
+  await page.mouse.down();
+  for (const fraction of [0.25, 0.5, 0.85]) {
+    await page.mouse.move(
+      sliderBox.x + sliderBox.width * fraction,
+      sliderBox.y + sliderBox.height / 2,
+      { steps: 6 },
+    );
+  }
+  await page.mouse.up();
+  await expect.poll(async () => (await workspace()).indices.te).toBeGreaterThanOrEqual(5);
+  await expect(echo).toHaveValue(String((await workspace()).indices.te));
+  expect((await workspace()).dimensions).toEqual({ te: 8, x: 16, y: 12 });
   expect(errors).toEqual([]);
 });

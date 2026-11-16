@@ -5,11 +5,11 @@ import time
 
 
 class PipelineRun:
-    def __init__(self, experiment, steps, progress, start_at=0):
+    def __init__(self, experiment, steps, progress, start_at=0, pipeline_id="main"):
         self.progress = progress
         self.current = None
         self.previous = 0.0
-        self.value = {"experiment": experiment, "status": "running", "steps": []}
+        self.value = {"experiment": experiment, "pipeline_id": pipeline_id, "status": "running", "steps": []}
         index = 0
         for step in steps:
             status = "pending" if step["enabled"] else "skipped"
@@ -48,8 +48,8 @@ class PipelineRun:
             self.current["progress"] = min(1.0, max(0.0, done / max(1, total)))
             self.emit()
 
-    def complete(self):
-        self.current.update(status="completed", progress=1.0)
+    def complete(self, *, unchanged=False):
+        self.current.update(status="unchanged" if unchanged else "completed", progress=1.0)
         self.current = None
         self.emit(force=True)
 

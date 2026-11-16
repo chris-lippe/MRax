@@ -275,7 +275,7 @@ export function WorkflowDialog({
         experiments.map((experiment) => [experiment, mapping(study, experiment)]),
       ),
       mode,
-      run: entry?.kind === 'fitting' ? execute : true,
+      run: ['fitting', 'reconstruction'].includes(entry?.kind ?? '') ? execute : true,
       device,
     }));
     const problems: string[] = [];
@@ -336,7 +336,7 @@ export function WorkflowDialog({
           await onUpdated(
             entry?.kind === 'fitting' && execute
               ? 'full_fit'
-              : entry?.kind === 'reconstruction'
+              : entry?.kind === 'reconstruction' && execute
                 ? 'reconstruct'
                 : undefined,
           );
@@ -708,22 +708,29 @@ export function WorkflowDialog({
                             </select>
                           </label>
                         )}
-                        {entry.kind === 'fitting' && (
+                        {['fitting', 'reconstruction'].includes(entry.kind) && (
                           <label className="check-label">
                             <input
                               type="checkbox"
-                              aria-label="Run fits after loading configuration"
+                              aria-label={
+                                entry.kind === 'fitting'
+                                  ? 'Run fits after loading configuration'
+                                  : 'Run reconstruction after loading configuration'
+                              }
                               checked={execute}
                               disabled={busy}
                               onChange={(event) => setExecute(event.target.checked)}
                             />
-                            Run fits after loading configuration
+                            {entry.kind === 'fitting'
+                              ? 'Run fits after loading configuration'
+                              : 'Run reconstruction after loading configuration'}
                           </label>
                         )}
                         {entry.steps.some(
                           (step) =>
                             step.enabled &&
-                            (step.operation === 'reconstruct' ||
+                            ((step.operation === 'reconstruct' &&
+                              (entry.kind !== 'reconstruction' || execute)) ||
                               (step.operation === 'fit' && (entry.kind !== 'fitting' || execute))),
                         ) && (
                           <label>
@@ -892,8 +899,10 @@ export function WorkflowDialog({
                   disabled={busy || dirty || !selection.length}
                   onClick={() => void apply()}
                 >
-                  {entry.kind === 'fitting' && !execute
-                    ? 'Load fitting settings'
+                  {['fitting', 'reconstruction'].includes(entry.kind) && !execute
+                    ? entry.kind === 'fitting'
+                      ? 'Load fitting settings'
+                      : 'Load reconstruction settings'
                     : 'Apply workflow'}
                 </button>
               </>

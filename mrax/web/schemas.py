@@ -33,6 +33,7 @@ class OverlayLayer(OverlaySource):
 
 class ComparisonSource(Command):
     experiment: str
+    pipeline_id: str | None = None
     kind: Literal["original", "processed", "map", "reconstruction", "registration"]
     map_name: str | None = None
     registration_key: str | None = None
@@ -58,6 +59,7 @@ class ComparisonSettings(Command):
 
 class ComparisonChoice(BaseModel):
     experiment: str
+    pipeline_id: str | None = None
     kind: Literal["original", "processed", "map", "reconstruction", "registration"]
     map_name: str | None = None
     registration_key: str | None = None
@@ -186,6 +188,18 @@ class PreviewCommand(Command):
     device: str = "cpu"
 
 
+class PipelineEditorCommand(Command):
+    revision: int = Field(ge=0)
+    kind: Literal["reconstruct", "fit"]
+    options: dict[str, Any]
+
+
+class FitOptionsCommand(Command):
+    revision: int = Field(ge=0)
+    settings: dict[str, Any]
+    pool_edit: dict[str, Any] | None = None
+
+
 class TimecourseCommand(Command):
     revision: int = Field(ge=0)
     view_revision: int = Field(ge=0)
@@ -296,6 +310,7 @@ class PipelineStep(BaseModel):
     plane_dims: list[str] = []
     noise_estimate: dict[str, Any] | None = None
     result_maps: list[str] = []
+    pending: bool = False
 
 
 class PipelineSource(BaseModel):
@@ -305,7 +320,18 @@ class PipelineSource(BaseModel):
     path: str | None = None
 
 
+class PipelineChoice(BaseModel):
+    id: str
+    name: str
+    active: bool
+    cached: bool
+    has_image: bool
+    maps: list[str]
+
+
 class PipelineInfo(BaseModel):
+    id: str = "main"
+    choices: list[PipelineChoice] = []
     sources: dict[str, PipelineSource] = {}
     enabled: bool = True
     generation: int = 0
@@ -397,6 +423,7 @@ class PipelineStepProgress(BaseModel):
 
 class PipelineProgress(BaseModel):
     experiment: str
+    pipeline_id: str = "main"
     status: Literal["running", "completed", "failed", "cancelled", "stale"]
     steps: list[PipelineStepProgress]
 

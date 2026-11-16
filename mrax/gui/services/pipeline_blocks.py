@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 
+from mrax.workflow_rules import validate_pipeline_order
 from mrax.workflows import WorkflowDocument
 
 
@@ -50,6 +51,48 @@ def block_options(workspace, kind, options):
         "bindings": bindings,
         **({"device": options["device"]} if "device" in options else {}),
     }
+
+
+def configure_block(workspace, kind, options, progress):
+    """Load settings into one block while retaining the last applied image state."""
+    from .cloning import clone_workspace
+    from .pipeline import _commit, _make_step, ensure_pipeline, pipeline_info
+    from .pipeline_state import primary_step
+
+    if kind not in {"reconstruct", "fit"}:
+        raise ValueError("Choose reconstruction or fitting settings")
+    candidate = clone_workspace(workspace, readonly_arrays=True)
+    session = candidate.session
+    if kind == "reconstruct" and not session.can_reconstruct_raw_data() and session.can_lazy_load_raw_data(require_acquisition=True):
+        session.load_raw_data_for_experiment(progress_callback=progress, require_acquisition=True)
+    pipeline = ensure_pipeline(candidate)
+    previous = primary_step(pipeline, kind, options)
+    requested = options.get("step_id")
+    if requested:
+        previous = next((row for row in pipeline["steps"] if row["id"] == requested and row["kind"] == kind), None)
+        if previous is None:
+            raise ValueError("The pipeline step no longer exists")
+    step = _make_step(candidate, options, kind=kind, previous=previous)
+    if kind == "fit" and previous is None:
+        step["map_prefix"] = ""
+    # Keep provenance of the output visible while a new configuration is pending.
+    pipeline.setdefault("applied_steps", [
+        copy.copy(row) for row in pipeline["steps"] if not row.get("pending")
+    ])
+    step["pending"] = True
+    if previous is not None:
+        pipeline["steps"][pipeline["steps"].index(previous)] = step
+    elif len(pipeline["steps"]) >= 64:
+        raise ValueError("A pipeline supports up to 64 processing steps")
+    elif kind == "reconstruct":
+        pipeline["steps"].insert(0, step)
+    else:
+        pipeline["steps"].append(step)
+    validate_chain(candidate, pipeline["steps"])
+    pipeline["generation"] += 1
+    summary = {"step_id": step["id"], "pipeline": pipeline_info(candidate)}
+    _commit(workspace, candidate)
+    return summary
 
 
 def resolved_block(workspace, kind, options, *, validate=True):
@@ -145,9 +188,9 @@ def block_catalog(workspace):
 def validate_chain(workspace, steps):
     from .cloning import clone_workspace
 
-    reconstruction = [index for index, step in enumerate(steps) if step["kind"] == "reconstruct"]
-    if reconstruction and reconstruction != [0]:
-        raise ValueError("A reconstruction block can occur only once, first")
+    if len(steps) > 64:
+        raise ValueError("A pipeline supports up to 64 processing steps")
+    validate_pipeline_order([step["kind"] for step in steps])
     prefixes = set()
     owners = {
         record.get("prefix"): key
@@ -158,7 +201,7 @@ def validate_chain(workspace, steps):
     for step in steps:
         if step["kind"] == "fit":
             prefix, number = step.get("map_prefix", step["label"]), 2
-            base = prefix
+            base = prefix or step["label"]
             while prefix in prefixes or (prefix in owners and owners[prefix] != step["id"]):
                 prefix, number = f"{base} ({number})", number + 1
             step["map_prefix"] = prefix
@@ -166,7 +209,7 @@ def validate_chain(workspace, steps):
         if step["kind"] in {"reconstruct", "fit"}:
             # Disabled blocks retain structural validation, but need no current inputs.
             block_document(workspace, step["kind"], step["options"])
-            if step["enabled"]:
+            if step["enabled"] and step["kind"] == "reconstruct":
                 context = clone_workspace(workspace, readonly_arrays=True)
                 resolved_block(context, step["kind"], step["options"])
 
@@ -215,6 +258,10 @@ def run_fitting_block(workspace, step, progress):
                 "result": result,
             }
     set_fit_settings(workspace, options["settings"])
+    workspace.display_settings.setdefault(session.selected_experiment, {}).setdefault("scene", {}).update(
+        fit_region="rois" if options.get("use_roi", True) else "all",
+        fit_rois=options.get("roi_names"),
+    )
     session.fit_settings.use_view_state_data = False
     session.fit_settings.output_dir = None
     mask = FrameMask.all(session.frame_count)
@@ -240,8 +287,9 @@ def run_fitting_block(workspace, step, progress):
     for key in previous.get("maps", []):
         original_maps.pop(key, None)
     prefix = step.get("map_prefix", document.name)
-    maps = {prefix + " / " + key: value for key, value in result["fields"].items()}
-    dimensions = {**original_dims, **{prefix + " / " + key: dims for key, dims in result["field_dims"].items()}}
+    lead = prefix + " / " if prefix else ""
+    maps = {lead + key: value for key, value in result["fields"].items()}
+    dimensions = {**original_dims, **{lead + key: dims for key, dims in result["field_dims"].items()}}
     session.replace_fitted_maps({**original_maps, **maps}, dimensions=dimensions)
     session.active_map = next(iter(maps), session.active_map)
     return {"prefix": prefix, "maps": list(maps), "result": result}

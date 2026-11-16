@@ -562,7 +562,8 @@ export interface paths {
         /** Fit Options */
         get: operations["fit_options_api_workspaces__key__fit_options_get"];
         put?: never;
-        post?: never;
+        /** Proposed Fit Options */
+        post: operations["proposed_fit_options_api_workspaces__key__fit_options_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -648,6 +649,23 @@ export interface paths {
         get: operations["pipeline_blocks_api_workspaces__key__pipeline_blocks_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workspaces/{key}/pipeline-editor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pipeline Editor */
+        post: operations["pipeline_editor_api_workspaces__key__pipeline_editor_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1001,6 +1019,8 @@ export interface components {
             label: string;
             /** Map Name */
             map_name?: string | null;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
             /** Registration Key */
             registration_key?: string | null;
         };
@@ -1074,6 +1094,8 @@ export interface components {
             kind: "original" | "processed" | "map" | "reconstruction" | "registration";
             /** Map Name */
             map_name?: string | null;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
             /** Registration Key */
             registration_key?: string | null;
             window?: components["schemas"]["OverlayWindow"] | null;
@@ -1163,6 +1185,19 @@ export interface components {
             use_roi: boolean;
             /** View Revision */
             view_revision?: number | null;
+        };
+        /** FitOptionsCommand */
+        FitOptionsCommand: {
+            /** Pool Edit */
+            pool_edit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Revision */
+            revision: number;
+            /** Settings */
+            settings: {
+                [key: string]: unknown;
+            };
         };
         /** FitReadinessResult */
         FitReadinessResult: {
@@ -1404,8 +1439,42 @@ export interface components {
             /** Width */
             width: number;
         };
+        /** PipelineChoice */
+        PipelineChoice: {
+            /** Active */
+            active: boolean;
+            /** Cached */
+            cached: boolean;
+            /** Has Image */
+            has_image: boolean;
+            /** Id */
+            id: string;
+            /** Maps */
+            maps: string[];
+            /** Name */
+            name: string;
+        };
+        /** PipelineEditorCommand */
+        PipelineEditorCommand: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "reconstruct" | "fit";
+            /** Options */
+            options: {
+                [key: string]: unknown;
+            };
+            /** Revision */
+            revision: number;
+        };
         /** PipelineInfo */
         PipelineInfo: {
+            /**
+             * Choices
+             * @default []
+             */
+            choices: components["schemas"]["PipelineChoice"][];
             /**
              * Enabled
              * @default true
@@ -1421,6 +1490,11 @@ export interface components {
              * @default 0
              */
             generation: number;
+            /**
+             * Id
+             * @default main
+             */
+            id: string;
             /**
              * Signature
              * @default original
@@ -1443,6 +1517,11 @@ export interface components {
         PipelineProgress: {
             /** Experiment */
             experiment: string;
+            /**
+             * Pipeline Id
+             * @default main
+             */
+            pipeline_id: string;
             /**
              * Status
              * @enum {string}
@@ -1495,6 +1574,11 @@ export interface components {
             output_grid?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Pending
+             * @default false
+             */
+            pending: boolean;
             /**
              * Plane Dims
              * @default []
@@ -3431,6 +3515,41 @@ export interface operations {
             };
         };
     };
+    proposed_fit_options_api_workspaces__key__fit_options_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FitOptionsCommand"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     inspect_api_workspaces__key__inspect_get: {
         parameters: {
             query?: never;
@@ -3575,6 +3694,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pipeline_editor_api_workspaces__key__pipeline_editor_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PipelineEditorCommand"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

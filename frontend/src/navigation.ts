@@ -61,6 +61,7 @@ export function navigationIndices(w: Workspace, changes: Record<string, number> 
     if (changes.frame !== undefined) indices.t = changes.frame;
     indices.frame = indices.t ?? 0;
   }
+  if (!w.dimension_controls.some((control) => control.key === 'frame')) delete indices.frame;
   return indices;
 }
 

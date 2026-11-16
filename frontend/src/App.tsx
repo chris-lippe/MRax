@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useCallback,
   type CSSProperties,
   type ReactNode,
 } from 'react';
@@ -70,7 +71,13 @@ import type { MetadataCategory } from './metadata';
 import { WorkflowNav, initialWorkflowTasks, type Workflow, type WorkflowTask } from './WorkflowNav';
 import { ImageControls } from './ImageControls';
 import { Pipeline } from './Pipeline';
-import { draftChanged, draftRequest, newPipelineDraft, type PipelineDraft } from './pipelineDraft';
+import {
+  draftChanged,
+  draftRequest,
+  insertedStep,
+  newPipelineDraft,
+  type PipelineDraft,
+} from './pipelineDraft';
 import { InspectorDivider, StudyDivider, useWorkspacePanels } from './InspectorDivider';
 import { SettingsDialog } from './SettingsDialog';
 import { usePreferences } from './preferences';
@@ -216,11 +223,33 @@ export function App() {
     context: string;
     id: string;
     version: string;
+    options: Options;
+    session: string;
   } | null>(null);
-  const pipelineContext = JSON.stringify([workspace?.id, workspace?.experiment]);
+  const pipelineContext = JSON.stringify([
+    workspace?.id,
+    workspace?.experiment,
+    workspace?.pipeline.id,
+  ]);
   const [pipelineDrafts, setPipelineDrafts] = useState<Record<string, PipelineDraft>>({});
   const [pipelineRuns, setPipelineRuns] = useState<Record<string, Job>>({});
   const pipelineDraft = pipelineDrafts[pipelineContext] ?? null;
+  const pipelineDraftRef = useRef(pipelineDrafts);
+  pipelineDraftRef.current = pipelineDrafts;
+  const [editorOptions, setEditorOptions] = useState<{
+    key: string;
+    options: Options;
+    form: number;
+  } | null>(null);
+  const editorKey =
+    editingPipeline?.context === pipelineContext
+      ? JSON.stringify([
+          editingPipeline.context,
+          editingPipeline.id,
+          editingPipeline.version,
+          editingPipeline.session,
+        ])
+      : '';
   const editingStep =
     editingPipeline?.context === pipelineContext
       ? ((pipelineDraft
@@ -235,8 +264,15 @@ export function App() {
         ...previous,
         [pipelineContext]: previous[pipelineContext] ?? newPipelineDraft(workspace),
       }));
-    setEditingPipeline({ context: pipelineContext, id: step.id, version: step.version });
+    setEditingPipeline({
+      context: pipelineContext,
+      id: step.id,
+      version: step.version,
+      options: structuredClone(step.options),
+      session: crypto.randomUUID(),
+    });
     if (step.kind === 'reconstruct') selectWorkflow('reconstruct', 'reconstruction');
+    else if (step.kind === 'fit') selectWorkflow('fit', 'model-fit');
     else if (step.kind === 'register' || step.kind === 'stored_registration')
       selectWorkflow('registration', 'alignment');
     else if (step.kind === 'drift') selectWorkflow('registration', 'drift');
@@ -244,8 +280,110 @@ export function App() {
     else selectWorkflow('analyze', step.family === 'analyze' ? 'statistics' : 'timecourse');
   }
   useEffect(() => {
+    if (!editingPipeline || editingPipeline.context !== pipelineContext || !workspace) return;
+    const snapshot = editingPipeline;
+    let stopped = false;
+    setEditorOptions(null);
+    const selectedStep = (
+      pipelineDraftRef.current[pipelineContext]?.steps ?? workspace.pipeline.steps
+    ).find((step) => step.id === snapshot.id);
+    const kind = selectedStep?.kind;
+    const options = selectedStep?.options ?? snapshot.options;
+    const request =
+      kind && ['reconstruct', 'fit'].includes(kind)
+        ? api<{ options: Options }>(
+            '/api/workspaces/' + workspace.id + '/pipeline-editor',
+            'POST',
+            {
+              revision: workspace.revision,
+              kind,
+              options,
+            },
+          ).then((result) => ({ ...result.options, device: options.device ?? 'cpu' }))
+        : Promise.resolve(options);
+    void request
+      .then((options) => {
+        if (!stopped) setEditorOptions({ key: editorKey, options, form: 0 });
+      })
+      .catch((failure) => {
+        if (!stopped) setError(String(failure));
+      });
+    return () => {
+      stopped = true;
+    };
+    // Settings are captured when an edit starts. Local draft updates keep the form mounted.
+  }, [editorKey]);
+  const controlStep =
+    editingStep && editorOptions?.key === editorKey
+      ? { ...editingStep, options: editorOptions.options }
+      : null;
+  const stagePipelineOptions = useCallback(
+    (options: Options, problem?: string) => {
+      if (!workspace || !editingPipeline || editingPipeline.context !== pipelineContext) return;
+      const clean = Object.fromEntries(
+        Object.entries(options).filter(
+          ([key, value]) =>
+            key !== 'step_id' && key !== 'name' && !key.startsWith('_') && value !== undefined,
+        ),
+      );
+      const draft = pipelineDraftRef.current[pipelineContext];
+      if (!draft || draft.submission) return;
+      const next = {
+        ...draft,
+        submission: undefined,
+        steps: draft.steps.map((step) =>
+          step.id === editingPipeline.id ? { ...step, options: clean, problem } : step,
+        ),
+      };
+      pipelineDraftRef.current = { ...pipelineDraftRef.current, [pipelineContext]: next };
+      setPipelineDrafts(pipelineDraftRef.current);
+    },
+    [workspace, editingPipeline, pipelineContext],
+  );
+  const editFitSettings = (patch: Options) => {
+    if (!controlStep || controlStep.kind !== 'fit') return;
+    const staged = pipelineDraftRef.current[pipelineContext]?.steps.find(
+      (step) => step.id === controlStep.id,
+    )?.options;
+    const previous = staged && !staged.workflow ? staged : controlStep.options;
+    const { excluded_frames, ...settings } = patch;
+    const next = {
+      ...previous,
+      settings: { ...(previous.settings as Options), ...settings },
+      ...(excluded_frames === undefined ? {} : { excluded_frames }),
+    };
+    stagePipelineOptions(next);
+    setEditorOptions((current) =>
+      current ? { ...current, options: next, form: current.form + 1 } : current,
+    );
+  };
+  const editorChangeView = async (command: Options) => {
+    const scene = command.scene as Options | undefined;
+    if (controlStep?.kind === 'fit' && scene && ('fit_region' in scene || 'fit_rois' in scene)) {
+      const staged = pipelineDraftRef.current[pipelineContext]?.steps.find(
+        (step) => step.id === controlStep.id,
+      )?.options;
+      const previous = staged && !staged.workflow ? staged : controlStep.options;
+      const next = {
+        ...previous,
+        ...('fit_region' in scene ? { use_roi: scene.fit_region !== 'all' } : {}),
+        ...('fit_rois' in scene ? { roi_names: scene.fit_rois } : {}),
+      };
+      stagePipelineOptions(next);
+      setEditorOptions((current) =>
+        current ? { ...current, options: next, form: current.form + 1 } : current,
+      );
+      return;
+    }
+    await changeView(command);
+  };
+  useEffect(() => {
     if (job?.pipeline) {
-      const key = JSON.stringify([job.workspace_id, job.pipeline.experiment]);
+      const key = JSON.stringify([
+        job.workspace_id,
+        job.pipeline.experiment,
+        job.pipeline.pipeline_id,
+      ]);
       setPipelineRuns((previous) => ({ ...previous, [key]: job }));
     }
     if (job?.status === 'completed') {
@@ -255,12 +393,20 @@ export function App() {
         ),
       );
       if (job.pipeline && job.operation === 'pipeline') {
-        const key = JSON.stringify([job.workspace_id, job.pipeline.experiment]);
+        const key = JSON.stringify([
+          job.workspace_id,
+          job.pipeline.experiment,
+          job.pipeline.pipeline_id,
+        ]);
         setEditingPipeline((previous) => (previous?.context === key ? null : previous));
       }
     }
   }, [job]);
   function setPipelineDraft(next: PipelineDraft | null) {
+    const drafts = { ...pipelineDraftRef.current };
+    if (next) drafts[pipelineContext] = next;
+    else delete drafts[pipelineContext];
+    pipelineDraftRef.current = drafts;
     setPipelineDrafts((previous) => {
       const result = { ...previous };
       if (next) result[pipelineContext] = next;
@@ -277,10 +423,11 @@ export function App() {
       operation: 'pipeline',
       options: draftRequest(draft),
     });
-    setPipelineDrafts((previous) => ({
-      ...previous,
+    pipelineDraftRef.current = {
+      ...pipelineDraftRef.current,
       [targetContext]: { ...draft, submission: next.id },
-    }));
+    };
+    setPipelineDrafts(pipelineDraftRef.current);
     setJob(next);
   }
   const [timecourse, setTimecourse] = useState<TimecourseResult | null>(null);
@@ -874,6 +1021,25 @@ export function App() {
   }
 
   async function action(name: string, options: Options = {}) {
+    if (name === 'fit.pool' && controlStep?.kind === 'fit' && workspace) {
+      await task(async () => {
+        const result = await api<{ settings: Options }>(
+          '/api/workspaces/' + workspace.id + '/fit-options',
+          'POST',
+          {
+            revision: workspace.revision,
+            settings: options.settings,
+            pool_edit: options,
+          },
+        );
+        editFitSettings({ ...result.settings, excluded_frames: options.excluded_frames });
+      });
+      return;
+    }
+    if (name === 'fit.settings' && controlStep?.kind === 'fit') {
+      editFitSettings(options);
+      return;
+    }
     await task(async () => {
       const w = current.current;
       if (!w) return;
@@ -893,35 +1059,70 @@ export function App() {
     });
   }
   async function run(operation: string, options: Options = {}) {
-    if (
-      workspace &&
-      editingStep &&
-      options.step_id === editingStep.id &&
-      ['process', 'register', 'drift', 'reconstruct'].includes(operation)
-    ) {
-      const clean = Object.fromEntries(
-        Object.entries(options).filter(
-          ([key, value]) =>
-            !['step_id', 'name'].includes(key) && !key.startsWith('_') && value !== undefined,
-        ),
-      );
-      clean.input ??= 'image';
-      setPipelineDrafts((previous) => {
-        const draft = previous[pipelineContext] ?? newPipelineDraft(workspace);
-        return {
-          ...previous,
-          [pipelineContext]: {
-            ...draft,
-            submission: undefined,
-            steps: draft.steps.map((step) =>
-              step.id === editingStep.id
-                ? { ...step, options: clean, editor: undefined, version: crypto.randomUUID() }
-                : step,
-            ),
-          },
-        };
+    const kind =
+      operation === 'full_fit'
+        ? 'fit'
+        : operation === 'reconstruct' && options.view !== 'k_space'
+          ? 'reconstruct'
+          : ['process', 'register', 'drift'].includes(operation) && options.method !== 'dti'
+            ? operation
+            : operation === 'pipeline' && options.action === 'registration'
+              ? 'stored_registration'
+              : null;
+    const staged = pipelineDraftRef.current[pipelineContext];
+    const requested = typeof options.step_id === 'string' ? options.step_id : null;
+    if (workspace && kind && (requested || (staged && draftChanged(staged)))) {
+      await task(async () => {
+        const draft = pipelineDraftRef.current[pipelineContext] ?? newPipelineDraft(workspace);
+        const clean = Object.fromEntries(
+          Object.entries(options).filter(
+            ([key, value]) =>
+              !['step_id', 'name', 'action'].includes(key) &&
+              !key.startsWith('_') &&
+              value !== undefined,
+          ),
+        );
+        if (!['fit', 'reconstruct'].includes(kind)) clean.input ??= 'image';
+        const family =
+          kind === 'stored_registration'
+            ? 'register'
+            : kind === 'process'
+              ? workflow === 'denoise'
+                ? 'denoise'
+                : String(clean.method)
+              : kind;
+        const previous = requested
+          ? draft.steps.find((step) => step.id === requested)
+          : draft.steps.find((step) =>
+              ['fit', 'reconstruct'].includes(kind) ? step.kind === kind : step.family === family,
+            );
+        if (requested && !previous) throw Error('The selected pipeline block no longer exists.');
+        const next = [...draft.steps];
+        if (previous) {
+          next[next.indexOf(previous)] =
+            previous.kind === kind
+              ? { ...previous, options: clean, problem: undefined }
+              : insertedStep(kind, clean, previous.label, family);
+        } else {
+          const step = insertedStep(
+            kind,
+            clean,
+            kind === 'process'
+              ? String(clean.method)
+              : kind === 'fit'
+                ? 'Fitting'
+                : kind === 'reconstruct'
+                  ? 'Reconstruction'
+                  : 'Registration',
+            family,
+          );
+          next.splice(kind === 'reconstruct' ? 0 : next.length, 0, step);
+        }
+        const proposed = { ...draft, steps: next, submission: undefined };
+        pipelineDraftRef.current = { ...pipelineDraftRef.current, [pipelineContext]: proposed };
+        setPipelineDrafts(pipelineDraftRef.current);
+        await applyPipelineDraft(proposed);
       });
-      setMessage('Step settings staged. Apply the pipeline to process images.');
       return;
     }
     await task(async () => {
@@ -1286,7 +1487,10 @@ export function App() {
         )
       }
       jobStudyLabel={jobStudyLabel}
-      editingStep={editingStep}
+      editingStep={controlStep}
+      stagePipelineOptions={stagePipelineOptions}
+      cancelPipelineEdit={() => setEditingPipeline(null)}
+      editorFormKey={editorKey + ':' + (editorOptions?.form ?? 0)}
       previewRoiOpacity={previewRoiOpacity}
       displayControls={
         <ImageControls
@@ -1307,10 +1511,10 @@ export function App() {
         />
       }
       workspace={workspace}
-      busy={busy}
+      busy={busy || Boolean(editingStep && !controlStep)}
       job={job}
       action={action}
-      changeView={changeView}
+      changeView={editorChangeView}
       run={run}
       save={save}
       tool={tool}
@@ -1411,9 +1615,11 @@ export function App() {
               edit={editPipelineStep}
               editing={editingStep?.id ?? null}
               cancelEdit={() => setEditingPipeline(null)}
-              compare={() => {
+              compare={(comparison) => {
                 selectWorkflow('image', 'display');
-                void changeView({ scene: { comparison: originalComparison(workspace) } });
+                void changeView({
+                  scene: { comparison: comparison ?? originalComparison(workspace) },
+                });
               }}
             />
           )}

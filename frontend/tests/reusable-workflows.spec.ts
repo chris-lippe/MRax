@@ -220,6 +220,9 @@ test('fitting workflow captures pending solver settings and requires ROI assignm
   let current = (await workspaces(request))[1];
   expect(current.fit_settings.num_steps).toBe(333);
   expect(current.maps).toEqual([]);
+  expect(current.pipeline.steps).toHaveLength(1);
+  expect(current.pipeline.steps[0].pending).toBe(true);
+  const fitId = current.pipeline.steps[0].id;
   await modal
     .getByRole('checkbox', { name: 'Run fits after loading configuration', exact: true })
     .check();
@@ -228,8 +231,42 @@ test('fitting workflow captures pending solver settings and requires ROI assignm
     timeout: 60000,
   });
   current = (await workspaces(request))[1];
-  expect(current.maps.some((map) => String(map.name).endsWith(' / t2'))).toBe(true);
+  expect(current.maps.some((map) => map.name === 't2')).toBe(true);
   expect(current.pipeline.steps.map((step) => step.kind)).toEqual(['fit']);
+  expect(current.pipeline.steps[0].id).toBe(fitId);
   await modal.getByRole('button', { name: 'Done', exact: true }).click();
   await expect(page.getByLabel('Map', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Run full map fit', exact: true }).click();
+  await expect(page.locator('.job-status strong')).toHaveText('Operation complete');
+  expect((await workspaces(request))[1].pipeline.steps).toHaveLength(1);
+  expect((await workspaces(request))[1].pipeline.steps[0].id).toBe(fitId);
+  const pipeline = page.getByRole('region', { name: 'Processing pipeline', exact: true });
+  await pipeline.getByRole('button', { name: 'Show processing steps', exact: true }).click();
+  const rows = pipeline.locator('.pipeline-step');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().getByRole('button', { name: /^Copy / })).toBeDisabled();
+  await rows.first().getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'Fit', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByLabel('Fit steps', { exact: true })).toHaveValue('333');
+  await page.getByLabel('Fit steps', { exact: true }).fill('334');
+  await page.getByRole('button', { name: 'Apply fit configuration', exact: true }).click();
+  await expect(pipeline).toContainText('Unapplied changes');
+  expect((await workspaces(request))[1].fit_settings.num_steps).toBe(333);
+  await page.getByRole('button', { name: 'Run full map fit', exact: true }).click();
+  await expect.poll(async () => (await workspaces(request))[1].fit_settings.num_steps).toBe(334);
+  await expect(page.locator('.job-status strong')).toHaveText('Operation complete');
+  current = (await workspaces(request))[1];
+  expect(current.pipeline.steps).toHaveLength(1);
+  expect(current.pipeline.steps[0].id).toBe(fitId);
+  expect(current.maps.some((map) => map.name === 't2')).toBe(true);
+  await rows.first().getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.getByLabel('Fit steps', { exact: true }).fill('335');
+  await expect(pipeline).toContainText('Unapplied changes');
+  await pipeline.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  expect((await workspaces(request))[1].fit_settings.num_steps).toBe(334);
+  await expect(page.getByLabel('Fit steps', { exact: true })).toHaveValue('334');
+  await page.screenshot({ path: info.outputPath('fitting-controls.png') });
 });

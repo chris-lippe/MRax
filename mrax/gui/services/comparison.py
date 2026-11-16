@@ -65,18 +65,59 @@ def comparison_sources(workspace, catalog):
                 }
             )
     dimensions = {entry["name"]: entry["spatial_dimensions"] for entry in catalog}
-    sources.extend(
-        {**source, "dimensions": dimensions[source["experiment"]]}
-        for source in overlay_sources(workspace, catalog)
-        if source["kind"] != "image" and source["experiment"] in dimensions
-    )
+    for source in overlay_sources(workspace, catalog):
+        name = source["experiment"]
+        if source["kind"] == "image" or name not in dimensions:
+            continue
+        source = {**source, "dimensions": dimensions[name]}
+        if source["kind"] == "map":
+            from .pipeline_blocks import fit_result_for_map
+
+            pipeline = workspace.pipelines.get(name) or {}
+            grid = fit_result_for_map(workspace, source["map_name"], experiment=name).get("pipeline_grid")
+            if grid:
+                source["dimensions"] = {dim: size for dim, size in grid["dims"].items() if dim in {"x", "y", "z"}}
+        sources.append(source)
+    from .pipeline_choices import choices
+
+    for experiment in catalog:
+        name = experiment["name"]
+        for choice in choices(workspace, name):
+            identifier = choice["id"]
+            cached = workspace.pipeline_sets.get(name, {}).get(identifier, {}).get("cache")
+            pipeline = cached["pipeline"] if cached else workspace.pipelines.get(name)
+            if not pipeline:
+                continue
+            state = pipeline["output"]
+            if choice["has_image"]:
+                sources.append({
+                    "experiment": name, "pipeline_id": identifier, "kind": "processed",
+                    "frames": math.prod(size for dim, size in state["dims"].items() if dim not in {"x", "y", "z"}),
+                    "dimensions": {dim: size for dim, size in state["dims"].items() if dim in {"x", "y", "z", "slice_package"}},
+                    "label": f"{name}: {choice['name']} · Image",
+                })
+            for map_name in choice["maps"]:
+                result = next((row["result"] for row in pipeline.get("fits", {}).values() if map_name in row["maps"]), {})
+                grid = result.get("pipeline_grid") or state
+                fields = cached["maps"] if cached else workspace.session.data["experiments"][name].get("fitted_maps", {})
+                saved_dims = (cached["map_metadata"].get("fitted_map_dims") or {}) if cached else workspace.session.data["experiments"][name].get("extra_metadata", {}).get("fitted_map_dims", {})
+                values = fields[map_name]
+                dims = saved_dims.get(map_name) or {dim: size for dim, size in grid["dims"].items() if dim in {"x", "y", "z", "slice_package"}}
+                if tuple(dims.values()) != np.shape(getattr(values, "values", values)):
+                    dims = grid["dims"]
+                sources.append({
+                    "experiment": name, "pipeline_id": identifier, "kind": "map", "map_name": map_name,
+                    "frames": math.prod(size for dim, size in dims.items() if dim not in {"x", "y", "z"}),
+                    "dimensions": {dim: size for dim, size in dims.items() if dim in {"x", "y", "z", "slice_package"}},
+                    "label": f"{name}: {choice['name']} · {map_name}",
+                })
     return sources
 
 
 def same_source(first, second):
     return all(
         first.get(key) == second.get(key)
-        for key in ("experiment", "kind", "map_name", "registration_key")
+        for key in ("experiment", "pipeline_id", "kind", "map_name", "registration_key")
     )
 
 
@@ -123,6 +164,7 @@ def validate_comparison(workspace, raw, catalog):
         source = settings[side]
         if not isinstance(source, dict) or set(source) - {
             "experiment",
+            "pipeline_id",
             "kind",
             "map_name",
             "registration_key",
@@ -207,6 +249,10 @@ def _plane(workspace, source, navigation):
     indices = navigation["indices"]
     plane = navigation["plane"]
     session.select_experiment(source["experiment"])
+    if source.get("pipeline_id") is not None:
+        from .pipeline_choices import comparison_context
+
+        comparison_context(context, source["pipeline_id"])
     kind = source["kind"]
     context.view_label = "Image"
     if kind in {"original", "processed"}:

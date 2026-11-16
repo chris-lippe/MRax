@@ -106,7 +106,7 @@ def estimate_input(data, dims, axes, parameters, mask=None):
 def preview_noise(workspace, options):
     from .pipeline import _evaluate, current_pipeline, install
     from .processing import _settings, _source, processing_methods
-    from .processing_scope import freeze_scope, region, target_key
+    from .processing_scope import freeze_scope, region
     from .view_data import scalar_component
 
     if options.get("method") not in {"bm3d", "bm4d"}:
@@ -133,7 +133,6 @@ def preview_noise(workspace, options):
                 or (
                     not requested
                     and s["family"] == "denoise"
-                    and target_key(s["options"]) == target_key(options)
                 )
             ),
             len(pipeline["steps"]),
@@ -141,7 +140,7 @@ def preview_noise(workspace, options):
         pipeline["steps"] = pipeline["steps"][:previous]
         install(work, pipeline["source"])
         if pipeline["steps"]:
-            _evaluate(work, lambda *_args: None)
+            _evaluate(work, lambda *_args: None, run_fits=set(), execute=set())
     method = next(m for m in processing_methods(work.session) if m["id"] == options["method"])
     parameters = _settings(method, options.get("parameters", {}))
     partial = options.get("scope") in {"image", "package"}

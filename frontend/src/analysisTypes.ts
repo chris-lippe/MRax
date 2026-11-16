@@ -12,6 +12,8 @@ export type AnalysisProps = {
   save: () => Promise<void>;
   openWorkflows?: (kind: WorkflowKind, draft?: Options) => void;
   editingStep?: PipelineStep | null;
+  stagePipelineOptions?: (options: Options, problem?: string) => void;
+  cancelPipelineEdit?: () => void;
 };
 export type DrawingProps = {
   drawOptions: Options;
