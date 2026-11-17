@@ -57,6 +57,8 @@ def set_fit_settings(workspace, values):
     proposed = _fit_settings_from_dict(data)
     if not 1 <= proposed.num_steps <= 1000000 or not 0 < proposed.step_size <= 10:
         raise ValueError("Choose a positive step count and step size")
+    if proposed.data_normalization not in {"roi", "full"}:
+        raise ValueError("Choose fitted-region or whole-image RMS scaling")
     if proposed.optimizer_name not in {
         "auto",
         "adam",
@@ -776,11 +778,11 @@ def run_operation(workspace, operation, options, progress):
             apply_fit_exclusions(session, options["excluded_frames"])
         roi_name = options.get("roi_name") or session.fit_settings.selected_roi
         selected_mask = None
-        use_roi = bool(options.get("use_roi", True))
+        use_roi = bool(options.get("use_roi", bool(options.get("roi_name")) if operation == "preview" else False))
         if operation == "full_fit" and "roi_names" in options and use_roi:
             selected_mask = fitting_roi(workspace, options["roi_names"])
         kwargs = WorkspaceFitInputs(workspace)._visual_state_fit_kwargs(
-            include_roi=operation == "preview" or use_roi,
+            include_roi=use_roi,
             roi_override=selected_mask,
         )
         if selected_mask is not None and "input_roi" not in kwargs:
@@ -788,6 +790,7 @@ def run_operation(workspace, operation, options, progress):
         if operation == "preview":
             result = session.run_preview_fit(
                 roi_name=roi_name,
+                use_roi=use_roi,
                 num_steps=options.get("steps"),
                 device=device,
                 progress_callback=progress,
@@ -815,10 +818,20 @@ def run_operation(workspace, operation, options, progress):
                     session.build_experiment().observables.get(result["x_name"]), "si_unit", None
                 ),
                 "model": result["model"],
-                "roi_name": roi_name or session.roi().name,
+                "roi_name": result["roi_name"],
                 "parameters": {
                     k: float(np.asarray(getattr(v, "values", v)).reshape(-1)[0])
                     for k, v in result["fields"].items()
+                },
+                "frame_dimensions": result["frame_dimensions"],
+                "parameter_dimensions": result["parameter_dimensions"],
+                "parameter_values": {
+                    key: json_value(np.asarray(getattr(value, "values", value)))
+                    for key, value in result["fields"].items()
+                },
+                "parameter_units": {
+                    key: value.si_unit for key, value in result["fields"].items()
+                    if getattr(value, "si_unit", None)
                 },
                 "relative_rmse": float(
                     np.sqrt(np.mean((predicted[valid] - observed[valid]) ** 2))
@@ -829,7 +842,12 @@ def run_operation(workspace, operation, options, progress):
 
             payload["pipeline_signature"] = signature(workspace)
             workspace.preview_results_by_experiment[session.selected_experiment] = payload
-            return workspace, payload
+            from .view_data import preview_for_workspace
+
+            display_options(workspace)["plot_whole_image"] = result["roi_name"] is None
+            if result["roi_name"] is not None:
+                session.fit_settings.selected_roi = result["roi_name"]
+            return workspace, preview_for_workspace(workspace, payload)
         result = session.run_current_fit(
             roi_name=roi_name,
             use_roi=use_roi,

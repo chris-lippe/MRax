@@ -220,12 +220,24 @@ values = 2 + 10 * np.exp(-((frequency - 35) / 25) ** 2)
 session.add_experiment('Spectrum', np.stack([values, 2 * values])[..., None],
     dims={'frame': 2, 'x': 65, 'y': 1}, exp_type='spectroscopy', non_imaging=True,
     data_role='spectrum', observables={'frequency': Quantity(frequency, 'Hz')})
-offsets = np.linspace(-3, 3, 7)
-session.add_experiment('Saturation sweep', np.arange(7*4*3, dtype=np.float32).reshape(1,1,7,4,3),
-    dims={'t':1,'b1':1,'offset':7,'x':4,'y':3}, exp_type='sat_trans',
+offsets = np.asarray([0, -3, 3, -1, 1, -2, 2], dtype=np.float32)
+session.add_experiment('Reference', np.ones((4,3),dtype=np.float32), dims={'x':4,'y':3},
+    exp_type='sat_trans', observables={'sat_b1':Quantity(0,'uT')})
+detuning = offsets * 100 * 2 * np.pi
+rf = 2 * np.pi * 42.58 * 4
+z = np.abs(1.55 - 2 * rf**2/(rf**2 + detuning**2) * np.sin(np.sqrt(rf**2 + detuning**2)*0.005/2)**2) + 1e-6
+signal = np.broadcast_to(z[None,None,:,None,None],(60,1,7,4,3)).copy()
+signal *= (1+0.05*np.sin(np.arange(60)/10))[:,None,None,None,None]
+session.add_experiment('Saturation sweep', signal,
+    dims={'t':60,'b1':1,'offset':7,'x':4,'y':3}, exp_type='sat_trans', model_name='wasabi',
     observables={'TR':Quantity(np.linspace(300,360,7),'ms'),
-                 'freq_offsets':Quantity(offsets,'ppm'), 'sat_b1':Quantity([1],'uT'),
-                 'sat_time':Quantity(2,'s')})
+                 'freq_offsets':Quantity(offsets,'ppm'), 'sat_b1':Quantity([4],'uT'),
+                 'sat_time':Quantity(5,'ms')})
+ti = np.asarray([50,200,800,2500],dtype=np.float32)
+ir = np.broadcast_to(np.abs(1e6-2e6*np.exp(-ti/1400))[None,:,None,None,None],(2,4,2,4,3)).copy()
+session.add_experiment('IR sweeps',ir, dims={'slice_package':2,'ti':4,'fair':2,'x':4,'y':3},
+    exp_type='fair_asl',model_name='t1_ir',observables={'TR':Quantity(np.linspace(900,1000,16),'ms'),
+    'TI':Quantity(ti,'ms'),'fair_label':Quantity(np.asarray([0,1]),'1')})
 session.select_experiment('Spectrum')
 session.save_imported_study(sys.argv[1])
 `,
@@ -280,7 +292,7 @@ session.save_imported_study(sys.argv[1])
   const saturation = (await (await request.get('/api/workspaces')).json()).find(
     (w: Workspace) => w.experiment === 'Saturation sweep',
   ) as Workspace;
-  expect(saturation.timecourse!.x).toEqual([-3, -2, -1, 0, 1, 2, 3]);
+  expect(saturation.timecourse!.x).toEqual([0, -3, 3, -1, 1, -2, 2]);
   expect(saturation.timecourse!.x_unit).toBe('ppm');
   await axis.selectOption('b1');
   await expect(preview).toContainText('sat_b1 (uT)');
@@ -288,5 +300,83 @@ session.save_imported_study(sys.argv[1])
   await selectWorkflow(page, 'View', 'Signal curves');
   await expect(page.getByLabel('Signal profile axis', { exact: true })).toHaveValue('offset');
   await expect(plot).toContainText('freq_offsets (ppm)');
+  await selectWorkflow(page, 'Fit');
+  const b1Parameter = page.locator('fieldset.fit-parameter').filter({
+    has: page.getByLabel('b1 initial', { exact: true }),
+  });
+  await b1Parameter.getByText('Dimension settings', { exact: true }).click();
+  await b1Parameter
+    .getByRole('button', { name: 'Add b1 spatial regularizer', exact: true })
+    .click();
+  await b1Parameter
+    .getByRole('button', { name: 'Add b1 temporal regularizer', exact: true })
+    .click();
+  await expect(b1Parameter.getByLabel('b1 regularizer 2', { exact: true })).toHaveValue(
+    'smoothness',
+  );
+  await expect(
+    b1Parameter.getByLabel('b1 regularization dimension 2 t', { exact: true }),
+  ).toBeChecked();
+  await b1Parameter.getByLabel('b1 regularization weight 2', { exact: true }).fill('0.001');
+  await page.getByLabel('Loss RMS scale', { exact: true }).selectOption('full');
+  await page.getByLabel('Preview steps', { exact: true }).fill('2');
+  await page.getByRole('button', { name: 'Run preview fit', exact: true }).click();
+  await expect(
+    preview.getByRole('img', { name: 'Observed signal and fitted curve', exact: true }),
+  ).toBeVisible();
+  await expect(preview).toContainText('freq_offsets (ppm)');
+  const fittedPath = await preview.locator('path[stroke-dasharray]').getAttribute('d');
+  const plottedX = [...fittedPath!.matchAll(/[ML](-?[\d.]+)/g)].map((match) => Number(match[1]));
+  expect(plottedX).toHaveLength(7);
+  expect(plottedX.every((value, index) => index === 0 || value >= plottedX[index - 1])).toBe(true);
+  await page.screenshot({ path: info.outputPath('wasabi-preview.png') });
+  const dynamicFit = (await (
+    await request.get('/api/workspaces/' + saturation.id)
+  ).json()) as Workspace;
+  expect(
+    (dynamicFit.fit_settings.regularizer_configs as Record<string, unknown[]>).b1,
+  ).toHaveLength(2);
+  expect(dynamicFit.fit_settings.data_normalization).toBe('full');
+  await page.getByRole('slider', { name: 't', exact: true }).fill('59');
+  await expect
+    .poll(
+      async () => (await (await request.get('/api/workspaces/' + saturation.id)).json()).indices.t,
+    )
+    .toBe(59);
+  await expect(preview).toContainText('7 samples. freq_offsets (ppm)');
+  await preview.getByRole('button', { name: 'Open signal curves', exact: true }).click();
+  await expect(plot).toContainText('freq_offsets (ppm)');
+  for (const path of await plot.locator('[data-signal-trace] path').all()) {
+    const d = await path.getAttribute('d');
+    const xs = [...d!.matchAll(/[ML](-?[\d.]+)/g)].map((match) => Number(match[1]));
+    expect(xs.every((value, index) => index === 0 || value >= xs[index - 1])).toBe(true);
+  }
+  await page.screenshot({ path: info.outputPath('dynamic-signal-viewer.png') });
+  await selectWorkflow(page, 'Fit');
+  await axis.selectOption('b1');
+  await expect(preview).toContainText('1 samples. sat_b1 (uT)');
+  await expect(preview.locator('circle')).toHaveCount(2);
+  await selectExperiment(page, 'IR sweeps');
+  await axis.selectOption('ti');
+  await page.getByLabel('Preview steps', { exact: true }).fill('400');
+  await page.getByRole('button', { name: 'Run preview fit', exact: true }).click();
+  await expect(
+    preview.getByRole('img', { name: 'Observed signal and fitted curve', exact: true }),
+  ).toBeVisible();
+  await expect(preview).toContainText('4 samples. TI (ms)');
+  expect(
+    (await (await request.get('/api/workspaces/' + saturation.id)).json()).preview.relative_rmse,
+  ).toBeLessThan(0.01);
+  await page.getByLabel('Slice package', { exact: true }).selectOption('1');
+  await expect(preview).toContainText('4 samples. TI (ms)');
+  await page.getByLabel('Fit steps', { exact: true }).fill('400');
+  await page.getByRole('button', { name: 'Run full map fit', exact: true }).click();
+  await expect(page.getByLabel('Map', { exact: true })).toBeVisible();
+  await expect(preview).toContainText('4 samples. TI (ms)');
+  await page.getByLabel('Map', { exact: true }).selectOption('t1');
+  await expect(page.getByRole('group', { name: 'Map scale', exact: true })).toContainText(
+    't1 (ms)',
+  );
+  await page.screenshot({ path: info.outputPath('ir-preview-map.png') });
   expect(errors).toEqual([]);
 });

@@ -2331,6 +2331,12 @@ main.signal-active {
   padding: 0;
   margin: 10px 0;
 }
+.fit-regularizer {
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
 .fit-dimensions legend {
   font-size: 13px;
   padding: 0;

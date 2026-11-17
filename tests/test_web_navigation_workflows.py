@@ -186,6 +186,89 @@ def test_signal_profiles_use_whole_images_and_declared_spectral_coordinates(clie
         assert curve["x_name"] == "sat_b1 (uT)" and curve["x_unit"] == "uT"
         np.testing.assert_array_equal(curve["x"], np.arange(1, powers + 1))
 
+    for kind in ("t1_ir", "wasabi"):
+        fitted = client.post("/api/workspaces/new").json()
+        record = client.app.state.records[fitted["id"]]
+        session = record.workspace.session
+        if kind == "t1_ir":
+            dims = {"slice_package": 2, "ti": 4, "fair": 2, "x": 2, "y": 3, "z": 1}
+            coordinates = np.asarray([50, 200, 800, 2500], dtype=np.float32)
+            signal = np.abs(1e6 - 2e6 * np.exp(-coordinates / 1400))
+            values = np.broadcast_to(signal[None, :, None, None, None, None], tuple(dims.values())).copy()
+            values *= np.asarray([1, 1.1])[:, None, None, None, None, None]
+            observations = {
+                "TR": Quantity(np.linspace(1000, 1100, 16), "ms"),
+                "TI": Quantity(coordinates, "ms"), "fair_label": Quantity(np.asarray([0, 1]), "1"),
+            }
+            exp_type, axes = "fair_asl", ("ti", "fair", "slice_package")
+        else:
+            dims = {"t": 60, "b1": 1, "offset": 7, "x": 2, "y": 3, "z": 1}
+            coordinates = np.asarray([0, -3, 3, -1, 1, -2, 2], dtype=np.float32)
+            values = np.broadcast_to((1 - 0.7 * np.exp(-coordinates ** 2))[None, None, :, None, None, None], tuple(dims.values())).copy()
+            values *= (1 + 0.05 * np.sin(np.arange(60)))[:, None, None, None, None, None]
+            observations = {
+                "TR": Quantity(np.linspace(1700, 1800, 7), "ms"),
+                "freq_offsets": Quantity(coordinates, "ppm"), "sat_time": Quantity(5, "ms"),
+                "sat_b1": Quantity(1, "uT"), "b0_map": Quantity(np.zeros((2, 3, 1)), "ppm"),
+            }
+            session.add_experiment("Reference", np.ones((2, 3, 1)), dims={"x": 2, "y": 3, "z": 1},
+                                   exp_type="sat_trans", observables={"sat_b1": Quantity(0, "uT")})
+            exp_type, axes = "sat_trans", ("offset", "b1", "t")
+        session.add_experiment("Sweep", values, dims=dims, exp_type=exp_type, model_name=kind,
+                               observables=observations)
+        session.study.study_globals["field_strength_mhz"] = Quantity(400, "MHz")
+        session.data["study_globals"]["field_strength_mhz"] = Quantity(400, "MHz")
+        if kind == "wasabi":
+            session.fit_settings.regularizer_configs = {"b1": [
+                {"type": "smoothness", "weight": 0.01, "axes": [0]},
+                {"type": "tv", "weight": 0.001, "axes": [1, 2]},
+            ]}
+            session.fit_settings.parameter_constant_dims = {"c": ("t",)}
+            session.fit_settings.data_normalization = "full"
+        run_operation(record.workspace, "preview", {
+            "steps": 2, "use_roi": False, "excluded_frames": [11] if kind == "t1_ir" else [],
+        }, lambda *_: None)
+        record.revision += 1
+        record.info_cache.clear()
+        path = f"/api/workspaces/{fitted['id']}"
+        for axis in axes:
+            response = client.patch(path + "/view", json={"revision": record.revision, "plot_axis": axis})
+            assert response.status_code == 200, response.text
+            result = response.json()
+            assert result["preview"] is not None
+            assert result["preview"]["x"] == result["timecourse"]["x"]
+            assert result["preview"]["x_name"] == result["timecourse"]["x_name"]
+            assert len(result["preview"]["predicted"]) == dims[axis]
+        if kind == "t1_ir":
+            result = client.patch(path + "/view", json={
+                "revision": record.revision, "plot_axis": "ti", "indices": {"slice_package": 1, "fair": 1},
+            }).json()
+            np.testing.assert_allclose(result["preview"]["observed"], values[1, :, 1].mean(axis=(1, 2, 3)), rtol=1e-6)
+            predicted = record.workspace.preview_results_by_experiment["Sweep"]["predicted"]
+            np.testing.assert_allclose(result["preview"]["predicted"], np.asarray(predicted).reshape(2, 4, 2)[1, :, 1])
+            assert result["preview"]["included"] == [True, False, True, True]
+        else:
+            result = client.patch(path + "/view", json={
+                "revision": record.revision, "plot_axis": "offset", "indices": {"t": 59},
+            }).json()
+            np.testing.assert_allclose(result["preview"]["observed"], values[59, 0].mean(axis=(1, 2, 3)), rtol=1e-6)
+            run_operation(record.workspace, "full_fit", {"settings": {"num_steps": 2}}, lambda *_: None)
+            fitted_session = record.workspace.session
+            assert fitted_session.map_array("b1").shape == (60, 2, 3, 1)
+            np.testing.assert_allclose(fitted_session.map_array("c"), np.broadcast_to(fitted_session.map_array("c")[:1], (60, 2, 3, 1)))
+            record.info_cache.clear()
+            result = client.get(path).json()
+        saved = client.post(path + "/save")
+        restored = client.post("/api/workspaces/upload", content=saved.content)
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["preview"] == result["preview"]
+        assert restored.json()["fit_settings"]["data_normalization"] == session.fit_settings.data_normalization
+        np.testing.assert_array_equal(record.workspace.session.original_image_array, values)
+        for closed in (restored.json(), result):
+            assert client.request("DELETE", f"/api/workspaces/{closed['id']}", json={
+                "revision": closed["revision"], "discard": True,
+            }).status_code == 204
+
     timed = client.post("/api/workspaces/new").json()
     record = client.app.state.records[timed["id"]]
     values = np.arange(6 * 4 * 3, dtype=np.float32).reshape(6, 4, 3)

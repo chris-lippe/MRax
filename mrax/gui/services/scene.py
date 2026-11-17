@@ -40,7 +40,7 @@ def scene_settings(workspace, experiment=None):
         "hidden_rois": list(saved.get("hidden_rois", [])),
         "roi_opacity": saved.get("roi_opacity", 0.35),
         "roi_styles": copy.deepcopy(saved.get("roi_styles", {})),
-        "fit_region": saved.get("fit_region", "rois"),
+        "fit_region": saved.get("fit_region", "all"),
         "fit_rois": saved.get("fit_rois"),
     }
 

@@ -278,7 +278,7 @@ def capture_workflow(workspace, kind, *, name=None, description="", draft=None):
             settings.pop(key, None)
         inputs = capture_fit_inputs(settings, bind, session.selected_experiment)
         scene = workspace.display_settings.get(session.selected_experiment, {}).get("scene", {})
-        use_roi = draft.get("use_roi", scene.get("fit_region", "rois") == "rois")
+        use_roi = draft.get("use_roi", scene.get("fit_region", "all") == "rois")
         rois = draft.get("roi_names", scene.get("fit_rois"))
         steps.append(
             {
@@ -555,7 +555,7 @@ def _validate_target(workspace, document, bindings, *, resolved=None):
                 or len(set(excluded)) >= session.frame_count
             ):
                 raise ValueError("Frame exclusions must leave at least one available sample")
-            if options.get("use_roi", True):
+            if options.get("use_roi", False):
                 from .scene import fitting_roi
 
                 fitting_roi(
@@ -834,7 +834,7 @@ def _apply_single_workflow(workspace, document, experiments, bindings, progress,
             mask.exclude(*options.get("excluded_frames", []))
             candidate.session.frame_mask = mask
             candidate.display_settings.setdefault(target, {}).setdefault("scene", {}).update({
-                "fit_region": "rois" if options.get("use_roi", True) else "all",
+                "fit_region": "rois" if options.get("use_roi", False) else "all",
                 "fit_rois": options.get("roi_names"),
             })
         if step.operation in {"fit", "reconstruct"}:

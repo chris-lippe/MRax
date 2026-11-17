@@ -8,6 +8,7 @@ import numpy as np
 
 from mrax.data_struct.dimensions import reshape_dims_to_frames
 from mrax.gui.masks import mask_slice_for_display
+from mrax.gui.models import normalize_model_key
 from mrax.gui.plotting import (
     axis_coordinates,
     image_profile,
@@ -261,6 +262,62 @@ def displayed_roi(workspace, roi, image, editable):
             session,
         )
     return mask if mask.shape == image.shape[:2] else None
+
+
+def preview_for_workspace(workspace, result, curve=None):
+    """Project saved fit samples onto the same sweep as the image signal viewer."""
+    if not result:
+        return None
+    curve = curve_for_workspace(workspace) if curve is None else curve
+    if not curve or result.get("roi_name") != curve.get("roi_name"):
+        return None
+    session = workspace.session
+    if normalize_model_key(result["model"]) != normalize_model_key(
+        session.fit_settings.model_name or session.current_model_name
+    ):
+        return None
+    experiment = session.build_experiment()
+    dimensions = {name: int(experiment.dims[name]) for name in experiment.non_spatial_dim_names}
+    saved = dict(result.get("frame_dimensions", dimensions))
+    if saved != dimensions or curve["dimension"] not in dimensions:
+        return None
+    count = int(np.prod(list(dimensions.values())))
+    selection = tuple(
+        slice(None) if name == curve["dimension"] else
+        min(max(int(session.active_indices.get(name, 0)), 0), size - 1)
+        for name, size in saved.items()
+    )
+    frames = np.arange(count).reshape(tuple(saved.values()))[selection].reshape(-1)
+    arrays = {key: np.asarray(result.get(key, []), dtype=float).reshape(-1)
+              for key in ("observed", "predicted", "included")}
+    if any(values.size != count for values in arrays.values()):
+        return None
+    observed, predicted = (arrays[key][frames] for key in ("observed", "predicted"))
+    included = arrays["included"][frames].astype(bool)
+    valid = included & np.isfinite(observed) & np.isfinite(predicted)
+    if not valid.any():
+        return None
+    parameters = result.get("parameters")
+    field_dimensions = dict(result.get("parameter_dimensions") or [])
+    if field_dimensions and result.get("parameter_values"):
+        shape = tuple(field_dimensions.values())
+        index = tuple(min(max(int(session.active_indices.get(name, 0)), 0), size - 1)
+                      for name, size in field_dimensions.items())
+        parameters = {
+            name: float(np.broadcast_to(np.asarray(value), shape)[index])
+            for name, value in result["parameter_values"].items()
+        }
+    return {
+        **{key: curve[key] for key in ("x", "x_name", "x_unit", "dimension", "roi_name")},
+        "observed": json_value(observed),
+        "predicted": json_value(predicted),
+        "included": included.tolist(),
+        "model": result["model"],
+        "parameters": parameters,
+        "parameter_units": result.get("parameter_units"),
+        "relative_rmse": float(np.sqrt(np.mean((predicted[valid] - observed[valid]) ** 2))
+                               / max(np.max(np.abs(observed[valid])), 1e-12)),
+    }
 
 
 def curve_for_workspace(workspace):

@@ -10,7 +10,7 @@ import pytest
 from mrax.analysis.dti import dti_design_rank, fit_dti_log_linear
 from mrax.analysis.roi import ROI, collect_roi_stats
 from mrax.core.data_losses import pseudo_huber_loss
-from mrax.core.loss_builder import build_loss, make_model_callable
+from mrax.core.loss_builder import build_loss, make_model_callable, run_fit
 from mrax.core.study_runner import execute_study_plan, plan_study_fits
 from mrax.core.variance import estimate_data_variance
 from mrax.data_struct import (
@@ -28,6 +28,7 @@ from mrax.io.study_selection import auto_select_scans, pick_scan_by_type, scan_t
 from mrax.library import build_default_experiment, default_model_for_type, make_t2_se_model
 from mrax.library.default_models import (
     make_AB_MT_n_model,
+    make_dki_kurtosis_model,
     make_dti_tensor_model,
     make_fair_asl_model,
 )
@@ -121,6 +122,10 @@ def test_builtin_observables_broadcast_over_volumetric_parameter_maps(kind):
         "ab_mt_n": make_AB_MT_n_model,
     }
     model = special[kind]() if kind in special else default_model_for_type(kind)
+    if kind == "wasabi":
+        assert model.derived_map_units == {"B1_map": "%", "B0_map": "ppm"}
+    elif kind == "fair_asl":
+        assert model.derived_map_units["perfusion_map"] == "mL/100g/min"
     observations = {
         "TI": Quantity(jnp.array([60.0, 220.0, 900.0]), "ms"),
         "TE": Quantity(jnp.array([9.0, 27.0, 45.0]), "ms"),
@@ -143,6 +148,28 @@ def test_builtin_observables_broadcast_over_volumetric_parameter_maps(kind):
     planar_observations = {**observations, "r1_map": Quantity(jnp.ones((6, 4)), "1/s")}
     planar = model.model_apply(planar_fields, None, planar_observations, _allow_direct=True)
     np.testing.assert_allclose(predicted.reshape((3, 6, 4)), planar, rtol=1e-6, atol=1e-7)
+    if kind == "wasabi":
+        offsets = np.linspace(-4, 4, 81, dtype=np.float32)
+        detuning = offsets * 400 * 2 * np.pi
+        rf = 2 * np.pi * 42.58 * 4
+        spectrum = np.abs(1.55 - 2 * rf**2 / (rf**2 + detuning**2)
+                          * np.sin(np.sqrt(rf**2 + detuning**2) * 0.005 / 2)**2) + 1e-6
+        dynamic = Experiment(
+            dims={"t": 60, "b1": 1, "offset": 81, "x": 4, "y": 3}, exp_type="sat_trans",
+            observables={"freq_offsets": Quantity(offsets, "ppm"), "sat_time": Quantity(5, "ms"),
+                         "sat_b1": Quantity(4, "uT"), "field_strength_mhz": Quantity(400, "MHz")},
+        )
+        model.parameter_constant_dims = {"c": ("t",)}
+        fitted, history = run_fit(
+            dynamic, model, DataSet(data=jnp.broadcast_to(jnp.asarray(spectrum)[None, None, :, None, None], dynamic.shape)),
+            num_steps=2, step_size=0.02, data_normalization="full",
+            regularizer_configs={"b1": [
+                {"type": "tv", "weight": 0.001, "axes": [1, 2]},
+                {"type": "smoothness", "weight": 0.01, "axes": [0]},
+            ]},
+        )
+        np.testing.assert_allclose(fitted["b1"].values, 4, atol=1e-3)
+        assert np.isfinite(history).all() and max(history) < 1e-10
     if kind == "ab_mt_n":
         from mrax.analysis.saturation_transfer import experiment_with_ab_mt_z_prev
 
@@ -193,6 +220,13 @@ def test_model_callable_expands_independent_observable_axes(order, storage):
     np.testing.assert_allclose(predict(fields), expected, rtol=2e-6, atol=2e-7)
     gradient = jax.grad(lambda values: jnp.sum(predict(values)))(fields)
     assert all(np.isfinite(value).all() for value in gradient.values())
+    if storage == "axis":
+        repeated = Experiment(dims={"slice_package": 2, **dims}, exp_type="fair_asl",
+                              observables=experiment.observables)
+        repeated_data = np.tile(expected, (2, 1, 1))
+        loss, params, _ = build_loss(repeated, model, DataSet(data=jnp.asarray(repeated_data.reshape(repeated.shape))))
+        assert np.isfinite(float(loss(params)))
+        assert all(np.isfinite(value).all() for value in jax.grad(loss)(params).values())
 
 
 def test_loss_combines_inverse_variance_weighting_with_rms_scaling():
@@ -353,6 +387,50 @@ def test_dti_log_linear_workflow_recovers_tensor_maps():
     for key, value in truth.items():
         assert np.allclose(fields[key], value, atol=1e-6)
     assert float(np.nanmean(fields["fa"])) > 0.25
+    for tensor_model in (model, make_dki_kurtosis_model(scale=1000.0)):
+        repeated = Experiment(
+            dims={"slice_package": 2, "frame": len(bvals), "x": 2, "y": 2},
+            exp_type=tensor_model.name,
+            observables={"bvals": Quantity(np.tile(bvals, 2), "s/mm^2"),
+                         "bvecs": Quantity(np.tile(bvecs, (2, 1)), "1")},
+        )
+        repeated_fields = {name: jnp.stack([value, value * 1.1]) for name, value in truth.items()}
+        if tensor_model.name == "dki":
+            repeated_fields["kurtosis"] = jnp.full((2, 2, 2), 0.5)
+        predicted = np.asarray(make_model_callable(repeated, tensor_model)(repeated_fields))
+        reference = []
+        for group in range(2):
+            group_fields = {name: np.asarray(value[group]) for name, value in repeated_fields.items()}
+            tensor = np.stack([
+                np.stack([group_fields["dxx"], group_fields["dxy"], group_fields["dxz"]], -1),
+                np.stack([group_fields["dxy"], group_fields["dyy"], group_fields["dyz"]], -1),
+                np.stack([group_fields["dxz"], group_fields["dyz"], group_fields["dzz"]], -1),
+            ], -2)
+            apparent = np.einsum("ni,...ij,nj->n...", bvecs, tensor, bvecs)
+            exponent = -bvals[:, None, None] * apparent
+            if tensor_model.name == "dki":
+                exponent += bvals[:, None, None] ** 2 * apparent ** 2 * 0.5 / 6
+            reference.append(group_fields["s0"] * np.exp(exponent) + 1e-6)
+        np.testing.assert_allclose(predicted, np.concatenate(reference), rtol=2e-6, atol=2e-6)
+        if tensor_model.name == "dti":
+            from mrax.gui import GuiSession
+
+            session = GuiSession()
+            session.add_experiment("Tensor groups", predicted.reshape(repeated.shape),
+                                   dims=repeated.dims, exp_type="dti", model_name="dti",
+                                   observables=repeated.observables)
+            fitted = session.run_current_fit(use_roi=False, num_steps=2)
+            assert np.shape(fitted["fields"]["dxx"].values) == (2, 2, 2)
+            np.testing.assert_allclose(fitted["fields"]["dxx"].values, repeated_fields["dxx"], rtol=0.03)
+            session.add_experiment("Diffusion reference", predicted[:1],
+                                   dims={"frame": 1, "x": 2, "y": 2}, exp_type="dti", model_name="dti",
+                                   observables={"bvals": Quantity(bvals[:1], "s/mm^2"),
+                                                "bvecs": Quantity(bvecs[:1], "1")})
+            assert not session.run_fit_sanity_check()["ok"]
+            with pytest.raises(ValueError, match="more than one diffusion volume"):
+                session.run_preview_fit(num_steps=1)
+            with pytest.raises(ValueError, match="more than one diffusion volume"):
+                session.run_current_fit(num_steps=1)
 
 
 def test_joint_experiment_and_scan_selection_workflow():

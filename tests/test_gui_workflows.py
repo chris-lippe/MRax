@@ -102,6 +102,17 @@ def test_gui_session_preserves_native_planes_for_images_and_maps(tmp_path):
     assert not session.rois
     session.fit_settings.param_overrides = {"bias": {"trainable": False, "value": 0}}
     session.fit_settings.regularizer_configs = {"t2": [{"type": "tv", "weight": 1e-6, "axes": [0, 1]}]}
+    preview = session.run_preview_fit(num_steps=2)
+    assert preview["roi_name"] is None
+    np.testing.assert_allclose(preview["observed"], planar.mean(axis=(1, 2)), rtol=1e-6)
+    roi = ROI("Preview region", np.broadcast_to(np.arange(7)[:, None] < 3, (7, 11)).copy(), dims=("x", "y"))
+    session.rois = [roi]
+    preview = session.run_preview_fit(roi_name=roi.name, use_roi=True, num_steps=2)
+    assert preview["roi_name"] == roi.name
+    np.testing.assert_allclose(preview["observed"], planar[:, :3].mean(axis=(1, 2)), rtol=1e-6)
+    preview = session.run_preview_fit(use_roi=False, num_steps=2)
+    assert preview["roi_name"] is None
+    np.testing.assert_allclose(preview["observed"], planar.mean(axis=(1, 2)), rtol=1e-6)
     result = session.run_current_fit(use_roi=False, num_steps=600)
     session.replace_fitted_maps(result["fields"])
     assert session.image_plane_dims == ("y", "x")
@@ -110,6 +121,7 @@ def test_gui_session_preserves_native_planes_for_images_and_maps(tmp_path):
     np.testing.assert_array_equal(session.map_array("t2"), session.map_image("t2").T)
     np.testing.assert_array_equal(session.frame_image(), planar[0].T)
     np.testing.assert_array_equal(session.original_image_array, planar)
+    session.rois = []
     session.add_experiment(
         "planar_image", planar[0], dims={"x": 7, "y": 11},
         extra_metadata={"spatial_geometry": session.image_geometry().to_metadata()},

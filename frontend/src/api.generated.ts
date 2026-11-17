@@ -1180,7 +1180,7 @@ export interface components {
             };
             /**
              * Use Roi
-             * @default true
+             * @default false
              */
             use_roi: boolean;
             /** View Revision */
@@ -1643,6 +1643,10 @@ export interface components {
             model: string;
             /** Observed */
             observed: (number | null)[];
+            /** Parameter Units */
+            parameter_units?: {
+                [key: string]: string;
+            } | null;
             /** Parameters */
             parameters?: {
                 [key: string]: number;

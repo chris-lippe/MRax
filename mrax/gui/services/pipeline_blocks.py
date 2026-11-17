@@ -259,7 +259,7 @@ def run_fitting_block(workspace, step, progress):
             }
     set_fit_settings(workspace, options["settings"])
     workspace.display_settings.setdefault(session.selected_experiment, {}).setdefault("scene", {}).update(
-        fit_region="rois" if options.get("use_roi", True) else "all",
+        fit_region="rois" if options.get("use_roi", False) else "all",
         fit_rois=options.get("roi_names"),
     )
     session.fit_settings.use_view_state_data = False

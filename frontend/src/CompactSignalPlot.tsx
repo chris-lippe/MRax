@@ -62,6 +62,8 @@ export function CompactSignalPlot({
         (i) => finiteSignal(x[i]) && finiteSignal(trace.values[i]),
         px,
         py,
+        1600,
+        trace.fitted === true,
       ),
     }));
   }, [x, traces, loX, hiX, loY, hiY, size.width, size.height]);
@@ -130,7 +132,8 @@ export function CompactSignalPlot({
                 strokeDasharray={trace.fitted ? '6 3' : undefined}
               />
             )}
-            {trace.points &&
+            {(trace.points ||
+              x.filter((v, i) => finiteSignal(v) && finiteSignal(trace.values[i])).length === 1) &&
               x.map((value, i) =>
                 i % stride === 0 && finiteSignal(value) && finiteSignal(trace.values[i]) ? (
                   <circle

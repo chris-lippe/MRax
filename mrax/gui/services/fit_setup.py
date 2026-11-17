@@ -64,7 +64,7 @@ def fitting_dimensions(session, model_name=None):
     model = make_model(model_name or session.fit_settings.model_name or session.current_model_name)
     shape, names, _ = _field_metadata(experiment, model=model)
     return [
-        {"name": name, "label": name.replace("_", " ").capitalize(), "size": size,
+        {"name": name, "label": {"t": "Time", "frame": "Repetition"}.get(name, name.replace("_", " ").capitalize()), "size": size,
          "axis": axis, "regularizable": name != "slice_package" and size > 1}
         for axis, (name, size) in enumerate(zip(names, shape, strict=True))
     ]
@@ -205,7 +205,7 @@ def check_fit_readiness(workspace, options):
         if options.get("excluded_frames") is not None:
             apply_fit_exclusions(session, options["excluded_frames"])
         resolve_device(options.get("device", "cpu"))
-        use_roi = bool(options.get("use_roi", True))
+        use_roi = bool(options.get("use_roi", False))
         selected = None
         if use_roi:
             try:

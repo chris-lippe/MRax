@@ -707,7 +707,7 @@
             "type": "object"
           },
           "use_roi": {
-            "default": true,
+            "default": false,
             "title": "Use Roi",
             "type": "boolean"
           },
@@ -1894,6 +1894,20 @@
             },
             "title": "Observed",
             "type": "array"
+          },
+          "parameter_units": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parameter Units"
           },
           "parameters": {
             "anyOf": [

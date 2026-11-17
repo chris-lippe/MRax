@@ -113,7 +113,7 @@ def restore(workspace, cached):
     session.set_active_frame(min(session.active_frame, session.frame_count - 1))
     workspace.view_label = cached["view"] if cached["view"] != "Map" or session.map_names else "Image"
     scene = workspace.display_settings.setdefault(name, {}).setdefault("scene", {})
-    scene.update(fit_region=cached["fit_region"].get("fit_region") or "rois", fit_rois=cached["fit_region"].get("fit_rois"))
+    scene.update(fit_region=cached["fit_region"].get("fit_region") or "all", fit_rois=cached["fit_region"].get("fit_rois"))
     workspace.pipeline_mask_cache.clear()
     session._save_current_view_state()
 

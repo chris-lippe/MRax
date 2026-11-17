@@ -132,12 +132,16 @@ test('fitting shows only the inputs used by the selected model', async ({ page, 
   await expect(modelPanel).toBeVisible();
   const checkFit = page.getByRole('button', { name: 'Check fit readiness', exact: true });
   const readiness = page.getByRole('status', { name: 'Fit readiness', exact: true });
-  await checkFit.click();
-  await expect(readiness).toContainText('Needs attention');
-  await page.getByLabel('Fit region', { exact: true }).selectOption('all');
-  await expect(readiness).toHaveCount(0);
+  await expect(page.getByLabel('Fit region', { exact: true })).toHaveValue('all');
+  await expect(page.getByLabel('Fit ROI', { exact: true })).toHaveValue('');
+  await expect(page.getByRole('button', { name: 'Run preview fit', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Run full map fit', exact: true })).toBeEnabled();
   await checkFit.click();
   await expect(readiness).toContainText('Ready to fit');
+  await page.getByLabel('Preview steps', { exact: true }).fill('40');
+  await page.getByRole('button', { name: 'Run preview fit', exact: true }).click();
+  await expect(page.getByLabel('Preview fit results', { exact: true })).toBeVisible();
+  expect((await opened(request))[0].preview?.roi_name).toBeNull();
   await page.getByLabel('Fit steps', { exact: true }).fill('301');
   await expect(readiness).toHaveCount(0);
   await expect(modelPanel.getByLabel('Reference scan', { exact: true })).toHaveCount(0);
@@ -150,7 +154,8 @@ test('fitting shows only the inputs used by the selected model', async ({ page, 
   const t2 = general
     .locator('fieldset.fit-parameter')
     .filter({ has: page.getByLabel('t2 initial', { exact: true }) });
-  await t2.getByText('Spatial settings', { exact: true }).click();
+  await t2.getByText('Dimension settings', { exact: true }).click();
+  await t2.getByRole('button', { name: 'Add t2 spatial regularizer', exact: true }).click();
   await t2.getByLabel('t2 regularizer', { exact: true }).selectOption('smoothness');
   await t2.getByRole('checkbox', { name: 't2 regularization dimension y', exact: true }).uncheck();
   await t2.getByRole('checkbox', { name: 't2 regularization dimension z', exact: true }).uncheck();
@@ -190,7 +195,7 @@ test('fitting shows only the inputs used by the selected model', async ({ page, 
         observables: {
           ...inspected.metadata.observables,
           freq_offsets: { values: [-3, -2, -1, -0.5, 0.5, 1, 2, 3], unit: 'ppm' },
-          sat_time: { values: 2, unit: 's' },
+          sat_time: { values: 5, unit: 'ms' },
           sat_b1: { values: 1, unit: 'uT' },
         },
       },
@@ -204,6 +209,12 @@ test('fitting shows only the inputs used by the selected model', async ({ page, 
   await expect(page.getByLabel('Derived maps', { exact: true })).toHaveCount(1);
   for (const kind of ['T1', 'B0', 'B1'])
     await expect(modelPanel.getByLabel(kind + ' prior map', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Fit region', { exact: true })).toHaveValue('all');
+  await checkFit.click();
+  await expect(readiness).toContainText('No matching single-frame saturation-transfer reference');
+  await expect(readiness).not.toContainText('ROI');
+  await expect(page.getByRole('button', { name: 'Run preview fit', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Run full map fit', exact: true })).toBeEnabled();
 
   await page.getByLabel('Model', { exact: true }).selectOption('ab_mt_n');
   for (const kind of ['T1', 'B0', 'B1'])

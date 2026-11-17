@@ -52,7 +52,11 @@ export function FitControls({
     [rate, setRate] = useState(Number(w?.fit_settings.step_size ?? 0.02));
   const [device, setDevice] = useState(String(editingStep?.options.device ?? 'cpu')),
     [devices, setDevices] = useState<{ id: string; label: string }[]>([]);
-  const useRoi = w?.scene.fit_region !== 'all';
+  const hasRois = Boolean(w?.rois.some((roi) => roi.enabled && roi.pixels > 0));
+  const useRoi = w?.scene.fit_region === 'rois' && hasRois;
+  const previewRoi = w?.display.plot_whole_image
+    ? undefined
+    : w?.rois.find((roi) => roi.name === w.selected_roi && roi.enabled && roi.pixels > 0);
   const selectedRois = w ? fitRois(w) : [];
   const [error, setError] = useState('');
   useEffect(() => {
@@ -221,7 +225,10 @@ export function FitControls({
       disabled={!w?.loaded || busy || setupLoading}
       onChange={(key, value) => setParameter(name, key, value)}
       onFixedChange={(fixed) => setFixedParameter(name, fixed)}
-      onRegularizersChange={(values) => setRegularizers((old) => ({ ...old, [name]: values }))}
+      onRegularizersChange={(values) => {
+        edited.current = true;
+        setRegularizers((old) => ({ ...old, [name]: values }));
+      }}
       onConstantsChange={(values) => setConstants((old) => ({ ...old, [name]: values }))}
     />
   );
@@ -346,6 +353,18 @@ export function FitControls({
             </select>
           </label>
           <label>
+            Loss RMS scale
+            <select
+              aria-label="Loss RMS scale"
+              disabled={!w?.loaded || busy}
+              value={String(settingValue('data_normalization') ?? 'roi')}
+              onChange={(e) => updateSetting('data_normalization', e.target.value)}
+            >
+              <option value="roi">Fitted region</option>
+              <option value="full">Whole image</option>
+            </select>
+          </label>
+          <label>
             Compute device
             <select
               aria-label="Compute device"
@@ -364,6 +383,14 @@ export function FitControls({
           </label>
         </div>
       </InspectorSection>
+      {choices?.field_dimensions.some(
+        (dimension) => dimension.name === 't' && dimension.size > 1,
+      ) && (
+        <p className="control-note control-wide">
+          {choices.field_dimensions.find((dimension) => dimension.name === 't')!.size} time points.
+          Set shared parameters and temporal penalties under Dimension settings.
+        </p>
+      )}
       {Object.keys(specs).some((name) => !parameterPool(name)) && (
         <InspectorSection title="General parameters" icon="fit" className="control-wide">
           <div className="parameter-table">
@@ -433,19 +460,23 @@ export function FitControls({
         title="Preview"
         icon="timecourse"
         className="fit-preview"
-        help="Preview fits use the selected ROI mean signal. Full map fits use the separate fitting region."
+        help="Preview fits use the mean signal of the whole image or a selected ROI. Full map fits use the separate fitting region."
       >
         <label>
-          ROI for preview
+          Signal for preview
           <select
             aria-label="Fit ROI"
-            value={w?.selected_roi ?? ''}
-            disabled={!w || busy}
-            onChange={(event) => void changeView({ selected_roi: event.target.value })}
+            value={previewRoi?.name ?? ''}
+            disabled={!w?.loaded || busy}
+            onChange={(event) =>
+              void changeView(
+                event.target.value
+                  ? { selected_roi: event.target.value }
+                  : { plot_whole_image: true },
+              )
+            }
           >
-            <option value="" disabled>
-              Select an ROI
-            </option>
+            <option value="">Whole image mean</option>
             {w?.rois.map((roi) => (
               <option key={roi.name} value={roi.name} disabled={!roi.enabled || !roi.pixels}>
                 {roi.name} · {roi.pixels} voxels
@@ -462,14 +493,11 @@ export function FitControls({
         />
         <button
           className="secondary full"
-          disabled={
-            !w?.rois.some((r) => r.name === w.selected_roi && r.enabled && r.pixels > 0) ||
-            busy ||
-            setupLoading
-          }
+          disabled={!w?.loaded || busy || setupLoading}
           onClick={() =>
             void run('preview', {
-              roi_name: w?.selected_roi,
+              roi_name: previewRoi?.name,
+              use_roi: Boolean(previewRoi),
               steps: previewSteps,
               device,
               settings: configuration(),
@@ -490,7 +518,7 @@ export function FitControls({
                     ? value.toExponential(3)
                     : value.toFixed(2)}
                 </strong>
-                <small>{specs[name]?.unit ?? ''}</small>
+                <small>{w.preview?.parameter_units?.[name] ?? specs[name]?.unit ?? ''}</small>
               </div>
             ))}
             <div>
@@ -515,7 +543,9 @@ export function FitControls({
               value={useRoi ? 'rois' : 'all'}
               onChange={(event) => void changeView({ scene: { fit_region: event.target.value } })}
             >
-              <option value="rois">Selected ROIs</option>
+              <option value="rois" disabled={!hasRois}>
+                Selected ROIs
+              </option>
               <option value="all">Whole image</option>
             </select>
           </label>

@@ -1405,10 +1405,16 @@ export function App() {
                 ? 'Slice'
                 : String(control.label ?? key);
           if (key === 'slice_package') {
-            const choices = (control.choices ?? []) as {
+            const savedChoices = (control.choices ?? []) as {
               value: number;
               label: string;
             }[];
+            const choices = savedChoices.length
+              ? savedChoices
+              : Array.from({ length: size }, (_, index) => ({
+                  value: index,
+                  label: `Package ${index + 1}`,
+                }));
             return (
               <label key={key}>
                 Slice package

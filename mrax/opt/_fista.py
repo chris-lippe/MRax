@@ -99,8 +99,11 @@ def make_fista_kernel(loss, smooth_loss, bounds, operators, step_size, *,
         direction = gradient
         dtype = value.dtype
         eps = max([jnp.finfo(dtype).eps] + [jnp.finfo(jnp.real(x).dtype).eps for x in jax.tree.leaves(point)])
-        # Scale floating-point comparison allowances with the objective.
-        allowance = 16 * eps * jnp.maximum(jnp.abs(value), jnp.finfo(dtype).tiny)
+        # Include coordinate rounding in the smooth linearization. Near a fit,
+        # the residual loss can be much smaller than its evaluation error.
+        linear_scale = sum(jnp.sum(jnp.abs(g) * jnp.abs(x)) for g, x in
+                           zip(jax.tree.leaves(gradient), jax.tree.leaves(point), strict=True))
+        allowance = 16 * eps * jnp.maximum(jnp.abs(value) + linear_scale, jnp.finfo(dtype).tiny)
         good_gradient = _finite((gradient, value))
 
         def trial(carry):

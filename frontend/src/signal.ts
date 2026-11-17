@@ -105,7 +105,7 @@ export function signalData(
   if (!curve) return null;
   const name =
     options.source === 'fit'
-      ? (w.preview?.roi_name ?? w.selected_roi ?? 'ROI')
+      ? (w.preview?.roi_name ?? 'Whole image')
       : (curve.roi_name ?? 'Whole image');
   const result: SignalData = {
     x: curve.x,
@@ -313,7 +313,19 @@ export function signalPath(
   px: (v: number) => number,
   py: (v: number) => number,
   budget = 1600,
+  orderByX = false,
 ) {
+  if (orderByX) {
+    const order = x.map((_, i) => i).sort((a, b) => (x[a] ?? Infinity) - (x[b] ?? Infinity));
+    return signalPath(
+      order.map((i) => x[i]),
+      order.map((i) => y[i]),
+      (i) => valid(order[i]),
+      px,
+      py,
+      budget,
+    );
+  }
   let result = '',
     start = 0;
   const point = (i: number, first: boolean) =>

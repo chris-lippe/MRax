@@ -166,7 +166,8 @@ export function ViewerControls({
             >
               {workspace.maps.map((map) => (
                 <option key={String(map.name)} value={String(map.name)}>
-                  {String(map.name)} ({String(map.unit)})
+                  {String(map.name)}
+                  {map.unit ? ` (${map.unit})` : ''}
                 </option>
               ))}
             </select>

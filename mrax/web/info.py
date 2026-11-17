@@ -16,6 +16,7 @@ from mrax.gui.services.view_data import (
     display_options,
     displayed_roi,
     json_value,
+    preview_for_workspace,
     render_image,
 )
 
@@ -121,16 +122,7 @@ def workspace_info(record):
                 "metadata": json_value(roi.metadata),
             }
         )
-    preview = workspace.preview_results_by_experiment.get(session.selected_experiment or "")
-    if settings.get("plot_whole_image", False):
-        preview = None
     selected_roi = session.roi(session.fit_settings.selected_roi) if session.rois else None
-    if (
-        preview
-        and preview.get("roi_name")
-        and (selected_roi is None or preview["roi_name"] != selected_roi.name)
-    ):
-        preview = None
     axis_key = (session.selected_experiment, workspace.plot_x_axis_key)
     if loaded and cache.get("profile_axis_key") != axis_key:
         cache.update(
@@ -156,18 +148,11 @@ def workspace_info(record):
         curve = curve_for_workspace(workspace) if loaded else None
         cache.update(curve_key=curve_key, curve=curve)
     curve = cache["curve"]
-    if (
-        preview
-        and curve
-        and (
-            len(preview.get("x", [])) != len(curve["x"])
-            or (
-                workspace.plot_x_axis_key != "auto"
-                and workspace.plot_x_axis_key in session.spatial_dim_names
-            )
-        )
-    ):
-        preview = None
+    preview = preview_for_workspace(
+        workspace,
+        workspace.preview_results_by_experiment.get(session.selected_experiment or ""),
+        curve,
+    )
     geometry = session.current_experiment.get("spatial_geometry") if loaded else None
     map_names = session.map_names if loaded else []
     mode = workspace.view_label

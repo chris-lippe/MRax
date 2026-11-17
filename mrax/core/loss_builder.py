@@ -773,7 +773,7 @@ def build_loss(
     inferred_globals = _resolve_globals(experiment, model, study_globals)
     global_obs = require_quantity_dict(inferred_globals or {}, "Study global")
     merged_observables = {**global_obs, **observables}
-    dim_map = getattr(experiment, "_mrax_dim_observables", None)
+    dim_map = _dim_map_for_experiment(experiment, model=model)
     observable_arrays = expand_observables_to_frames(merged_observables, experiment.dims, dim_map)
     obs_data_mask = None
     auto_frame_mask = None

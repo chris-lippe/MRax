@@ -20,16 +20,20 @@ Basic workflow
 3. **Process.** Use **Reconstruct**, **Denoise** or **Register** as needed.
    Expand the processing pipeline to insert, edit, reorder or remove steps,
    then apply or discard the draft. **Original** returns to the imported data.
-4. **Segment and fit.** Draw or import ROIs in **Segment**. In **Fit**, choose
-   the model, observables and fitting region.
-   Use **Check fit readiness** before fitting. Preview an ROI signal or run a
-   voxelwise map fit. Visible overlays and fitting masks are separate choices.
+4. **Fit.** Choose the model, observables and fitting region in **Fit**.
+   The default is the whole image. Draw or import optional ROIs in **Segment**.
+   Use **Check fit readiness** before fitting. Preview the mean signal or run a
+   voxelwise map fit.
 5. **Analyze and save.** **Analyze** provides ROI timecourses and map statistics.
    **Save workspace** preserves the session. **Export data** writes selected
    images, masks, curves or reports. Imports remain unchanged.
 
-Signal previews average the current image until an ROI is available.
+Signal previews show the whole-image or ROI mean along the selected axis.
 Spectroscopy uses the curve viewer. Declared frequency coordinates label its axis.
+Dynamic fits produce maps for each time point. Each parameter's **Dimension
+settings** can combine spatial and temporal penalties with separate weights, or
+share a parameter across time. **Loss RMS scale** controls which image samples
+set the data-term scale.
 
 Processing changes retain existing fit maps. Rerun fitting to update them.
 **Register → Series alignment** aligns acquisition frames.

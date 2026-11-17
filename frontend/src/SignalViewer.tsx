@@ -83,7 +83,7 @@ export function SignalViewer({
               (options.source === 'volume'
                 ? 'Choose ROI volumes and plot their curves using the controls.'
                 : options.source === 'fit'
-                  ? 'Run a preview fit for the selected ROI in Fit.'
+                  ? 'Run a preview fit in Fit.'
                   : 'Open an experiment to view its signal profile.')}
           </p>
         </div>
@@ -399,7 +399,7 @@ export function SignalSourceControls({
               : 'Whole-image mean in the current slice.') +
             ' Other coordinates follow the workspace.'
           : options.source === 'fit'
-            ? 'Recorded observations and predictions from the selected ROI’s preview fit.'
+            ? 'Recorded observations and predictions from the preview fit.'
             : 'Curves summarize whole ROI volumes. Other acquisition coordinates follow the workspace.'}
       </p>
     </InspectorSection>

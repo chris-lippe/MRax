@@ -198,7 +198,7 @@ def test_multipool_edits_preserve_parameters_predictions_and_saved_settings(clie
     assert response.json()["settings"]["num_steps"] == 123
     assert client.get(path).json() == unchanged
     captured = client.post(path + "/workflows", json={
-        "revision": workspace["revision"], "kind": "fitting", "draft": {"use_roi": False},
+        "revision": workspace["revision"], "kind": "fitting",
     }).json()
     resolved = client.post(path + "/pipeline-editor", json={
         "revision": workspace["revision"], "kind": "fit",
@@ -206,6 +206,7 @@ def test_multipool_edits_preserve_parameters_predictions_and_saved_settings(clie
     })
     assert resolved.status_code == 200, resolved.text
     assert resolved.json()["options"]["settings"]["model_name"] == workspace["model"]
+    assert resolved.json()["options"]["use_roi"] is False
     assert client.get(path).json() == unchanged
 
     revision = workspace["revision"]
@@ -227,6 +228,20 @@ def test_multipool_edits_preserve_parameters_predictions_and_saved_settings(clie
     session = client.app.state.records[workspace["id"]].workspace.session
     np.testing.assert_array_equal(session.image_array, original)
     np.testing.assert_array_equal(session.original_image_array, original)
+
+    pooled = GuiSession()
+    pooled.create_empty_study("Pool selection", field_strength_mhz=400)
+    pooled.add_experiment("Reference", np.ones((2, 3)), dims={"x": 2, "y": 3},
+                          exp_type="sat_trans", observables={"sat_b1": Quantity(0, "uT")})
+    pooled.add_experiment("Spectra", np.ones((3, 2, 3)), dims={"offset": 3, "x": 2, "y": 3},
+                          exp_type="sat_trans", model_name="multipool_lorentzian",
+                          observables={"freq_offsets": Quantity(np.asarray([-1, 0, 1]), "ppm"),
+                                       "sat_b1": Quantity(2, "uT")})
+    pooled.fit_settings.selected_pools = ("water",)
+    assert set(pooled.build_fit_inputs()[1].parameter_units) == {
+        "baseline", "amp_water", "gamma_water", "dw_water",
+    }
+    assert "amp_mt" not in pooled.run_preview_fit(use_roi=False, num_steps=1)["fields"]
 
 
 def test_origins_tokens_hosts_and_archives_are_checked(client):

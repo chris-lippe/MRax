@@ -293,7 +293,7 @@ def validate_operations(document):
                 if not role.strip():
                     raise ValueError("Give each input a role name")
                 _require_binding(document, resource, None, role)
-            if type(settings.get("use_roi", True)) is not bool:
+            if type(settings.get("use_roi", False)) is not bool:
                 raise ValueError("use_roi must be a boolean")
             frames = settings.get("excluded_frames", [])
             if not isinstance(frames, list) or any(type(n) is not int or n < 0 for n in frames):

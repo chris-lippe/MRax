@@ -255,6 +255,7 @@ class PreviewResult(CurveInfo):
     included: list[bool]
     model: str
     parameters: dict[str, FiniteFloat] | None = None
+    parameter_units: dict[str, str] | None = None
     relative_rmse: FiniteFloat | None = None
 
     @model_validator(mode="after")
@@ -467,7 +468,7 @@ class FitCheckCommand(Command):
     revision: int = Field(ge=0)
     view_revision: int | None = None
     settings: dict[str, Any] = {}
-    use_roi: bool = True
+    use_roi: bool = False
     roi_names: list[str] = []
     excluded_frames: list[int] | None = None
     device: str = "cpu"

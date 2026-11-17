@@ -39,8 +39,21 @@ export function FitParameterEditor({
   const fixed = override.trainable === false || (override.trainable == null && !spec.trainable);
   const bounds = (override.bounds ?? spec.bounds) as [number, number] | null;
   const initial = Number((fixed ? override.value : undefined) ?? override.init ?? spec.initial);
-  const updateRegularizer = (value: Options) =>
-    onRegularizersChange([{ ...regularizers[0], ...value }, ...regularizers.slice(1)]);
+  const updateRegularizer = (index: number, value: Options) =>
+    onRegularizersChange(
+      regularizers.map((entry, i) => (i === index ? { ...entry, ...value } : entry)),
+    );
+  const spatial = dimensions.filter(
+    (dimension) => ['x', 'y', 'z'].includes(dimension.name) && dimension.regularizable,
+  );
+  const temporal = dimensions.filter(
+    (dimension) => ['t', 'frame'].includes(dimension.name) && dimension.regularizable,
+  );
+  const addRegularizer = (axes: FitDimension[], type: string) =>
+    onRegularizersChange([
+      ...regularizers,
+      { type, weight: 0.01, axes: axes.map((dimension) => dimension.axis) },
+    ]);
   return (
     <fieldset disabled={disabled} className="fit-parameter">
       <legend>
@@ -80,56 +93,97 @@ export function FitParameterEditor({
         </div>
       )}
       <details className="parameter-spatial">
-        <summary>Spatial settings</summary>
-        <label>
-          Regularizer
-          <select
-            aria-label={name + ' regularizer'}
-            value={String(regularizers[0]?.type ?? 'none')}
-            onChange={(event) =>
-              event.target.value === 'none'
-                ? onRegularizersChange([])
-                : updateRegularizer({
-                    type: event.target.value,
-                    weight: regularizers[0]?.weight ?? 0.01,
-                    axes:
-                      regularizers[0]?.axes ??
-                      dimensions
-                        .filter((dimension) => dimension.regularizable)
-                        .map((dimension) => dimension.axis),
-                  })
-            }
-          >
-            {['none', 'smoothness', 'tv', 'tv2'].map((value) => (
-              <option key={value}>{value}</option>
-            ))}
-          </select>
-        </label>
-        {!!regularizers.length && (
-          <>
-            <NumberField
-              label={name + ' regularization weight'}
-              caption="Weight"
-              value={Number(regularizers[0].weight ?? 0)}
-              min={0}
-              onChange={(value) => updateRegularizer({ weight: value })}
-            />
-            <FitDimensionSelector
-              label={name + ' regularization dimension'}
-              caption="Regularization dimensions"
-              dimensions={dimensions}
-              selected={
-                (regularizers[0].axes ??
-                  dimensions
-                    .filter((dimension) => dimension.regularizable)
-                    .map((dimension) => dimension.axis)) as (string | number)[]
-              }
-              numeric
-              disabled={disabled}
-              onChange={(axes) => updateRegularizer({ axes })}
-            />
-          </>
-        )}
+        <summary>Dimension settings</summary>
+        {regularizers.map((entry, index) => {
+          const suffix = index ? ' ' + (index + 1) : '';
+          return (
+            <fieldset className="fit-regularizer" key={index}>
+              <legend>Penalty {index + 1}</legend>
+              <div className="bounds-grid">
+                <label>
+                  Regularizer
+                  <select
+                    aria-label={name + ' regularizer' + suffix}
+                    value={String(entry.type)}
+                    onChange={(event) => updateRegularizer(index, { type: event.target.value })}
+                  >
+                    <option value="smoothness">Smoothness</option>
+                    <option value="tv">Total variation</option>
+                    <option value="tv2">Second-order TV</option>
+                  </select>
+                </label>
+                <NumberField
+                  label={name + ' regularization weight' + suffix}
+                  caption="Weight"
+                  value={Number(entry.weight ?? 0)}
+                  min={0}
+                  onChange={(value) => updateRegularizer(index, { weight: value })}
+                />
+              </div>
+              <FitDimensionSelector
+                label={name + ' regularization dimension' + suffix}
+                caption="Regularization dimensions"
+                dimensions={dimensions}
+                selected={
+                  (entry.axes ??
+                    dimensions
+                      .filter((dimension) => dimension.regularizable)
+                      .map((dimension) => dimension.axis)) as (string | number)[]
+                }
+                numeric
+                disabled={disabled}
+                onChange={(axes) => updateRegularizer(index, { axes })}
+              />
+              <button
+                type="button"
+                className="secondary small"
+                aria-label={'Remove ' + name + ' regularizer ' + (index + 1)}
+                onClick={() => onRegularizersChange(regularizers.filter((_, i) => i !== index))}
+              >
+                Remove penalty
+              </button>
+            </fieldset>
+          );
+        })}
+        <div className="button-row">
+          {!!spatial.length && (
+            <button
+              type="button"
+              className="secondary small"
+              aria-label={'Add ' + name + ' spatial regularizer'}
+              onClick={() => addRegularizer(spatial, 'tv')}
+            >
+              Add spatial penalty
+            </button>
+          )}
+          {!!temporal.length && (
+            <button
+              type="button"
+              className="secondary small"
+              aria-label={'Add ' + name + ' temporal regularizer'}
+              onClick={() => addRegularizer(temporal, 'smoothness')}
+            >
+              Add temporal penalty
+            </button>
+          )}
+          {!spatial.length &&
+            !temporal.length &&
+            dimensions.some((dimension) => dimension.regularizable) && (
+              <button
+                type="button"
+                className="secondary small"
+                aria-label={'Add ' + name + ' regularizer'}
+                onClick={() =>
+                  addRegularizer(
+                    dimensions.filter((dimension) => dimension.regularizable),
+                    'smoothness',
+                  )
+                }
+              >
+                Add penalty
+              </button>
+            )}
+        </div>
         <FitDimensionSelector
           label={name + ' constant dimension'}
           caption="Constant across dimensions"

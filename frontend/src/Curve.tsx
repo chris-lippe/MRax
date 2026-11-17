@@ -135,7 +135,7 @@ export const Curve = memo(function Curve({
           axisLabel={label}
           label={
             predicted
-              ? 'Observed ROI signal and fitted decay curve'
+              ? 'Observed signal and fitted curve'
               : region
                 ? 'Observed ROI signal profile'
                 : 'Whole image mean signal'

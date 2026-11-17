@@ -124,11 +124,13 @@ export function SignalPlot({ data, traces, options, xDomain, yDomain, svgRef, up
           Math.ceil((data.x.length * Math.max(1, traces.length)) / 1600),
         );
         const markers = trace.fitted
-          ? []
+          ? data.x.length === 1 && allowed(0)
+            ? [0]
+            : []
           : data.x.flatMap((_, i) => (i % markerStride === 0 && allowed(i) ? [i] : []));
         return {
           trace,
-          path: signalPath(data.x, trace.values, allowed, px, py),
+          path: signalPath(data.x, trace.values, allowed, px, py, 1600, true),
           markers,
           colour: signalColour(data.traces.findIndex((t) => t.id === trace.id)),
         };

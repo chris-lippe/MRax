@@ -108,6 +108,7 @@ class FitSettings:
     optimizer_name: str = "auto"
     num_steps: int = 200
     step_size: float = 0.02
+    data_normalization: str = "roi"
     selected_roi: str | None = None
     output_dir: Path | None = None
     mask_fill_value: float | None = 0.0
@@ -2297,6 +2298,13 @@ class GuiSession:
             else:
                 saved_specs = (getattr(source_model, "parameter_specs", None) or
                     getattr(getattr(source_model, "parametrization_factory", None), "parameter_specs", {})) or {}
+        if saved_specs and self.fit_settings.selected_pools:
+            active = make_model(
+                selected_key, pools=self.fit_settings.selected_pools,
+                pool_overrides=self.fit_settings.pool_overrides or None,
+            )
+            saved_specs = {key: value for key, value in saved_specs.items()
+                           if key in active.parameter_units}
         parameter_overrides = {str(key): dict(value) for key, value in saved_specs.items()}
         for key, value in self.fit_settings.param_overrides.items():
             parameter_overrides[key] = {**parameter_overrides.get(key, {}), **value}
@@ -2420,6 +2428,17 @@ class GuiSession:
             return value
         return Quantity(jnp.asarray(arr), unit or _default_ab_mt_map_unit(kind))
 
+    @staticmethod
+    def _validate_fit_samples(experiment, model):
+        if normalize_model_key(getattr(model, "name", None)) not in {"dti", "dki"}:
+            return
+        _, _, groups = _field_metadata(experiment, model=model)
+        group_count = int(np.prod([experiment.dims[name] for name in groups]))
+        specs = getattr(model, "_mrax_param_specs", {}) or {}
+        trainable = sum(bool(spec.get("trainable", True)) for spec in specs.values())
+        if experiment.frame_count // max(group_count, 1) < 2 and trainable > 1:
+            raise ValueError("A tensor fit needs more than one diffusion volume. Select a diffusion series with b-values and gradient directions.")
+
     def run_current_fit(
         self,
         *,
@@ -2445,6 +2464,7 @@ class GuiSession:
                 raise RuntimeError("View-state fitting requires both an experiment and dataset override")
             experiment = input_experiment
             dataset = input_dataset
+        self._validate_fit_samples(experiment, model)
         roi = input_roi if input_roi is not None else (self.roi(roi_name) if use_roi else None)
         mask = roi.mask if roi is not None else None
         mask_dims = self._roi_mask_dims(roi, tuple(experiment.spatial_dim_names)) if roi is not None else None
@@ -2455,6 +2475,7 @@ class GuiSession:
         if (
             mask is not None
             and model.name in {"dti", "dki"}
+            and set(mask_dims or ()) <= set(experiment.spatial_dim_names)
             and self.fit_settings.mask_fill_value is not None
             and not any(self.fit_settings.regularizer_configs.values())
             and not any(self.fit_settings.parameter_constant_dims.values())
@@ -2495,6 +2516,7 @@ class GuiSession:
             study_globals=dict((self.data or {}).get("study_globals") or {}),
             auto_mask_nan_observables=self.fit_settings.auto_mask_nan_observables,
             regularizer_configs=self.fit_settings.regularizer_configs or None,
+            data_normalization=self.fit_settings.data_normalization,
             initial_params=initial_params,
             physical_metric=(
                 "initial_gradient"
@@ -2574,21 +2596,32 @@ class GuiSession:
             return None, []
         try:
             data = reshape_dims_to_frames(_as_numpy(dataset.data), experiment.dims)
-            bvals_fit = bvals
-            bvecs_fit = bvecs
-            if frame_mask is not None:
-                fm = np.asarray(frame_mask, dtype=bool).reshape((-1,))
-                if int(fm.size) == int(data.shape[0]):
-                    data = data[fm]
-                    bvals_fit = _slice_frame_values(bvals, fm)
-                    bvecs_fit = _slice_frame_values(bvecs, fm)
-            rank = dti_design_rank(bvals_fit, bvecs_fit)
-            if rank < 7:
-                return None, [
-                    f"DTI tensor initialization skipped because the active frame set has design rank {rank}/7. Include b0 frames and at least six independent diffusion directions for tensor fitting."
-                ]
-            direct = fit_dti_log_linear(data, bvals_fit, bvecs_fit, mask=None)
-            initial_params = _fields_to_initial_params(model, direct)
+            field_shape, _, groups = _field_metadata(experiment, model=model)
+            group_shape = tuple(int(experiment.dims[name]) for name in groups)
+            frame_grid = np.arange(len(data)).reshape(experiment.non_spatial_shape)
+            seeds = {}
+            ranks = []
+            for group in np.ndindex(group_shape):
+                coordinates = dict(zip(groups, group, strict=True))
+                selection = tuple(coordinates.get(name, slice(None)) for name in experiment.non_spatial_dim_names)
+                included = np.zeros(len(data), dtype=bool)
+                included[np.asarray(frame_grid[selection]).reshape(-1)] = True
+                if frame_mask is not None:
+                    included &= np.asarray(frame_mask, dtype=bool).reshape(-1)
+                bvals_fit = _slice_frame_values(bvals, included)
+                bvecs_fit = _slice_frame_values(bvecs, included)
+                rank = dti_design_rank(bvals_fit, bvecs_fit)
+                if rank < 7:
+                    return None, [
+                        f"DTI tensor initialization skipped because an active frame group has design rank {rank}/7. Include b0 frames and at least six independent diffusion directions for each group."
+                    ]
+                ranks.append(rank)
+                direct = fit_dti_log_linear(data[included], bvals_fit, bvecs_fit, mask=None)
+                for name in model.parameter_units:
+                    if name in direct:
+                        seeds.setdefault(name, np.empty(field_shape, dtype=np.float32))[group] = direct[name]
+            rank = min(ranks)
+            initial_params = _fields_to_initial_params(model, seeds)
         except Exception:
             return None, []
         if initial_params is None:
@@ -2701,6 +2734,7 @@ class GuiSession:
                     raise RuntimeError("View-state fitting requires both an experiment and dataset override")
                 experiment = input_experiment
                 dataset = input_dataset
+            self._validate_fit_samples(experiment, model)
             report = experiment.sanity_check(
                 model,
                 dataset,
@@ -2787,6 +2821,7 @@ class GuiSession:
         *,
         model_name: str | None = None,
         roi_name: str | None = None,
+        use_roi: bool = True,
         input_experiment: Experiment | None = None,
         input_dataset: DataSet | None = None,
         input_roi: ROI | None = None,
@@ -2797,25 +2832,59 @@ class GuiSession:
     ) -> dict[str, Any]:
         steps = self.fit_settings.num_steps if num_steps is None else int(num_steps)
         if progress_callback is not None:
-            progress_callback(0, max(1, steps), "Preparing ROI preview fit")
-        roi = input_roi if input_roi is not None else self.roi(roi_name)
-        if roi is None:
-            raise RuntimeError("At least one ROI is required for preview fitting")
+            progress_callback(0, max(1, steps), "Preparing signal preview fit")
+        roi = input_roi if input_roi is not None else (self.roi(roi_name) if use_roi else None)
+        if use_roi and roi_name is not None and roi is None:
+            raise ValueError("Choose an enabled ROI or use the whole image mean")
         experiment, model, dataset, _study = self.build_fit_inputs(model_name)
         if input_experiment is not None or input_dataset is not None:
             if input_experiment is None or input_dataset is None:
                 raise RuntimeError("View-state fitting requires both an experiment and dataset override")
             experiment = input_experiment
             dataset = input_dataset
-        extracted = extract_timecourse_from_experiment(np.asarray(dataset.data), experiment, roi, stat="mean")
-        observed = _as_numpy(extracted["timecourse"])
+        self._validate_fit_samples(experiment, model)
+        if roi is None:
+            axes = tuple(list(experiment.dims).index(name) for name in experiment.spatial_dim_names)
+            observed = np.nanmean(np.asarray(dataset.data).reshape(experiment.shape), axis=axes)
+        else:
+            extracted = extract_timecourse_from_experiment(np.asarray(dataset.data), experiment, roi, stat="mean")
+            observed = _as_numpy(extracted["timecourse"])
         non_spatial = tuple(int(experiment.dims[name]) for name in experiment.non_spatial_dim_names)
         preview_dims = {name: int(experiment.dims[name]) for name in experiment.non_spatial_dim_names}
         preview_dims.update({"x": 1, "y": 1})
         preview_data = observed.reshape(non_spatial + (1, 1))
+        preview_observables = dict(experiment.observables)
+        spatial_rank = len(experiment.spatial_shape)
+        for name, quantity in experiment.observables.items():
+            values = np.asarray(quantity.values)
+            if (
+                not spatial_rank or values.ndim < spatial_rank
+                or tuple(values.shape[-spatial_rank:]) != experiment.spatial_shape
+                or name in {"bvecs", "bvec"}
+            ):
+                continue
+            if roi is not None:
+                mask_dims = tuple(roi.dims or experiment.spatial_dim_names)
+                if set(mask_dims) <= set(experiment.spatial_dim_names):
+                    mask = broadcast_mask(roi.mask, experiment.spatial_shape, mask_dims=mask_dims,
+                                          target_dims=tuple(experiment.spatial_dim_names))
+                else:
+                    if values.ndim == spatial_rank:
+                        values = np.broadcast_to(values, experiment.shape)
+                    else:
+                        expanded = expand_observables_to_frames(
+                            {name: quantity}, experiment.dims,
+                            getattr(experiment, "_mrax_dim_observables", None),
+                        )[name]
+                        values = np.asarray(expanded).reshape(experiment.shape)
+                    mask = broadcast_mask(roi.mask, values.shape, mask_dims=mask_dims,
+                                          target_dims=tuple(experiment.dims))
+                values = np.where(mask, values, np.nan)
+            reduced = np.nanmean(values, axis=tuple(range(values.ndim - spatial_rank, values.ndim)))
+            preview_observables[name] = quantity.with_values(reduced.reshape(reduced.shape + (1, 1)))
         preview_exp = Experiment(
             dims=preview_dims,
-            observables=dict(experiment.observables),
+            observables=preview_observables,
             exp_type=experiment.exp_type,
         )
         if getattr(experiment, "_mrax_dim_observables", None) is not None:
@@ -2848,7 +2917,7 @@ class GuiSession:
                 if axes:
                     regularizers.setdefault(name, []).append({**entry, "axes": axes})
         model.reg_weights = {}
-        preview_ds = DataSet(data=jnp.asarray(preview_data), name="roi_preview")
+        preview_ds = DataSet(data=jnp.asarray(preview_data), name="signal_preview")
         frame_mask = self.frame_mask.as_array() if self.frame_mask is not None else None
         fields, losses, model_fn = run_fit(
             preview_exp,
@@ -2860,6 +2929,7 @@ class GuiSession:
             study_globals=dict((self.data or {}).get("study_globals") or {}),
             auto_mask_nan_observables=self.fit_settings.auto_mask_nan_observables,
             regularizer_configs=regularizers,
+            data_normalization=self.fit_settings.data_normalization,
             return_model_callable=True,
             progress_callback=progress_callback,
             device=device,
@@ -2877,6 +2947,11 @@ class GuiSession:
             "fields": fields,
             "loss_history": losses,
             "model": model.name,
+            "roi_name": roi.name if roi is not None else None,
+            "frame_dimensions": [
+                (name, int(experiment.dims[name])) for name in experiment.non_spatial_dim_names
+            ],
+            "parameter_dimensions": [(name, int(preview_exp.dims[name])) for name in preview_names],
         }
 
     def save_fit_result(self, fit_result: Mapping[str, Any], output_dir: str | Path, *, bundle=True, progress_callback=None) -> Path:

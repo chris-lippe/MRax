@@ -508,6 +508,7 @@ def _fit_settings_to_dict(settings: FitSettings) -> dict[str, Any]:
         "optimizer_name": settings.optimizer_name,
         "num_steps": settings.num_steps,
         "step_size": settings.step_size,
+        "data_normalization": settings.data_normalization,
         "selected_roi": settings.selected_roi,
         "mask_fill_value": settings.mask_fill_value,
         "auto_mask_nan_observables": settings.auto_mask_nan_observables,
@@ -542,6 +543,7 @@ def _fit_settings_from_dict(data: dict[str, Any] | Mapping[str, Any]) -> FitSett
         optimizer_name=data.get("optimizer_name") or "auto",
         num_steps=_safe_int_value(data.get("num_steps"), 200),
         step_size=_safe_float_value(data.get("step_size"), 0.02),
+        data_normalization=data.get("data_normalization") or "roi",
         selected_roi=data.get("selected_roi"),
         mask_fill_value=_safe_float_value(data.get("mask_fill_value"), 0.0),
         auto_mask_nan_observables=bool(data.get("auto_mask_nan_observables", True)),
@@ -564,7 +566,10 @@ def _preview_result_to_json(result: dict[str, Any]) -> dict[str, Any]:
     out = {key: _json_array(result.get(key)) for key in keys if key in result}
     out["x_name"] = result.get("x_name")
     out["model"] = result.get("model")
-    for key in ("parameters", "relative_rmse", "x_unit", "roi_name", "pipeline_signature"):
+    for key in (
+        "parameters", "relative_rmse", "x_unit", "roi_name", "pipeline_signature",
+        "frame_dimensions", "parameter_dimensions", "parameter_values", "parameter_units",
+    ):
         if key in result:
             out[key] = _metadata_to_jsonable(result[key])
     return out
