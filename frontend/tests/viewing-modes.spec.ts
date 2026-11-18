@@ -42,6 +42,18 @@ test('Image, Overlay and Split view are peers and share arbitrary experiment sou
   const modes = page.getByRole('group', { name: 'Viewing mode', exact: true });
   await expect(modes.getByRole('button')).toHaveText(['Image', 'Overlay', 'Split view']);
   await pair(page);
+  const scale = page.getByRole('combobox', { name: 'Intensity scaling', exact: true });
+  await expect(scale).toHaveValue('fixed');
+  const upper = page.getByLabel('Maximum display value', { exact: true });
+  const fixedMaximum = await upper.inputValue();
+  const frame = page.getByRole('slider', { name: 'Frame', exact: true });
+  await frame.press('End');
+  await expect(frame).toHaveAttribute('aria-valuetext', /^(\d+) of \1$/);
+  await expect(upper).toHaveValue(fixedMaximum);
+  await scale.selectOption('frame');
+  await expect(scale).toHaveValue('frame');
+  await scale.selectOption('fixed');
+  await expect(upper).toHaveValue(fixedMaximum);
   const imageA = page.getByLabel('Image A', { exact: true }),
     imageB = page.getByLabel('Image B', { exact: true });
   await expect(imageA.locator('optgroup[label="Motion reference"]')).toHaveCount(1);

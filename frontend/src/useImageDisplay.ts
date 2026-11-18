@@ -5,34 +5,45 @@ export const MIN_ZOOM = 1;
 export const MAX_ZOOM = 8;
 
 type DisplaySettings = {
+  perFrame: boolean;
   zoom: number;
   pan: [number, number];
   window: { center: number; width: number } | null;
 };
-const initial: DisplaySettings = { zoom: MIN_ZOOM, pan: [0, 0], window: null };
+const initial: DisplaySettings = { zoom: MIN_ZOOM, pan: [0, 0], window: null, perFrame: false };
 
-export function useImageDisplay(key: string | undefined, values: Pixels | null, rgb = false) {
+export function useImageDisplay(
+  key: string | undefined,
+  values: Pixels | null,
+  fixedRange: readonly number[] | undefined,
+  plane: string | undefined,
+  rgb = false,
+) {
   const [settings, setSettings] = useState<Record<string, DisplaySettings>>({});
   const id = key ?? '';
-  const { zoom, pan, window } = settings[id] ?? initial;
+  const positionId = JSON.stringify([key, plane]);
+  const { zoom, pan } = settings[positionId] ?? initial;
+  const { window, perFrame } = settings[id] ?? initial;
   function setField<K extends keyof DisplaySettings>(
     field: K,
     value: SetStateAction<DisplaySettings[K]>,
   ) {
+    const target = field === 'zoom' || field === 'pan' ? positionId : id;
     setSettings((previous) => {
-      const before = previous[id] ?? initial;
+      const before = previous[target] ?? initial;
       const next =
         typeof value === 'function'
           ? (value as (old: DisplaySettings[K]) => DisplaySettings[K])(before[field])
           : value;
-      return { ...previous, [id]: { ...before, [field]: next } };
+      return { ...previous, [target]: { ...before, [field]: next } };
     });
   }
   const setZoom = (value: SetStateAction<number>) => setField('zoom', value);
   const setPan = (value: SetStateAction<[number, number]>) => setField('pan', value);
   const setWindow = (value: SetStateAction<DisplaySettings['window']>) => setField('window', value);
-  const range = useMemo(() => {
+  const range = useMemo((): readonly [number, number] => {
     if (rgb) return [0, 1] as const;
+    if (!perFrame && fixedRange) return [fixedRange[0], fixedRange[1]];
     let minimum = Infinity,
       maximum = -Infinity;
     if (values)
@@ -42,9 +53,10 @@ export function useImageDisplay(key: string | undefined, values: Pixels | null, 
           maximum = Math.max(maximum, value);
         }
     return Number.isFinite(minimum) ? ([minimum, maximum] as const) : ([0, 1] as const);
-  }, [values, rgb]);
+  }, [values, rgb, fixedRange, perFrame]);
   function resetIntensity() {
     setWindow(null);
+    setField('perFrame', false);
   }
   return {
     zoom,
@@ -54,6 +66,12 @@ export function useImageDisplay(key: string | undefined, values: Pixels | null, 
     pan,
     setPan,
     setWindow,
+    perFrame,
+    manual: window !== null,
+    setPerFrame: (next: boolean) => {
+      setField('perFrame', next);
+      setWindow(null);
+    },
     range,
     resetIntensity,
     resetPosition: () => {

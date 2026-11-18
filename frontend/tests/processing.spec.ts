@@ -77,6 +77,7 @@ test('processing stays in one experiment and an editable pipeline preserves sour
   await page.getByRole('button', { name: 'Apply baseline correction', exact: true }).click();
   await expect.poll(async () => (await opened(request))[0].pipeline.steps.length).toBe(2);
   await selectWorkflow(page, 'Fit');
+  await page.getByLabel('Fit region', { exact: true }).selectOption('rois');
   await expect(page.getByLabel('Fit mask Tissue', { exact: true })).toBeChecked();
   await page.getByLabel('Fit steps', { exact: true }).fill('600');
   await page.getByRole('button', { name: 'Run full map fit', exact: true }).click();

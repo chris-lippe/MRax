@@ -234,7 +234,8 @@ export function TimecourseControls({
       {error?.key === key && <p role="alert">{error.message}</p>}
       {result && (
         <p role="status">
-          Timecourse ready: {result.series.length} ROIs, {result.x.length} samples.
+          Timecourse ready: {result.series.length} {result.series.length === 1 ? 'ROI' : 'ROIs'},{' '}
+          {result.x.length} {result.x.length === 1 ? 'sample' : 'samples'}.
         </p>
       )}
     </section>

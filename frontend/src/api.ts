@@ -34,6 +34,7 @@ export function originalComparison(workspace: Workspace): ComparisonSettings {
     left: {
       experiment: workspace.experiment!,
       kind: 'original',
+      per_frame: false,
       component: 'auto',
       colormap: 'gray',
       frame: null,
@@ -41,6 +42,7 @@ export function originalComparison(workspace: Workspace): ComparisonSettings {
     right: {
       experiment: workspace.experiment!,
       kind: 'processed',
+      per_frame: false,
       component: 'auto',
       colormap: 'gray',
       frame: null,
@@ -137,6 +139,7 @@ type ComparisonPlane = {
   plane_axis_labels?: [string, string];
   plane_axis_directions?: [number, number];
   range: [number, number];
+  fixed_range: [number, number];
   frame: number;
   unit: string;
 };

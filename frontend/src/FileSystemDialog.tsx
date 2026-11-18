@@ -159,6 +159,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
     setError('');
     setListing(null);
     setSelected(null);
+    setReplacement(null);
     try {
       const result = await api<Listing>(
         '/api/files/list?' +
@@ -210,6 +211,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
   }
   function selectEntry(entry: Entry) {
     setSelected(entry);
+    setReplacement(null);
     if (!saving || entry.directory === folderMode) setName(entry.name);
   }
   const choose: Choose = (options) => {
@@ -219,6 +221,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
     origin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setRequest(options);
     setListing(null);
+    setLocation('');
     setSelected(null);
     setName(options.suggestedName ?? '');
     setError('');
@@ -270,6 +273,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
   const childPath = (value: string) =>
     (listing?.path ? listing.path.replace(/[\\/]$/, '') + listing.separator : '') + value;
   async function go() {
+    if (busy || !root) return;
     const serial = ++generation.current;
     setError('');
     setBusy(true);
@@ -292,7 +296,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
     }
   }
   async function confirm(entry?: Entry) {
-    if (!request || !listing) return;
+    if (!request || !listing || busy || location !== listing.path) return;
     const serial = ++generation.current;
     setBusy(true);
     setError('');
@@ -463,7 +467,12 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
                   id="file-location"
                   aria-label="Location"
                   value={location}
-                  onChange={(event) => setLocation(event.target.value)}
+                  readOnly={busy}
+                  onChange={(event) => {
+                    setLocation(event.target.value);
+                    setReplacement(null);
+                    setNewFolder(null);
+                  }}
                   spellCheck={false}
                 />
                 <button
@@ -587,7 +596,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
                 <div className="file-command-bar">
                   <button
                     className="secondary"
-                    disabled={busy || !listing?.writable}
+                    disabled={busy || !listing?.writable || location !== listing.path}
                     onClick={() => setNewFolder('')}
                   >
                     <WorkbenchIcon name="new-folder" />
@@ -717,6 +726,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
                     className="file-new-folder"
                     onSubmit={(event) => {
                       event.preventDefault();
+                      if (busy || !listing || location !== listing.path) return;
                       if (
                         !newFolder.trim() ||
                         /[\\/]/.test(newFolder) ||
@@ -806,6 +816,7 @@ export function FileSystemProvider({ children }: { children: ReactNode }) {
                   disabled={
                     busy ||
                     !listing ||
+                    location !== listing.path ||
                     (saving
                       ? !name.trim() || !listing.writable
                       : request?.mode === 'file' && !selected && !name.trim())

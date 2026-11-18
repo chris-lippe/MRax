@@ -225,6 +225,7 @@ def export_into_directory(workspace, options, root, progress, *, output_guard=No
         progress=progress,
         expected={row["path"]: row["identity"] for row in conflicts},
         validate=validate_write,
+        before_commit=getattr(progress, "begin_commit", None),
     )
     return {"saved": True, "kind": kind, "path": str(destination), "file_count": len(files)}, None
 
@@ -256,6 +257,7 @@ def export_workspace(workspace, options, root, progress, *, output_guard=None):
                 destination,
                 lambda path: save_workspace_bundle(workspace, path),
                 overwrite=overwrite,
+                before_publish=getattr(progress, "begin_commit", None),
             )
         else:
             suffix = "." + str(options.get("format")) if kind == "object" else ".json"
@@ -268,7 +270,10 @@ def export_workspace(workspace, options, root, progress, *, output_guard=None):
             if len(files) != 1:
                 raise ValueError("Choose a folder for this export")
             write_file_atomic(
-                destination, lambda path: shutil.copyfile(files[0], path), overwrite=overwrite
+                destination,
+                lambda path: shutil.copyfile(files[0], path),
+                overwrite=overwrite,
+                before_publish=getattr(progress, "begin_commit", None),
             )
         progress(2, 2, "Saved")
         return {"saved": True, "kind": kind, "path": str(destination)}, None

@@ -15,7 +15,7 @@ from mrax.gui.services.comparison import (
 )
 from mrax.gui.services.scene import scene_settings
 
-from .info import image_for_record, workspace_info
+from .info import image_for_record, range_cache, workspace_info
 from .schemas import ViewCommand, WorkspaceInfo
 
 
@@ -108,7 +108,7 @@ def navigation_response(record, command):
 
     comparison_info = None
     if command.include_images and scene["comparison"]["enabled"]:
-        arrays, comparison_info = render_comparison(candidate, catalog=cache.get("catalog"))
+        arrays, comparison_info = render_comparison(candidate, catalog=cache.get("catalog"), ranges=range_cache(snapshot))
         for name, array in zip(("left", "right"), arrays):
             append(name, array)
     elif command.include_images:

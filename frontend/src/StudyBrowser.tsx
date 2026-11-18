@@ -7,7 +7,8 @@ export function StudyBrowser({
   workspaces,
   busy,
   connected,
-  running,
+  runningStudy,
+  savingStudy,
   importButton,
   exportButton,
   settingsButton,
@@ -26,7 +27,8 @@ export function StudyBrowser({
   workspaces: Workspace[];
   busy: boolean;
   connected: boolean;
-  running: boolean;
+  runningStudy: string | null;
+  savingStudy: string | null;
   importButton: Ref<HTMLButtonElement>;
   exportButton: Ref<HTMLButtonElement>;
   settingsButton: Ref<HTMLButtonElement>;
@@ -105,11 +107,15 @@ export function StudyBrowser({
           </button>
           <button
             className="secondary"
-            disabled={!workspace?.loaded || busy || running}
+            disabled={!workspace?.loaded || busy || Boolean(runningStudy) || Boolean(savingStudy)}
             onClick={onSave}
           >
             <WorkbenchIcon name="save" />
-            <span>Save workspace</span>
+            <span>
+              {savingStudy && savingStudy === workspace?.id
+                ? 'Saving workspace…'
+                : 'Save workspace'}
+            </span>
           </button>
         </div>
       </section>
@@ -180,7 +186,7 @@ export function StudyBrowser({
                     aria-label={'Close study: ' + item.label}
                     title={'Close study: ' + item.label}
                     aria-haspopup={item.dirty ? 'dialog' : undefined}
-                    disabled={busy || running}
+                    disabled={busy || Boolean(runningStudy)}
                     onClick={(event) => {
                       event.stopPropagation();
                       onClose(item, event.currentTarget);
@@ -211,7 +217,12 @@ export function StudyBrowser({
                         aria-current={
                           selected && workspace?.experiment === name ? 'true' : undefined
                         }
-                        disabled={busy}
+                        disabled={busy || runningStudy === item.id}
+                        title={
+                          runningStudy === item.id
+                            ? 'Available when the current operation finishes'
+                            : undefined
+                        }
                         onClick={() => onExperiment(item.id, name)}
                       >
                         <svg className="study-symbol" viewBox="0 0 20 20" aria-hidden="true">

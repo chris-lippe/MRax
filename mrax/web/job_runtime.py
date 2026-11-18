@@ -111,7 +111,14 @@ class Jobs:
                     with self.lock:
                         item["pipeline"] = value
 
+                def begin_commit():
+                    with self.lock:
+                        if cancelled.is_set():
+                            raise InterruptedError("Cancelled")
+                        item["_applying"] = True
+
                 progress.pipeline_event = pipeline_event
+                progress.begin_commit = begin_commit
 
                 return _workflow_worker(
                     workspace, root, operation, options, progress, output_guard=self.output_guard

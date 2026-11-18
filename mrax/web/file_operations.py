@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from uuid import uuid4
 
+from fastapi import HTTPException
 from pydantic import BaseModel
 
 from mrax.gui.services.cloning import clone_workspace
@@ -117,15 +118,24 @@ def register_file_operations(app, get_record, check_revision, add_record):
         with record.lock:
             check_revision(record, command.revision)
             guard_output(app, destination)
+            if record.saving:
+                raise HTTPException(409, "A workspace save is already in progress")
             if destination.exists() and command.overwrite:
                 validate_workspace_replacement(destination)
             snapshot = clone_workspace(record.workspace)
+            version = (record.revision, record.view_revision)
+            record.saving = True
+        try:
             write_file_atomic(
                 destination,
                 lambda path: save_workspace_bundle(snapshot, path),
                 overwrite=command.overwrite,
             )
-            record.workspace.dirty = False
-            record.file_location = {"root": command.root, "path": command.path}
-            app.state.checkpoint(record)
-            return workspace_info(record)
+            with record.lock:
+                record.workspace.dirty = version != (record.revision, record.view_revision)
+                record.file_location = {"root": command.root, "path": command.path}
+                app.state.checkpoint(record)
+                return workspace_info(record)
+        finally:
+            with record.lock:
+                record.saving = False

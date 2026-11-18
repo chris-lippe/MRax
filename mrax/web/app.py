@@ -39,7 +39,7 @@ from mrax.gui.services.workspace import StudyWorkspace
 from mrax.gui.session import GuiSession
 
 from .filesystem import FileRoots
-from .info import image_for_record, workspace_info
+from .info import image_for_record, range_cache, workspace_info
 from .job_runtime import Jobs
 from .schemas import (
     CloseCommand,
@@ -63,6 +63,7 @@ class Record:
     lock: threading.RLock = field(default_factory=threading.RLock)
     file_location: dict[str, str] | None = None
     info_cache: dict = field(default_factory=dict, repr=False)
+    saving: bool = False
 
 
 def update_view(workspace, command, *, navigation=False):
@@ -563,6 +564,8 @@ def create_app(
         record = get_record(key)
         with record.lock:
             check_revision(record, command.revision)
+            if record.saving:
+                raise HTTPException(409, "Wait for the workspace save before closing")
             if app.state.jobs.is_active(key):
                 raise HTTPException(409, "Wait for or cancel the active fit before closing")
             if record.workspace.dirty and not command.discard:
@@ -644,7 +647,7 @@ def create_app(
     def comparison(key: str):
         record = get_record(key)
         with record.lock:
-            arrays, metadata = render_comparison(record.workspace)
+            arrays, metadata = render_comparison(record.workspace, ranges=range_cache(record))
             return Response(
                 b"".join(array.tobytes(order="C") for array in arrays),
                 media_type="application/octet-stream",

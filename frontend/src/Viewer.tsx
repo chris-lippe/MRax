@@ -142,14 +142,18 @@ export function Viewer({
   }, [workspace.id, workspace.revision, workspace.view_revision, drawing, tool, erasing]);
   const canvasPixels = useRef<ImageData | null>(null);
   const layerAppearance = JSON.stringify([
-    workspace.scene.layers.map(({ id, visible, unavailable, window, colormap, opacity }) => ({
-      id,
-      visible,
-      unavailable,
-      window,
-      colormap,
-      opacity,
-    })),
+    workspace.scene.layers.map(
+      ({ id, visible, unavailable, window, colormap, opacity, fixed_range, per_frame }) => ({
+        id,
+        visible,
+        unavailable,
+        window,
+        fixed_range,
+        per_frame,
+        colormap,
+        opacity,
+      }),
+    ),
     scenePreview.layers,
   ]);
   useEffect(() => {
@@ -187,14 +191,7 @@ export function Viewer({
     for (const layer of workspace.scene.layers) {
       const data = layerValues[layer.id];
       if (!layer.visible || !data || layer.unavailable) continue;
-      let minimum = Infinity,
-        maximum = -Infinity;
-      if (!layer.window)
-        for (const value of data)
-          if (Number.isFinite(value)) {
-            minimum = Math.min(minimum, value);
-            maximum = Math.max(maximum, value);
-          }
+      const [minimum, maximum] = layer.per_frame ? layer.frame_range : layer.fixed_range;
       const window = layer.window ?? {
         center: (minimum + maximum) / 2,
         width: maximum - minimum || 1,
@@ -240,7 +237,10 @@ export function Viewer({
           range={display.range}
           level={level}
           onChange={display.setWindow}
-          reset={display.resetIntensity}
+          mode={display.manual ? 'manual' : display.perFrame ? 'frame' : 'fixed'}
+          changeMode={(mode) =>
+            mode === 'manual' ? display.setWindow(level) : display.setPerFrame(mode === 'frame')
+          }
         />,
       )}
       <div className="image-surround">

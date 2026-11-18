@@ -1,4 +1,5 @@
 import { InspectorSection } from './InspectorSection';
+import { ScaleSelector } from './IntensityControls';
 import { useState } from 'react';
 import type { Options, Workspace } from './api';
 import { CheckField } from './Controls';
@@ -158,6 +159,7 @@ export function SceneControls({
                       onChange={(event) =>
                         void update(layer.id, {
                           component: event.target.value as Layer['component'],
+                          window: null,
                         })
                       }
                     >
@@ -182,20 +184,30 @@ export function SceneControls({
                         <option value="">Follow base frame</option>
                         {Array.from({ length: choice.frames }, (_, frame) => (
                           <option key={frame} value={frame}>
-                            Frame {frame}
+                            Frame {frame + 1}
                           </option>
                         ))}
                       </select>
                     </label>
                   )}
-                  <CheckField
-                    label={`Automatic window for overlay ${index + 1}`}
-                    checked={!layer.window}
-                    disabled={busy}
-                    onChange={(auto) =>
-                      update(layer.id, { window: auto ? null : { center: 0.5, width: 1 } })
-                    }
-                  />
+                  <label>
+                    Intensity scaling
+                    <ScaleSelector
+                      label={`Overlay ${index + 1} intensity scaling`}
+                      disabled={busy}
+                      mode={layer.window ? 'manual' : layer.per_frame ? 'frame' : 'fixed'}
+                      change={(mode) => {
+                        const [low, high] = layer.per_frame ? layer.frame_range : layer.fixed_range;
+                        void update(layer.id, {
+                          per_frame: mode === 'frame',
+                          window:
+                            mode === 'manual'
+                              ? { center: (low + high) / 2, width: high - low || 1 }
+                              : null,
+                        });
+                      }}
+                    />
+                  </label>
                   {layer.window && (
                     <div className="bounds-grid">
                       {(['center', 'width'] as const).map((key) => (

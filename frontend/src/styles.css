@@ -1223,7 +1223,8 @@ main.pipeline-active .image-preview {
   font-size: 12px;
   pointer-events: none;
 }
-.comparison-surface.overlay .comparison-right .comparison-pixel {
+.comparison-surface.overlay .comparison-right .comparison-pixel,
+.comparison-surface.swipe .comparison-right .comparison-pixel {
   left: auto;
   right: 8px;
 }
@@ -1411,21 +1412,12 @@ main.spectrum-active {
   min-height: 16px;
   font-size: 12px;
 }
-.intensity-auto {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 16px;
-  padding: 0 4px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  box-shadow: none;
-}
-.intensity-auto .app-symbol {
-  width: 12px;
-  height: 12px;
+.intensity-range-title select {
+  width: auto;
+  max-width: 100%;
+  font-size: inherit;
+  padding-block: 2px;
+  min-height: 26px;
 }
 .intensity-histogram {
   position: relative;

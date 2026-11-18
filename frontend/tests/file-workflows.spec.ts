@@ -29,8 +29,24 @@ test('ordinary Save and Open preserve a study without browser transfers', async 
   await expect(page.locator('input[type=file]')).toHaveCount(0);
   await expect(page.getByRole('img', { name: /24 by 32 quantitative image/ })).toBeVisible();
   const before = (await (await request.get('/api/workspaces')).json())[0];
+  let releaseListing!: () => void;
+  const listingGate = new Promise<void>((resolve) => (releaseListing = resolve));
+  await page.route(
+    '**/api/files/list?**',
+    async (route) => {
+      await listingGate;
+      await route.continue();
+    },
+    { times: 1 },
+  );
   await clickDataControl(page, 'Save workspace');
   const chooser = page.locator('.file-system-dialog');
+  try {
+    await expect(chooser.getByLabel('Location', { exact: true })).not.toBeEditable();
+  } finally {
+    releaseListing();
+  }
+  await expect(chooser.getByLabel('Location', { exact: true })).toBeEditable();
   await chooser.getByRole('button', { name: 'Cancel', exact: true }).click();
   const cancelled = await (await request.get('/api/workspaces/' + before.id)).json();
   expect(cancelled.dirty).toBe(before.dirty);
@@ -41,6 +57,7 @@ test('ordinary Save and Open preserve a study without browser transfers', async 
   await clickDataControl(page, 'Save workspace');
   await expect(chooser.getByRole('button', { name: 'Go', exact: true })).toBeEnabled();
   await chooser.getByLabel('Location', { exact: true }).fill(file);
+  await expect(chooser.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   await chooser.getByRole('button', { name: 'Go', exact: true }).click();
   await expect(chooser.getByLabel('File name', { exact: true })).toHaveValue('Study Ω.mrax');
   await chooser.getByRole('button', { name: 'Save', exact: true }).click();

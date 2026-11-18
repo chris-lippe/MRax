@@ -192,6 +192,7 @@ test('fitting workflow captures pending solver settings and requires ROI assignm
   await loadExample(page);
   await drawRoi(page);
   await selectWorkflow(page, 'Fit');
+  await page.getByLabel('Fit region', { exact: true }).selectOption('rois');
   await page.getByLabel('Fit mask ROI 1', { exact: true }).uncheck();
   await page.getByLabel('Fit mask ROI 1', { exact: true }).check();
   await page.getByLabel('Fit steps', { exact: true }).fill('333');

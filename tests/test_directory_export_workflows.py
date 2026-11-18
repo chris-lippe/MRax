@@ -2,6 +2,7 @@
 
 import hashlib
 import time
+from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
@@ -144,6 +145,44 @@ def test_file_collisions_are_reviewed_before_any_write_and_confirmation_reuses_p
     assert files[0].read_bytes() == expected
     assert (target / "keep").read_text() == "unrelated"
     assert not prepared.exists()
+
+
+def test_export_cancellation_matches_files_on_disk(client, tmp_path, monkeypatch):
+    from mrax.gui.services import export_workflow, file_output
+
+    study = workspace(client)
+
+    def exercise(module, function, expected):
+        destination = tmp_path / f"{expected}.mrax"
+        reached, resume = Event(), Event()
+        original = getattr(module, function)
+
+        def paused(*args, **kwargs):
+            result = original(*args, **kwargs)
+            reached.set()
+            assert resume.wait(10)
+            return result
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, function, paused)
+            job = client.post(
+                f"/api/workspaces/{study['id']}/tasks",
+                json={
+                    "revision": study["revision"],
+                    "operation": "export",
+                    "options": {"kind": "bundle", "root": "home", "path": str(destination)},
+                },
+            )
+            try:
+                assert reached.wait(10)
+                client.post(f"/api/jobs/{job.json()['id']}/cancel").raise_for_status()
+            finally:
+                resume.set()
+            finish(client, job, expected)
+        assert destination.exists() == (expected == "completed")
+
+    exercise(export_workflow, "save_workspace_bundle", "cancelled")
+    exercise(file_output, "publish_new_file", "completed")
 
 
 def test_partial_write_failure_restores_files_without_removing_existing_directories(tmp_path):

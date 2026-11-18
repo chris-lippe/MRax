@@ -32,6 +32,27 @@ test.afterEach(async ({ request }) => {
 async function study(page: Page) {
   await page.goto('/');
   await loadExample(page);
+  const echo = page.getByRole('slider', { name: 'Echo', exact: true });
+  const canvas = page.locator('.image-surface canvas');
+  const brightestPixel = () =>
+    canvas.evaluate((element: HTMLCanvasElement) => {
+      const pixels = element.getContext('2d')!.getImageData(0, 0, element.width, element.height);
+      let brightest = 0;
+      for (let i = 0; i < pixels.data.length; i += 4)
+        brightest = Math.max(brightest, pixels.data[i]);
+      return brightest;
+    });
+  await expect.poll(brightestPixel).toBeGreaterThan(100);
+  const firstPeak = await brightestPixel();
+  await echo.press('End');
+  await expect(canvas).toHaveAttribute('aria-label', /frame 8, slice 1/);
+  await expect.poll(brightestPixel).toBeLessThan(firstPeak / 4);
+  const scaling = page.getByLabel('Intensity scaling', { exact: true });
+  await scaling.selectOption('frame');
+  await expect.poll(brightestPixel).toBe(255);
+  await scaling.selectOption('fixed');
+  await echo.press('Home');
+  await expect.poll(brightestPixel).toBe(firstPeak);
   await expect(
     page.getByRole('img', { name: 'Whole image mean signal', exact: true }),
   ).toBeVisible();
@@ -262,6 +283,17 @@ session.save_imported_study(sys.argv[1])
         (await (await request.get('/api/workspaces/' + spectrum.id)).json()).timecourse.observed[0],
     )
     .toBe(0);
+  let releaseComponent!: () => void;
+  const componentGate = new Promise<void>((resolve) => (releaseComponent = resolve));
+  await page.route(
+    `**/api/workspaces/${spectrum.id}/view`,
+    async (route) => {
+      const result = await route.fetch();
+      if (route.request().postDataJSON()?.component === 'real') await componentGate;
+      await route.fulfill({ response: result });
+    },
+    { times: 1 },
+  );
   await page.getByLabel('Signal component', { exact: true }).selectOption('real');
   await expect
     .poll(
@@ -269,7 +301,11 @@ session.save_imported_study(sys.argv[1])
         (await (await request.get('/api/workspaces/' + spectrum.id)).json()).timecourse.observed[0],
     )
     .toBeCloseTo(spectrum.timecourse!.observed[0]!, 5);
-  await selectWorkflow(page, 'Denoise');
+  try {
+    await selectWorkflow(page, 'Denoise');
+  } finally {
+    releaseComponent();
+  }
   await expect(plot).toBeVisible();
   const frame = page.locator('.signal-navigation input[type="range"]');
   await expect(frame).toHaveCount(1);

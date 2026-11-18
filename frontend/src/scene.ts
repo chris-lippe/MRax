@@ -108,6 +108,7 @@ export function layerInput(layer: LayerInfo): Layer {
     opacity: layer.opacity,
     visible: layer.visible,
     window: layer.window,
+    per_frame: layer.per_frame,
   };
 }
 

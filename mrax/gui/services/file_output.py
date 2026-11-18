@@ -10,7 +10,7 @@ from pathlib import Path
 from mrax.io.output_guard import publish_new_file
 
 
-def write_file_atomic(destination, writer, *, overwrite=False):
+def write_file_atomic(destination, writer, *, overwrite=False, before_publish=None):
     destination = Path(destination)
     if not destination.parent.is_dir():
         raise ValueError("Choose an existing destination folder")
@@ -21,6 +21,8 @@ def write_file_atomic(destination, writer, *, overwrite=False):
         writer(staged)
         if not staged.is_file():
             raise ValueError("The operation did not produce the selected file")
+        if before_publish:
+            before_publish()
         if overwrite:
             os.replace(staged, destination)
         else:
@@ -80,7 +82,15 @@ def export_file_plan(prepared, destination, *, policy):
 
 
 def publish_export_files(
-    prepared, destination, files, *, replace_files=(), progress=None, expected=None, validate=None
+    prepared,
+    destination,
+    files,
+    *,
+    replace_files=(),
+    progress=None,
+    expected=None,
+    validate=None,
+    before_commit=None,
 ):
     """Publish individual files, rolling back this export if a write fails."""
     prepared, destination = Path(prepared), Path(destination)
@@ -126,6 +136,8 @@ def publish_export_files(
                 written.append(relative)
             if progress:
                 progress(len(files), len(files), "Export complete")
+            if before_commit:
+                before_commit()
         except BaseException:
             for relative in reversed(written):
                 target = destination / relative

@@ -1,8 +1,32 @@
 import { useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
 import type { Pixels } from './api';
-import { WorkbenchIcon } from './WorkbenchIcon';
 
 export type IntensityWindow = { center: number; width: number };
+export type ScaleMode = 'fixed' | 'frame' | 'manual';
+export function ScaleSelector({
+  label,
+  mode,
+  change,
+  disabled,
+}: {
+  label: string;
+  mode: ScaleMode;
+  change: (mode: ScaleMode) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <select
+      aria-label={label}
+      value={mode}
+      disabled={disabled}
+      onChange={(event) => change(event.target.value as ScaleMode)}
+    >
+      <option value="fixed">Fixed across frames</option>
+      <option value="frame">Scale per frame</option>
+      <option value="manual">Manual bounds</option>
+    </select>
+  );
+}
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 
 function BoundNumber({
@@ -14,21 +38,27 @@ function BoundNumber({
   value: number;
   commit: (value: number) => void;
 }) {
+  const edited = useRef(false);
+  const shown = Number(value.toPrecision(7));
   return (
     <input
       key={value}
       aria-label={label}
       type="number"
       step="any"
-      defaultValue={value}
-      title="Apply on Enter or when leaving the field"
+      defaultValue={shown}
+      onChange={() => {
+        edited.current = true;
+      }}
+      title={`Current value: ${value}. Enter to apply, Escape to cancel.`}
       onBlur={(event) => {
         const next = event.currentTarget.valueAsNumber;
-        if (Number.isFinite(next)) commit(next);
-        else event.currentTarget.value = String(value);
+        event.currentTarget.value = String(shown);
+        if (edited.current && Number.isFinite(next) && next !== value) commit(next);
+        edited.current = false;
       }}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') event.currentTarget.value = String(value);
+        if (event.key === 'Escape') edited.current = false;
         if (event.key === 'Enter' || event.key === 'Escape') {
           event.preventDefault();
           event.currentTarget.blur();
@@ -44,7 +74,8 @@ export function IntensityControls({
   level,
   onChange,
   onCommit,
-  reset,
+  mode,
+  changeMode,
   target,
 }: {
   values: Pixels;
@@ -52,15 +83,16 @@ export function IntensityControls({
   level: IntensityWindow;
   onChange: (level: IntensityWindow) => void;
   onCommit?: (level: IntensityWindow) => void;
-  reset: () => void;
+  mode: ScaleMode;
+  changeMode: (mode: ScaleMode) => void;
   target?: ReactNode;
 }) {
-  const span = range[1] - range[0] || 1;
-  const minimum = range[1] > range[0] ? range[0] : range[0] - span / 2;
-  const maximum = minimum + span;
-  const gap = Math.max(span * 1e-6, Number.EPSILON * Math.max(span, Math.abs(level.center)));
   const lower = level.center - level.width / 2;
   const upper = level.center + level.width / 2;
+  const minimum = Math.min(range[0], lower);
+  const maximum = Math.max(range[1], upper);
+  const span = maximum - minimum || 1;
+  const gap = Math.max(span * 1e-6, Number.EPSILON * Math.max(span, Math.abs(level.center)));
   const pending = useRef<IntensityWindow | null>(null);
   const histogram = useMemo(() => {
     const bins = new Array<number>(96).fill(0);
@@ -100,18 +132,14 @@ export function IntensityControls({
       <div className="intensity-bounds">
         <div className="intensity-range-title">
           <span>Value range</span>
-          <button
-            className="intensity-auto"
-            aria-label="Auto intensity"
-            title="Reset the displayed intensity range"
-            onClick={() => {
+          <ScaleSelector
+            label="Intensity scaling"
+            mode={mode}
+            change={(next) => {
               pending.current = null;
-              reset();
+              changeMode(next);
             }}
-          >
-            <WorkbenchIcon name="refresh" />
-            Auto
-          </button>
+          />
         </div>
         <div
           className="intensity-histogram"

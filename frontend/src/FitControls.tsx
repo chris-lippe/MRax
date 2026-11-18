@@ -551,6 +551,11 @@ export function FitControls({
           </label>
           {useRoi && (
             <>
+              <p className="control-note">
+                {w?.scene.fit_rois == null
+                  ? 'This workflow uses all enabled ROIs in each experiment.'
+                  : 'This workflow uses the selected ROIs by name.'}
+              </p>
               {w?.rois
                 .filter((r) => r.enabled)
                 .map((roi) => (

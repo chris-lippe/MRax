@@ -6,6 +6,7 @@ import numpy as np
 
 from mrax.gui.models import model_choices
 from mrax.gui.plotting import profile_dimension
+from mrax.gui.services.intensity import fixed_range, series_data
 from mrax.gui.services.pipeline import display_session, display_steps, pipeline_info, project_roi
 from mrax.gui.services.reconstruction import reconstruction_label
 from mrax.gui.services.roi_tools import roi_runs
@@ -64,6 +65,10 @@ def image_for_record(record, layer=None):
                 raise ValueError("This overlay layer is unavailable")
             images[layer] = (render_overlay(workspace, selected), False)
     return images[layer]
+
+
+def range_cache(record):
+    return _cache(record).setdefault("fixed_ranges", {})
 
 
 def workspace_info(record):
@@ -156,6 +161,34 @@ def workspace_info(record):
     geometry = session.current_experiment.get("spatial_geometry") if loaded else None
     map_names = session.map_names if loaded else []
     mode = workspace.view_label
+    ranges = range_cache(record)
+    component = settings.get("component", "auto")
+    scale = [0.0, 1.0]
+    if loaded and image.ndim == 2:
+        original = (
+            session.visual_state.show_original
+            and session.selected_experiment not in workspace.pipelines
+        )
+        kind = "original" if mode == "Image" and original else mode.lower()
+        source = series_data(session.current_experiment, kind, session.active_map)
+        scale = fixed_range(
+            ranges,
+            (
+                "base",
+                session.selected_experiment,
+                kind,
+                component,
+                session.active_map if kind == "map" else None,
+                session.active_reconstruction_component,
+                session.active_reconstruction_coil,
+                session.active_reconstruction_unwrap_phase,
+                session.active_kspace_mode,
+                session.active_kspace_centering,
+            ),
+            image,
+            source,
+            component,
+        )
     unit = (
         "rad"
         if (mode in {"Image", "Map"} and settings.get("component") == "phase")
@@ -203,6 +236,7 @@ def workspace_info(record):
             "scene": scene_info(
                 workspace,
                 catalog,
+                ranges=ranges,
                 render_layer=lambda _workspace, layer: image_for_record(record, layer["id"])[0],
             ),
             "experiment": session.selected_experiment or "",
@@ -212,6 +246,7 @@ def workspace_info(record):
             "slice_count": session.view_dimensions.get(session.image_slice_dim, 1) if loaded else 0,
             "slice_dim": session.image_slice_dim if loaded else "z",
             "shape": shape,
+            "fixed_range": scale,
             "spacing": list(session.image_plane_voxel_sizes) if loaded else [1, 1],
             "spacing_unit": "mm"
             if isinstance(geometry, dict) and geometry.get("voxel_sizes")

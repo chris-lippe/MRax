@@ -9,6 +9,7 @@ import numpy as np
 from mrax.data_struct.dimensions import non_spatial_names
 
 from .cloning import clone_workspace
+from .intensity import fixed_range, series_data
 from .pipeline import display_session, install, snapshot
 from .view_data import display_options, render_image
 
@@ -171,6 +172,7 @@ def validate_comparison(workspace, raw, catalog):
             "frame",
             "component",
             "colormap",
+            "per_frame",
             "window",
         }:
             raise ValueError("Invalid comparison source")
@@ -191,6 +193,8 @@ def validate_comparison(workspace, raw, catalog):
         ):
             raise ValueError("Comparison frame is out of range")
         window = source.get("window")
+        if type(source.get("per_frame", False)) is not bool:
+            raise ValueError("Choose whether the comparison scales per frame")
         if window is not None and (
             not isinstance(window, dict)
             or set(window) != {"center", "width"}
@@ -228,7 +232,7 @@ def validate_comparison(workspace, raw, catalog):
     return settings
 
 
-def _plane(workspace, source, navigation):
+def _plane(workspace, source, navigation, ranges):
     """Clone metadata only. Render one plane from the chosen immutable buffer."""
     from .scene import render_overlay
 
@@ -329,6 +333,19 @@ def _plane(workspace, source, navigation):
     if values.ndim != 2:
         raise ValueError("Choose a scalar image component for comparison")
     finite = values[np.isfinite(values)]
+    range_key = tuple(
+        source.get(k)
+        for k in ("experiment", "pipeline_id", "kind", "map_name", "registration_key", "component")
+    )
+    scale = fixed_range(
+        ranges,
+        ("pair", *range_key),
+        values,
+        series_data(
+            grid.current_experiment, "image" if kind == "original" else kind, source.get("map_name")
+        ),
+        source.get("component", "auto"),
+    )
     unit = (grid.current_experiment.get("extra_metadata") or {}).get("image_unit", "")
     if kind == "map":
         unit = grid.map_unit() or ""
@@ -346,12 +363,13 @@ def _plane(workspace, source, navigation):
             "geometry_frame": grid.active_frame,
             "unit": str(unit),
             "range": [float(finite.min()), float(finite.max())] if finite.size else [0.0, 1.0],
+            "fixed_range": scale,
         },
         grid,
     )
 
 
-def render_comparison(workspace, *, catalog=None):
+def render_comparison(workspace, *, catalog=None, ranges=None):
     from .scene import experiment_catalog, require_common_grid, scene_settings
 
     settings = scene_settings(workspace)["comparison"]
@@ -404,8 +422,10 @@ def render_comparison(workspace, *, catalog=None):
         "frame_explicit": settings["frame"] is not None,
     }
     arrays, planes, grids = [], [], []
+    if ranges is None:
+        ranges = {}
     for side in ("left", "right"):
-        values, metadata, grid = _plane(workspace, settings[side], navigation)
+        values, metadata, grid = _plane(workspace, settings[side], navigation, ranges)
         arrays.append(values)
         planes.append(metadata)
         grids.append(grid)

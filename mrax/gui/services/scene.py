@@ -295,18 +295,37 @@ def render_overlay(workspace, layer):
     return np.asarray(scalar_component(data, layer["component"]), dtype=np.float64)
 
 
-def scene_info(workspace, catalog, *, render_layer=render_overlay):
+def scene_info(workspace, catalog, *, render_layer=render_overlay, ranges=None):
     from .comparison import comparison_sources
+    from .intensity import fixed_range, series_data
 
+    if ranges is None:
+        ranges = {}
     scene = scene_settings(workspace)
     sources = overlay_sources(workspace, catalog)
     layers = []
     for layer in scene["layers"]:
         source = next((s for s in sources if _same_source(s, layer)), None)
         reason = "This source is unavailable" if source is None else None
+        scale = [0.0, 1.0]
+        current = scale
         if reason is None:
             try:
-                render_layer(workspace, layer)
+                plane = render_layer(workspace, layer)
+                if layer.get("per_frame"):
+                    current = fixed_range({}, "frame", plane)
+                entry = workspace.session.data["experiments"][layer["experiment"]]
+                key = tuple(
+                    layer.get(k)
+                    for k in ("experiment", "kind", "map_name", "registration_key", "component")
+                )
+                scale = fixed_range(
+                    ranges,
+                    ("layer", *key),
+                    plane,
+                    series_data(entry, layer["kind"], layer.get("map_name")),
+                    layer["component"],
+                )
             except (ValueError, RuntimeError, KeyError) as exc:
                 reason = str(exc)
         layers.append(
@@ -314,6 +333,8 @@ def scene_info(workspace, catalog, *, render_layer=render_overlay):
                 **layer,
                 "label": source["label"] if source else "Unavailable layer",
                 "unavailable": reason,
+                "fixed_range": scale,
+                "frame_range": current if layer.get("per_frame") else scale,
             }
         )
     return {
@@ -437,6 +458,7 @@ def update_scene(workspace, changes):
         "opacity",
         "visible",
         "window",
+        "per_frame",
     }
     for raw in settings["layers"]:
         if not isinstance(raw, dict):
@@ -468,6 +490,8 @@ def update_scene(workspace, changes):
         if frame is not None and (not isinstance(frame, int) or not 0 <= frame < source["frames"]):
             raise ValueError("Overlay frame is out of range")
         window = layer.get("window")
+        if type(layer.get("per_frame", False)) is not bool:
+            raise ValueError("Choose whether the layer scales per frame")
         if window is not None and (
             not isinstance(window, dict)
             or set(window) != {"center", "width"}

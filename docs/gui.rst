@@ -15,7 +15,9 @@ Basic workflow
    ``.mrax`` workspace or import data. Bruker studies open directly from their
    folders. Review the experiments before importing.
 2. **Inspect.** Select an experiment, slice package, frame and slice. Use the
-   intensity bounds above the image. Scroll to zoom and drag to pan.
+   intensity bounds above the image. Frames and slices share a scale by default.
+   Choose **Scale per frame** to inspect a low-signal frame, or enter manual bounds.
+   Scroll to zoom and drag to pan.
    **View** provides overlays, split comparisons, metadata and signal curves.
 3. **Process.** Use **Reconstruct**, **Denoise** or **Register** as needed.
    Expand the processing pipeline to insert, edit, reorder or remove steps,

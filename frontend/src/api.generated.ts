@@ -1094,6 +1094,11 @@ export interface components {
             kind: "original" | "processed" | "map" | "reconstruction" | "registration";
             /** Map Name */
             map_name?: string | null;
+            /**
+             * Per Frame
+             * @default false
+             */
+            per_frame: boolean;
             /** Pipeline Id */
             pipeline_id?: string | null;
             /** Registration Key */
@@ -1362,8 +1367,30 @@ export interface components {
             component: "auto" | "magnitude" | "phase" | "real" | "imag";
             /** Experiment */
             experiment: string;
+            /**
+             * Fixed Range
+             * @default [
+             *       0,
+             *       1
+             *     ]
+             */
+            fixed_range: [
+                number,
+                number
+            ];
             /** Frame */
             frame?: number | null;
+            /**
+             * Frame Range
+             * @default [
+             *       0,
+             *       1
+             *     ]
+             */
+            frame_range: [
+                number,
+                number
+            ];
             /** Id */
             id: string;
             /**
@@ -1380,6 +1407,11 @@ export interface components {
              * @default 0.5
              */
             opacity: number;
+            /**
+             * Per Frame
+             * @default false
+             */
+            per_frame: boolean;
             /** Registration Key */
             registration_key?: string | null;
             /** Unavailable */
@@ -1423,6 +1455,11 @@ export interface components {
              * @default 0.5
              */
             opacity: number;
+            /**
+             * Per Frame
+             * @default false
+             */
+            per_frame: boolean;
             /** Registration Key */
             registration_key?: string | null;
             /**
@@ -2231,6 +2268,17 @@ export interface components {
             fit_settings: {
                 [key: string]: unknown;
             };
+            /**
+             * Fixed Range
+             * @default [
+             *       0,
+             *       1
+             *     ]
+             */
+            fixed_range: [
+                number,
+                number
+            ];
             /** Frame */
             frame: number;
             /** Frame Count */

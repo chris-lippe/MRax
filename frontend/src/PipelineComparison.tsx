@@ -49,6 +49,7 @@ export function PipelineComparison({
       left: {
         experiment: w.experiment!,
         pipeline_id: current!.id,
+        per_frame: false,
         kind: isMap ? 'map' : 'processed',
         map_name: mapNames[0],
         frame: null,
@@ -58,6 +59,7 @@ export function PipelineComparison({
       right: {
         experiment: w.experiment!,
         pipeline_id: other.id,
+        per_frame: false,
         kind: isMap ? 'map' : 'processed',
         map_name: mapNames[1],
         frame: null,

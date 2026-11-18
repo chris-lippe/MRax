@@ -159,6 +159,7 @@ export function App() {
     );
   const [connected, setConnected] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
+  const [savingStudy, setSavingStudy] = useState<string | null>(null);
   const [navigating, setNavigating] = useState(false);
   const [pendingIndices, setPendingIndices] = useState<Record<string, number>>({});
   const navigationVersion = useRef(0);
@@ -447,7 +448,7 @@ export function App() {
           workspace.id,
           workspace.experiment,
           workspace.view,
-          workspace.plane,
+          workspace.pipeline.id,
           workspace.view === 'Map' ? workspace.active_map : null,
           workspace.display.component ?? 'auto',
           workspace.reconstruction_component,
@@ -456,6 +457,8 @@ export function App() {
         ])
       : undefined,
     values,
+    workspace?.fixed_range,
+    workspace?.plane,
     Boolean(workspace && workspace.channels > 1),
   );
   const { theme, setTheme, accessibility, setAccessibility } = usePreferences();
@@ -488,6 +491,7 @@ export function App() {
   const imageAbort = useRef<AbortController | null>(null);
   const pending = useRef(0),
     viewRequest = useRef(0);
+  const deferredWorkflowView = useRef(false);
   const choose = useFileSystem();
   const closeStudyTrigger = useRef<HTMLButtonElement>(null);
   const restoreStudyFocus = useRef(false);
@@ -746,6 +750,10 @@ export function App() {
     } finally {
       pending.current -= 1;
       setTaskBusy(pending.current > 0);
+      if (!pending.current && deferredWorkflowView.current) {
+        deferredWorkflowView.current = false;
+        syncWorkflowView();
+      }
     }
   }
 
@@ -810,14 +818,19 @@ export function App() {
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
-      if (workspace?.dirty || active(job) || Object.values(pipelineDrafts).some(draftChanged)) {
+      if (
+        savingStudy ||
+        workspace?.dirty ||
+        active(job) ||
+        Object.values(pipelineDrafts).some(draftChanged)
+      ) {
         event.preventDefault();
         event.returnValue = '';
       }
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [workspace?.dirty, job?.status, pipelineDrafts]);
+  }, [savingStudy, workspace?.dirty, job?.status, pipelineDrafts]);
 
   async function addRectangle(rectangle: Bounds) {
     if (
@@ -1158,7 +1171,7 @@ export function App() {
   }
   async function save() {
     const w = current.current;
-    if (!w) return;
+    if (!w || savingStudy) return;
     const location = w.file_location
       ? await api<{ root: string; parent: string; name: string }>(
           '/api/files/stat?' + new URLSearchParams(w.file_location),
@@ -1172,16 +1185,36 @@ export function App() {
       initial: location ? { root: location.root, path: location.parent } : undefined,
     });
     if (!destination) return;
-    await task(async () => {
+    setSavingStudy(w.id);
+    setError('');
+    setMessage('Saving workspace…');
+    try {
       const saved = await api<Workspace>('/api/workspaces/' + w.id + '/save-file', 'POST', {
         revision: w.revision,
         root: destination.root,
         path: destination.path,
         overwrite: destination.overwrite ?? false,
       });
-      if (current.current?.id === w.id) await show(saved);
-      setMessage('Workspace saved');
-    });
+      const update = (item: Workspace) =>
+        item.id !== saved.id
+          ? item
+          : {
+              ...item,
+              file_location: saved.file_location,
+              dirty:
+                item.revision === saved.revision && item.view_revision === saved.view_revision
+                  ? saved.dirty
+                  : item.dirty,
+            };
+      if (current.current?.id === saved.id) current.current = update(current.current);
+      setWorkspace((item) => item && update(item));
+      setWorkspaces((items) => items.map(update));
+      setMessage(saved.dirty ? 'Workspace saved. Newer changes are unsaved.' : 'Workspace saved');
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Could not save the workspace.');
+    } finally {
+      setSavingStudy(null);
+    }
   }
   async function shape(options: Options) {
     options = { ...drawOptions, ...options };
@@ -1274,6 +1307,14 @@ export function App() {
       }
     }, true);
   }
+  function syncWorkflowView() {
+    const w = current.current;
+    if (!w?.loaded || viewContextKey(w, viewingContext.current) === displayedContext.current)
+      return;
+    if (pending.current) deferredWorkflowView.current = true;
+    else void task(() => show(w, true));
+  }
+
   function selectWorkflow(value: Workflow, selectedTask: WorkflowTask = workflowTasks[value]) {
     if (selectedTask === 'signal') setSignalOpened(true);
     setWorkflow(value);
@@ -1284,14 +1325,7 @@ export function App() {
       void changeView({ scene: { comparison: { ...w.scene.comparison, enabled: false } } });
     if (value === 'rois' && w?.loaded && (w.scene.comparison.enabled || w.view !== 'Image'))
       displayedContext.current = null;
-    if (
-      value !== 'image' &&
-      w?.loaded &&
-      viewContextKey(w, viewingContext.current) !== displayedContext.current
-    )
-      void task(async () => {
-        await show(w, true);
-      });
+    if (value !== 'image') syncWorkflowView();
     if (selectedTask === 'metadata') {
       setPanel(null);
       setError('');
@@ -1336,7 +1370,7 @@ export function App() {
       workspaces={workspaces}
       busy={busy}
       connected={connected}
-      running={Boolean(active(job))}
+      runningStudy={job && active(job) ? job.workspace_id : null}
       importButton={importButton}
       exportButton={exportButton}
       settingsButton={settingsButton}
@@ -1355,6 +1389,7 @@ export function App() {
         setExportOpen(true);
       }}
       onSave={() => void save()}
+      savingStudy={savingStudy}
       onStudy={(id) =>
         void task(async () => {
           await show(await api<Workspace>(`/api/workspaces/${id}`));
@@ -1393,6 +1428,7 @@ export function App() {
   const dimensionControls = workspace && (
     <div className="dimension-controls" hidden={workspace.scene.comparison.enabled}>
       {workspace.dimension_controls
+        .filter((control) => Number(control.size) > 1)
         .filter((control) => !primarySignal || control.key !== workspace.timecourse?.dimension)
         .map((control) => {
           const key = String(control.key),
@@ -1441,6 +1477,7 @@ export function App() {
               </strong>
               <input
                 aria-label={name}
+                aria-valuetext={`${value + 1} of ${size}`}
                 type="range"
                 min={0}
                 max={Math.max(0, size - 1)}

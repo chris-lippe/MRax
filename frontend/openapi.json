@@ -421,6 +421,11 @@
             ],
             "title": "Map Name"
           },
+          "per_frame": {
+            "default": false,
+            "title": "Per Frame",
+            "type": "boolean"
+          },
           "pipeline_id": {
             "anyOf": [
               {
@@ -1217,6 +1222,24 @@
             "title": "Experiment",
             "type": "string"
           },
+          "fixed_range": {
+            "default": [
+              0.0,
+              1.0
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Fixed Range",
+            "type": "array"
+          },
           "frame": {
             "anyOf": [
               {
@@ -1228,6 +1251,24 @@
               }
             ],
             "title": "Frame"
+          },
+          "frame_range": {
+            "default": [
+              0.0,
+              1.0
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Frame Range",
+            "type": "array"
           },
           "id": {
             "maxLength": 80,
@@ -1267,6 +1308,11 @@
             "minimum": 0.0,
             "title": "Opacity",
             "type": "number"
+          },
+          "per_frame": {
+            "default": false,
+            "title": "Per Frame",
+            "type": "boolean"
           },
           "registration_key": {
             "anyOf": [
@@ -1391,6 +1437,11 @@
             "minimum": 0.0,
             "title": "Opacity",
             "type": "number"
+          },
+          "per_frame": {
+            "default": false,
+            "title": "Per Frame",
+            "type": "boolean"
           },
           "registration_key": {
             "anyOf": [
@@ -3554,6 +3605,24 @@
             "default": {},
             "title": "Fit Settings",
             "type": "object"
+          },
+          "fixed_range": {
+            "default": [
+              0.0,
+              1.0
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Fixed Range",
+            "type": "array"
           },
           "frame": {
             "title": "Frame",

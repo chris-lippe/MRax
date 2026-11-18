@@ -22,6 +22,7 @@ class OverlaySource(Command):
 
 
 class OverlayLayer(OverlaySource):
+    per_frame: bool = False
     id: str = Field(min_length=1, max_length=80, pattern=r"^[\w-]+$")
     frame: int | None = Field(default=None, ge=0)
     component: Literal["auto", "magnitude", "phase", "real", "imag"] = "auto"
@@ -32,6 +33,7 @@ class OverlayLayer(OverlaySource):
 
 
 class ComparisonSource(Command):
+    per_frame: bool = False
     experiment: str
     pipeline_id: str | None = None
     kind: Literal["original", "processed", "map", "reconstruction", "registration"]
@@ -100,6 +102,8 @@ class OverlayChoice(OverlaySource):
 
 
 class OverlayInfo(OverlayLayer):
+    frame_range: tuple[float, float] = (0.0, 1.0)
+    fixed_range: tuple[float, float] = (0.0, 1.0)
     label: str
     unavailable: str | None = None
 
@@ -342,6 +346,7 @@ class PipelineInfo(BaseModel):
 
 
 class WorkspaceInfo(BaseModel):
+    fixed_range: tuple[float, float] = (0.0, 1.0)
     file_location: dict[str, str] | None = None
     id: str
     label: str

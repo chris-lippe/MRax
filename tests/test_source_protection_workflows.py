@@ -1,6 +1,8 @@
 """Source immutability and explicit output contracts, with synthetic files only."""
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import numpy as np
 import pytest
@@ -124,3 +126,38 @@ def test_native_extensions_do_not_allow_replacing_arbitrary_external_files(clien
     with pytest.raises(ValueError):
         save_workflow(document, path, overwrite=True)
     assert path.read_text() == "external file"
+
+
+def test_workspace_save_allows_navigation_and_preserves_newer_edits(client, tmp_path, monkeypatch):
+    from mrax.web import file_operations
+
+    study = client.post("/api/workspaces/synthetic").json()
+    url = "/api/workspaces/" + study["id"]
+    destination = {"revision": study["revision"], "root": "home", "path": str(tmp_path / "a.mrax")}
+    started, finish = Event(), Event()
+    save = file_operations.save_workspace_bundle
+
+    def write(*args):
+        started.set()
+        assert finish.wait(10)
+        return save(*args)
+
+    monkeypatch.setattr(file_operations, "save_workspace_bundle", write)
+    with ThreadPoolExecutor() as workers:
+        saving = workers.submit(client.post, url + "/save-file", json=destination)
+        try:
+            assert started.wait(5)
+            assert client.post(url + "/save-file", json=destination).status_code == 409
+            assert (
+                client.request("DELETE", url, json={"revision": 0, "discard": True}).status_code
+                == 409
+            )
+            change = client.patch(url + "/view", json={"revision": study["revision"], "frame": 2})
+            assert change.is_success
+        finally:
+            finish.set()
+        result = saving.result()
+    assert result.is_success and result.json()["dirty"]
+    reopened = client.post("/api/workspaces/open", json=destination)
+    assert reopened.is_success and reopened.json()["view_revision"] == 0
+    assert reopened.json()["frame"] == study["frame"] != change.json()["frame"]

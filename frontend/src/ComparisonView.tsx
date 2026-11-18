@@ -188,7 +188,9 @@ function ComparisonControls({
                       aria-label={`Image ${side === 'left' ? 'A' : 'B'} component`}
                       value={source.component}
                       onChange={(event) =>
-                        update({ [side]: { ...source, component: event.target.value } })
+                        update({
+                          [side]: { ...source, component: event.target.value, window: null },
+                        })
                       }
                     >
                       {['auto', 'magnitude', 'phase', 'real', 'imag'].map((component) => (
@@ -230,6 +232,7 @@ function ComparisonCanvas({
   values,
   shape,
   spacing,
+  unit,
   level,
   palette,
   display,
@@ -241,6 +244,7 @@ function ComparisonCanvas({
   values: Pixels;
   shape: [number, number];
   spacing: [number, number];
+  unit: string;
   level: { center: number; width: number };
   palette: string;
   display: ImageDisplay;
@@ -254,10 +258,15 @@ function ComparisonCanvas({
   useImageNavigation(viewport, display);
   const [size, setSize] = useState({ width: 600, height: 400 });
   const panStart = useRef<{ x: number; y: number; pan: [number, number] } | null>(null);
-  const [pixel, setPixel] = useState('');
+  const [localProbe, setLocalProbe] = useState<[number, number] | null>(null);
+  const point = onProbe ? probe : localProbe;
+  const value =
+    point && point[0] >= 0 && point[0] < shape[1] && point[1] >= 0 && point[1] < shape[0]
+      ? values[point[1] * shape[1] + point[0]]
+      : undefined;
   const sampled =
-    probe && probe[0] >= 0 && probe[0] < shape[1] && probe[1] >= 0 && probe[1] < shape[0]
-      ? `(${probe[0]}, ${probe[1]}) ${values[probe[1] * shape[1] + probe[0]].toPrecision(5)}`
+    point && value !== undefined
+      ? `Row ${point[1]}, column ${point[0]} · ${Number.isFinite(value) ? Number(value.toPrecision(6)) + (unit ? ' ' + unit : '') : 'Missing'}`
       : '';
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) =>
@@ -315,16 +324,10 @@ function ComparisonCanvas({
         const box = canvas.current!.getBoundingClientRect();
         const x = Math.floor(((event.clientX - box.left) * columns) / box.width),
           y = Math.floor(((event.clientY - box.top) * rows) / box.height);
-        setPixel(
-          x >= 0 && x < columns && y >= 0 && y < rows
-            ? `(${x}, ${y}) ${values[y * columns + x].toPrecision(5)}`
-            : '',
-        );
-        onProbe?.([x, y]);
+        (onProbe ?? setLocalProbe)([x, y]);
       }}
       onPointerLeave={() => {
-        setPixel('');
-        onProbe?.(null);
+        (onProbe ?? setLocalProbe)(null);
       }}
       onPointerUp={() => {
         panStart.current = null;
@@ -346,7 +349,7 @@ function ComparisonCanvas({
         }}
       />
       {axes && <ImageAxes {...axes} />}
-      <span className="comparison-pixel">{onProbe ? sampled : pixel}</span>
+      <span className="comparison-pixel">{sampled}</span>
     </div>
   );
 }
@@ -404,7 +407,7 @@ export function ComparisonView({
   const menu = useContextMenu('Comparison actions', [
     { label: 'Zoom in', run: display.zoomIn, disabled: display.zoom >= MAX_ZOOM },
     { label: 'Zoom out', run: display.zoomOut, disabled: display.zoom <= MIN_ZOOM },
-    { label: 'Reset display', run: display.reset },
+    { label: 'Reset zoom and pan', run: display.resetPosition },
   ]);
   useEffect(() => {
     if (processing) return;
@@ -461,16 +464,13 @@ export function ComparisonView({
     linked,
   ]);
   const targetSide = linked ? 'left' : intensitySide;
-  const sharedRange = images
-    ? ([
-        Math.min(...images.planes.map((plane) => plane.range[0])),
-        Math.max(...images.planes.map((plane) => plane.range[1])),
-      ] as const)
-    : ([0, 1] as const);
   function rangeFor(side: 'left' | 'right') {
+    if (!images) return [0, 1] as const;
+    const field = settings[linked ? 'left' : side].per_frame ? 'range' : 'fixed_range';
+    const [a, b] = images.planes;
     return linked
-      ? sharedRange
-      : (images?.planes[side === 'left' ? 0 : 1].range ?? ([0, 1] as const));
+      ? ([Math.min(a[field][0], b[field][0]), Math.max(a[field][1], b[field][1])] as const)
+      : (side === 'left' ? a : b)[field];
   }
   function windowFor(side: 'left' | 'right') {
     const target = linked ? 'left' : side;
@@ -487,11 +487,12 @@ export function ComparisonView({
     intensityVersion.current++;
     setIntensityDraft({ context: intensityContext, side: targetSide, level });
   }
-  async function commitIntensity(level: IntensityWindow | null) {
+  async function commitIntensity(level: IntensityWindow | null, perFrame = false) {
     const targets = linked ? (['left', 'right'] as const) : [targetSide];
     if (
       targets.every((side) => {
         const current = settings[side].window;
+        if (Boolean(settings[side].per_frame) !== perFrame) return false;
         return level === null
           ? !current
           : current?.center === level.center && current.width === level.width;
@@ -507,8 +508,8 @@ export function ComparisonView({
         scene: {
           comparison: {
             ...settings,
-            [targetSide]: { ...settings[targetSide], window: level },
-            ...(linked ? { right: { ...settings.right, window: level } } : {}),
+            [targetSide]: { ...settings[targetSide], window: level, per_frame: perFrame },
+            ...(linked ? { right: { ...settings.right, window: level, per_frame: perFrame } } : {}),
           },
         },
       });
@@ -552,6 +553,7 @@ export function ComparisonView({
         <ComparisonCanvas
           values={images.values[index]}
           shape={plane.shape}
+          unit={plane.unit}
           axes={
             layout === 'side-by-side'
               ? {
@@ -565,8 +567,8 @@ export function ComparisonView({
           level={level}
           palette={source.colormap ?? 'gray'}
           display={display}
-          probe={layout === 'overlay' ? probe : undefined}
-          onProbe={layout === 'overlay' ? setProbe : undefined}
+          probe={compatible ? probe : undefined}
+          onProbe={compatible ? setProbe : undefined}
           label={`Image ${side === 'left' ? 'A' : 'B'}: ${label}, frame ${plane.frame + 1}`}
         />
         <div className="comparison-label">
@@ -604,7 +606,19 @@ export function ComparisonView({
               level={windowFor(targetSide)}
               onChange={previewIntensity}
               onCommit={(next) => void commitIntensity(next)}
-              reset={() => void commitIntensity(null)}
+              mode={
+                settings[targetSide].window
+                  ? 'manual'
+                  : settings[targetSide].per_frame
+                    ? 'frame'
+                    : 'fixed'
+              }
+              changeMode={(mode) =>
+                void commitIntensity(
+                  mode === 'manual' ? windowFor(targetSide) : null,
+                  mode === 'frame',
+                )
+              }
               target={
                 <label>
                   Adjust
@@ -749,6 +763,7 @@ export function ComparisonView({
                 </strong>
                 <input
                   aria-label={control.label}
+                  aria-valuetext={`${value + 1} of ${control.size}`}
                   type="range"
                   min={0}
                   max={control.size - 1}

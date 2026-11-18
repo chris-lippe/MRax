@@ -69,7 +69,11 @@ test('View, Segment, Fit and Register share layers and independent ROI selection
   await page.getByRole('separator', { name: 'Resize analysis controls', exact: true }).press('End');
   await page.getByLabel('Fit region', { exact: true }).selectOption('rois');
   await expect(page.getByLabel('Fit mask Anterior', { exact: true })).toBeChecked();
+  await expect(
+    page.getByText('This workflow uses all enabled ROIs in each experiment.'),
+  ).toBeVisible();
   await page.getByLabel('Fit mask Posterior', { exact: true }).uncheck();
+  await expect(page.getByText('This workflow uses the selected ROIs by name.')).toBeVisible();
   await page.getByLabel('Fit steps', { exact: true }).fill('600');
   await selectWorkflow(page, 'View');
   await expect(page.getByLabel('Show Anterior', { exact: true })).not.toBeChecked();
