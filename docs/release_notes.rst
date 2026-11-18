@@ -14,8 +14,6 @@ Highlights
   segmentation, fitting and analysis, including overlays and split comparison.
 - Editable processing pipelines retain original image data and fitted maps.
   Reusable presets and combined processing workflows use versioned ``.mflow`` files.
-- Direct file and folder imports, workspace saving and export with explicit
-  overwrite confirmation. Imported files remain unchanged.
 - Improved Bruker geometry and multi-package viewing and reconstruction, plus
   scoped denoising with automatic or ROI-based MRI noise estimates.
 
