@@ -1,6 +1,6 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import type { Options } from './api';
-import { DataFormat, DataTable, TableBoundary } from './StructuredData';
+import { DataFormat, DataTable, TableBoundary } from './StructuredDataControls';
 import {
   compileTable,
   parseData,
