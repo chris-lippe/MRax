@@ -42,6 +42,25 @@ def add_roi(client, workspace, **overrides):
     return client.post(f"/api/workspaces/{workspace['id']}/rois", json=command)
 
 
+def test_frontend_build_does_not_change_openapi(tmp_path, monkeypatch):
+    monkeypatch.setattr("mrax.web.app.__file__", str(tmp_path / "app.py"))
+    with TestClient(create_app(runtime_dir=tmp_path), base_url="http://localhost") as client:
+        response = client.get("/")
+        assert response.status_code == 503
+        assert "Build the browser frontend" in response.json()["detail"]
+        schema = client.get("/openapi.json").json()
+        assert "/" not in schema["paths"]
+
+    assets = tmp_path / "static"
+    assets.mkdir()
+    (assets / "index.html").write_text("<title>MRax</title>", encoding="utf-8")
+    with TestClient(create_app(runtime_dir=tmp_path), base_url="http://localhost") as client:
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.text == "<title>MRax</title>"
+        assert client.get("/openapi.json").json() == schema
+
+
 def test_native_roi_and_binary_slice_are_numerically_correct(client):
     workspace = new_workspace(client)
     previous = client.app.state.records[workspace["id"]].workspace

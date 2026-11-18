@@ -738,7 +738,7 @@ def create_app(
         app.mount("/", StaticFiles(directory=assets, html=True), name="frontend")
     else:
 
-        @app.get("/")
+        @app.get("/", include_in_schema=False)
         def missing_assets():
             return JSONResponse(
                 {"detail": "Build the browser frontend: cd frontend && npm ci && npm run build"},
