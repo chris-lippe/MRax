@@ -1,0 +1,44 @@
+{
+  "format": "mrax.workflow",
+  "kind": "fitting",
+  "mrax_version": "0.4.0",
+  "name": "T2*: gradient echo",
+  "description": "Monoexponential T2* mapping from gradient-echo images.",
+  "bindings": [],
+  "steps": [
+    {
+      "id": "fit",
+      "operation": "fit",
+      "version": 1,
+      "enabled": true,
+      "settings": {
+        "settings": {
+          "model_name": "t2star_se",
+          "optimizer_name": "auto",
+          "num_steps": 600,
+          "step_size": 0.02,
+          "mask_fill_value": 0,
+          "auto_mask_nan_observables": true,
+          "compute_derived_maps": null,
+          "selected_pools": [],
+          "param_overrides": {},
+          "pool_overrides": {},
+          "regularizer_configs": {},
+          "parameter_constant_dims": {}
+        },
+        "use_roi": false,
+        "roi_names": null,
+        "excluded_frames": []
+      }
+    }
+  ],
+  "extensions": {
+    "org.mrax.preset": {
+      "requirements": [
+        "Gradient-echo magnitude images with at least three distinct echo times.",
+        "TE metadata with valid time units for every sample.",
+        "Whole-image fitting. Model parameter defaults come from the MRax parameter library."
+      ]
+    }
+  }
+}

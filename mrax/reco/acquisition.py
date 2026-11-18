@@ -159,7 +159,26 @@ def format_coil_images(coils, recipe: ReconstructionRecipe, *, spatial_ndim: int
         from .layout import _apply_frame_permutations
 
         array = _apply_frame_permutations(array, recipe.frame_permutations)
-    if recipe.stack_slices > 1:
+    if recipe.output_slice_counts:
+        if recipe.output_frame_indices:
+            array = array[jnp.asarray(recipe.output_frame_indices)]
+        counts = tuple(
+            count for count in recipe.output_slice_counts for _ in range(recipe.average_repeats)
+        )
+        if spatial_ndim != 2 or sum(counts) != array.shape[0]:
+            raise ValueError("Variable slice groups must account for every reconstructed frame")
+        stacks, first = [], 0
+        for count in counts:
+            volume = jnp.moveaxis(array[first : first + count], 0, -1)
+            volume = jnp.pad(
+                volume,
+                ((0, 0), (0, 0), (0, 0), (0, recipe.stack_slices - count)),
+                constant_values=jnp.nan,
+            )
+            stacks.append(volume)
+            first += count
+        array = jnp.stack(stacks)
+    elif recipe.stack_slices > 1:
         if recipe.output_frame_indices:
             array = array[jnp.asarray(recipe.output_frame_indices)]
         if spatial_ndim != 2 or array.shape[0] % recipe.stack_slices:
@@ -193,12 +212,23 @@ def reconstruct_acquisition(
 
     FFT, variational and signal-model reconstruction share the same measured
     samples, encoding grid, calibration convention and output recipe. Completion
-    supplies initialization; iterative objectives retain the acquired support.
+    supplies initialization. Iterative objectives retain the acquired support.
     """
     acquisition.require_prepared()
     name = method.lower().replace("-", "_")
-    if name not in {"fft", "variational", "model_based"}:
-        raise ValueError("method must be fft, variational, or model_based")
+    if name not in {"fft", "nufft", "variational", "model_based"}:
+        raise ValueError("method must be fft, nufft, variational, or model_based")
+    nufft_options = {}
+    density_compensation = True
+    if name == "nufft":
+        if acquisition.kind != "sampled":
+            raise ValueError("NUFFT reconstruction requires sampled data with a trajectory")
+        if set(options) - {"eps", "density_compensation", "chunk_size", "batch_size"}:
+            raise ValueError("Unknown NUFFT reconstruction option")
+        nufft_options = dict(options)
+        density_compensation = nufft_options.pop("density_compensation", True)
+        if not isinstance(density_compensation, bool):
+            raise ValueError("Density compensation must be true or false")
     if frame_batch_size is not None:
         from operator import index
 
@@ -292,10 +322,26 @@ def reconstruct_acquisition(
                 density = radial_profile_density(trajectory,
                     points_per_readout=acquisition.readout_model.target_points, center_out=False)
                 diagnostics.append(report)
-            gridded = grid_kaiser_bessel(gridding_samples, trajectory,
-                recipe.gridding_shape or acquisition.encoding_shape, density=density,
-                kernel_width=recipe.gridding_kernel_width, shape_parameter=recipe.gridding_shape_parameter)
-            coils = ifftnc(gridded, axes=axes)
+            if name == "nufft":
+                from .nufft import prepare_nufft
+
+                values = gridding_samples
+                if density_compensation and density is not None:
+                    values = values * jnp.asarray(density)
+                coils = prepare_nufft(acquisition.encoding_shape, trajectory, **nufft_options).adjoint(values)
+                # The NUFFT already removes its interpolation kernel response.
+                recipe = replace(recipe, deapodize=False, crop_offset=())
+                diagnostics.append({"stage": "nufft", "density_compensation": density_compensation})
+            else:
+                gridded = grid_kaiser_bessel(gridding_samples, trajectory,
+                    recipe.gridding_shape or acquisition.encoding_shape, density=density,
+                    kernel_width=recipe.gridding_kernel_width, shape_parameter=recipe.gridding_shape_parameter)
+                if name == "fft" and recipe.kspace_window:
+                    from .windows import spectral_window
+
+                    gridded = gridded * spectral_window(gridded.shape[-ndim:], recipe.kspace_window,
+                        recipe.window_parameters, recipe.window_powers)
+                coils = ifftnc(gridded, axes=axes)
     if name == "model_based":
         del preview, preview_mask, unshifted_samples
     history = ()
@@ -406,16 +452,62 @@ def _batched_fft(acquisition, sensitivities, device, batch_size):
     if batch_size is None:
         bytes_per_frame = acquisition.samples.nbytes // frames
         batch_size = max(1, (256 * 1024**2) // max(bytes_per_frame, 1))
-    batch_size = max(group_size, batch_size // group_size * group_size)
-    if batch_size >= len(order):
-        return None
-    if len(order) % group_size:
-        raise ValueError("Frame batches require complete slice and repeat groups")
 
     def select(value, indices):
         if value is not None and np.ndim(value) == acquisition.samples.ndim and np.shape(value)[0] == frames:
             return value[indices]
         return value
+
+    if recipe.output_slice_counts and batch_size < len(order):
+        groups, first, used = [], 0, 0
+        for index, count in enumerate(recipe.output_slice_counts):
+            size = count * recipe.average_repeats
+            if used and used + size > batch_size:
+                groups.append((first, index))
+                first, used = index, 0
+            used += size
+        groups.append((first, len(recipe.output_slice_counts)))
+        if len(groups) == 1:
+            return None
+        images = coils = None
+        image_index = coil_index = 0
+        diagnostics = [{"stage": "frame_batches", "batch_size": batch_size}]
+        offsets = np.r_[0, np.cumsum(recipe.output_slice_counts)] * recipe.average_repeats
+        for first, end in groups:
+            part = acquisition.select_frames(np.arange(first, end))
+            indices = order[offsets[first] : offsets[end]]
+            result = reconstruct_acquisition(
+                part,
+                method="fft",
+                sensitivities=select(sensitivities, indices),
+                device=device,
+                frame_batch_size=0,
+            )
+            image_part, coil_part = np.asarray(result.image), np.asarray(result.coil_images)
+            if images is None:
+                total = len(recipe.output_slice_counts)
+                images = np.empty((total,) + image_part.shape[1:], image_part.dtype)
+                coils = np.empty(
+                    (total * len(coil_part) // (end - first),) + coil_part.shape[1:],
+                    coil_part.dtype,
+                )
+            images[image_index : image_index + len(image_part)] = image_part
+            coils[coil_index : coil_index + len(coil_part)] = coil_part
+            image_index += len(image_part)
+            coil_index += len(coil_part)
+            for report in result.diagnostics:
+                report = dict(report)
+                if "frame" in report:
+                    report["frame"] = int(indices[report["frame"]])
+                diagnostics.append(report)
+        return ReconstructionResult(
+            jax.device_put(images, device), coils, "fft", diagnostics=tuple(diagnostics)
+        )
+    batch_size = max(group_size, batch_size // group_size * group_size)
+    if batch_size >= len(order):
+        return None
+    if len(order) % group_size:
+        raise ValueError("Frame batches require complete slice and repeat groups")
 
     images = coils = None
     diagnostics = [{"stage": "frame_batches", "batch_size": batch_size}]

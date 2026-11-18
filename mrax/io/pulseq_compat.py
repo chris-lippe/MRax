@@ -11,7 +11,7 @@ import numpy as np
 def read_sequence(sequence, path):
     """Read with RF-use detection, including pre-1.4 compressed shapes.
 
-    Shape decompression requires NumPy arrays rather than Python lists.
+    Shape decompression requires NumPy arrays.
     Clone the reader's globals for this call, preserving the installed
     package and its process-wide functions.
     """

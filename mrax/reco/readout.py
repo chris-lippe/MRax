@@ -31,8 +31,7 @@ def invert_readout_profiles(samples, model: ReadoutModel):
     grouped = array.reshape(array.shape[:-1] + (profiles, count))
     projection = jnp.einsum("...pm,nm->...pn", grouped, jnp.asarray(inverse, dtype=array.dtype), precision=jax.lax.Precision.HIGHEST)
     targets = fftnc(projection, axes=(-1,))
-    # Validate the convention instead of assigning a Fourier spectrum to an
-    # arbitrary target trajectory with a different readout origin or spacing.
+    # Validate the target trajectory's readout origin and spacing.
     trajectory = model.target_trajectory.reshape((profiles, model.target_points, -1))
     direction = trajectory[:, -1] - trajectory[:, 0]
     direction /= np.linalg.norm(direction, axis=-1, keepdims=True)

@@ -176,11 +176,11 @@ def _make_proximal_optimizer(name, step_size, regularizer_weight, prox_fn,
 
     def update(grads, state, params, *, value_fn=None, gradient_at_extrapolated=False, **extra_args):
         if name == "split_bregman" and context is None and value_fn is None:
-            raise ValueError("Split Bregman requires value_fn for its augmented primal subproblem; "
+            raise ValueError("Split Bregman requires value_fn for its augmented primal subproblem. "
                              "run_fit supplies it automatically")
         if name == "fista" and context is None and value_fn is None and not gradient_at_extrapolated:
-            raise ValueError("FISTA requires value_fn for gradients at its extrapolated point; "
-                             "fixed-step callers must explicitly set gradient_at_extrapolated=True")
+            raise ValueError("FISTA requires value_fn for gradients at its extrapolated point. "
+                             "Fixed-step callers must explicitly set gradient_at_extrapolated=True")
         packed, convert, (_, step, _) = prepare(params, value_fn, grads)
         value, accepted, solver, status = step(packed, state["solver"])
         accepted = convert(accepted)
@@ -200,7 +200,7 @@ def _make_proximal_optimizer(name, step_size, regularizer_weight, prox_fn,
             return state
         if name == 'split_bregman' and ('layout_version' not in state['solver'] or
                                        int(np.asarray(state['solver']['layout_version'])) != 6):
-            raise ValueError("Split Bregman checkpoint layout changed; start a fresh optimizer")
+            raise ValueError("Split Bregman checkpoint layout changed. Start a fresh optimizer")
         obsolete = {'x_ref', 'x'} if name == 'fista' else {'x_ref'}
         return {**state, 'solver': {key: value for key, value in state['solver'].items()
                                     if key not in obsolete}}
@@ -258,9 +258,9 @@ def make_optimizer(
       ``split_bregman`` uses augmented primal solves, exact split shrinkage,
       and Bregman multiplier updates. Both retain their solver at zero weight.
     - Proximal callbacks receive the appropriate scalar, array, or tree threshold.
-      Base factories are restricted to plain ``optax.sgd``; Adam is unsupported.
+      Base factories are restricted to plain ``optax.sgd``. Adam is unsupported.
       Pass the differentiable smooth objective as ``value_fn`` to ``update``
-      for safeguarded trials; the fitting API supplies it automatically. Direct
+      for safeguarded trials. The fitting API supplies it automatically. Direct
       fixed-step supplied-gradient callers evaluate FISTA gradients at state.y
       (stored under ``state['solver']``). Check ``state['status']`` for failure.
     - All other optimizers are resolved from Optax and only support L2 weight decay plus optional
@@ -281,7 +281,7 @@ def make_optimizer(
     if name in ("fista", "split_bregman", "bregman"):
         name = "split_bregman" if name == "bregman" else name
         if base_optimizer_factory not in (None, optax.sgd):
-            raise ValueError("FISTA and split Bregman require Euclidean gradient steps; an Adam base is unsupported")
+            raise ValueError("FISTA and split Bregman require Euclidean gradient steps. An Adam base is unsupported")
         if bregman_penalty <= 0 or not np.isfinite(bregman_penalty):
             raise ValueError("bregman_penalty must be finite and positive")
         if not callable(step_size) and step_size < 0:

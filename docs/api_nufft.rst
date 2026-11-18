@@ -10,7 +10,7 @@ tabulated kernel weights per chunk.
 
 Explicit adjoint derivative rules avoid storing expanded stencils during
 differentiation. Long single-precision adjoints use bounded partial sums, or CPU
-double-precision accumulation when JAX x64 is enabled; outputs retain the plan's
+double-precision accumulation when JAX x64 is enabled. Outputs retain the plan's
 single precision.
 
 .. autofunction:: mrax.reco.prepare_nufft

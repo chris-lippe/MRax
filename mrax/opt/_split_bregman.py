@@ -59,15 +59,15 @@ def make_split_bregman_kernel(loss, smooth_loss, bounds, operators, step_size, *
     """Return the common split-Bregman recurrence and its KKT stopping check.
 
     ``inner_steps`` is the number of inexact primal iterations before each
-    shrinkage/multiplier update. Systems up to 32 real unknowns use Newton/CG;
-    larger systems use an eight-pair L-BFGS inverse on the augmented objective.
+    shrinkage/multiplier update. Systems up to 32 real unknowns use Newton/CG.
+    Larger systems use an eight-pair L-BFGS inverse on the augmented objective.
     CG uses at most ``max_prox_steps`` Hessian
     products in total, including curvature retries, and a relative residual
     target. Preconditioner probes are additional work. Large subproblems use inexact
-    Newton forcing; negative curvature triggers a positively shifted solve.
-    ``step_size`` seeds the primal line search; accepted rates may grow to one.
-    The augmented penalty is fixed. The split is the original operator output;
-    regularization weights remain in the shrinkage objective.
+    Newton forcing. Negative curvature triggers a positively shifted solve.
+    ``step_size`` seeds the primal line search. Accepted rates may grow to one.
+    The augmented penalty is fixed. The split is the original operator output.
+    Regularization weights remain in the shrinkage objective.
     """
     inner_steps, max_prox_steps = index(inner_steps), index(max_prox_steps)
     if (inner_steps < 1 or max_prox_steps < 1 or not np.isfinite(tolerance)
@@ -149,7 +149,7 @@ def make_split_bregman_kernel(loss, smooth_loss, bounds, operators, step_size, *
 
     def direction(point, gradient, product, preconditioner, damping):
         projected = projected_gradient(point, gradient)
-        # The active set stays fixed during this linear solve; projection and
+        # The active set stays fixed during this linear solve. Projection and
         # Armijo decrease subsequently verify the actual constrained proposal.
         free = {}
         for key, x in point.items():
@@ -178,7 +178,7 @@ def make_split_bregman_kernel(loss, smooth_loss, bounds, operators, step_size, *
             # Use inexact forcing for large Newton equations far from stationarity.
             # This forcing tends to the requested accuracy as the gradient
             # vanishes. Exact TV shrinkage and the Armijo/KKT certificates are
-            # unchanged; the CG residual is reported even for an inexact solve.
+            # unchanged. The CG residual is reported even for an inexact solve.
             forcing = jnp.minimum(.5, jnp.sqrt(norm_g / (1 + norm_g)))
             target = jnp.maximum(target, forcing)
         def solve(shift, budget):

@@ -1,0 +1,6390 @@
+{
+  "components": {
+    "schemas": {
+      "ActionCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Action",
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Options",
+            "type": "object"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "view_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "View Revision"
+          }
+        },
+        "required": [
+          "revision",
+          "action"
+        ],
+        "title": "ActionCommand",
+        "type": "object"
+      },
+      "ApplyWorkflow": {
+        "additionalProperties": false,
+        "properties": {
+          "bindings": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "default": {},
+            "title": "Bindings",
+            "type": "object"
+          },
+          "device": {
+            "default": "cpu",
+            "maxLength": 80,
+            "title": "Device",
+            "type": "string"
+          },
+          "experiments": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "title": "Experiments",
+            "type": "array"
+          },
+          "mode": {
+            "default": "replace",
+            "enum": [
+              "replace",
+              "append"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "run": {
+            "default": true,
+            "title": "Run",
+            "type": "boolean"
+          },
+          "workflow_revision": {
+            "minimum": 0.0,
+            "title": "Workflow Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "workflow_revision",
+          "experiments"
+        ],
+        "title": "ApplyWorkflow",
+        "type": "object"
+      },
+      "CaptureWorkflow": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 8000,
+            "title": "Description",
+            "type": "string"
+          },
+          "draft": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Draft",
+            "type": "object"
+          },
+          "kind": {
+            "enum": [
+              "processing",
+              "reconstruction",
+              "fitting",
+              "registration",
+              "denoising"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "kind"
+        ],
+        "title": "CaptureWorkflow",
+        "type": "object"
+      },
+      "CloseCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "discard": {
+            "default": false,
+            "title": "Discard",
+            "type": "boolean"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "CloseCommand",
+        "type": "object"
+      },
+      "Command": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "Command",
+        "type": "object"
+      },
+      "ComparisonChoice": {
+        "properties": {
+          "dimensions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "experiment": {
+            "title": "Experiment",
+            "type": "string"
+          },
+          "frames": {
+            "title": "Frames",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "original",
+              "processed",
+              "map",
+              "reconstruction",
+              "registration"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "map_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Map Name"
+          },
+          "pipeline_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Id"
+          },
+          "registration_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registration Key"
+          }
+        },
+        "required": [
+          "experiment",
+          "kind",
+          "label",
+          "frames",
+          "dimensions"
+        ],
+        "title": "ComparisonChoice",
+        "type": "object"
+      },
+      "ComparisonSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "frame": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame"
+          },
+          "indices": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indices"
+          },
+          "layout": {
+            "default": "swipe",
+            "enum": [
+              "swipe",
+              "side-by-side"
+            ],
+            "title": "Layout",
+            "type": "string"
+          },
+          "left": {
+            "$ref": "#/components/schemas/ComparisonSource"
+          },
+          "linked_window": {
+            "default": true,
+            "title": "Linked Window",
+            "type": "boolean"
+          },
+          "mode": {
+            "default": "split",
+            "enum": [
+              "overlay",
+              "split"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "opacity": {
+            "default": 0.5,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "type": "number"
+          },
+          "plane": {
+            "anyOf": [
+              {
+                "enum": [
+                  "axial",
+                  "coronal",
+                  "sagittal"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plane"
+          },
+          "position": {
+            "default": 0.5,
+            "maximum": 0.95,
+            "minimum": 0.05,
+            "title": "Position",
+            "type": "number"
+          },
+          "right": {
+            "$ref": "#/components/schemas/ComparisonSource"
+          }
+        },
+        "required": [
+          "left",
+          "right"
+        ],
+        "title": "ComparisonSettings",
+        "type": "object"
+      },
+      "ComparisonSource": {
+        "additionalProperties": false,
+        "properties": {
+          "colormap": {
+            "default": "gray",
+            "enum": [
+              "gray",
+              "viridis",
+              "diverging",
+              "hot"
+            ],
+            "title": "Colormap",
+            "type": "string"
+          },
+          "component": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "magnitude",
+              "phase",
+              "real",
+              "imag"
+            ],
+            "title": "Component",
+            "type": "string"
+          },
+          "experiment": {
+            "title": "Experiment",
+            "type": "string"
+          },
+          "frame": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame"
+          },
+          "kind": {
+            "enum": [
+              "original",
+              "processed",
+              "map",
+              "reconstruction",
+              "registration"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "map_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Map Name"
+          },
+          "per_frame": {
+            "default": false,
+            "title": "Per Frame",
+            "type": "boolean"
+          },
+          "pipeline_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Id"
+          },
+          "registration_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registration Key"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OverlayWindow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "experiment",
+          "kind"
+        ],
+        "title": "ComparisonSource",
+        "type": "object"
+      },
+      "CurveInfo": {
+        "properties": {
+          "dimension": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimension"
+          },
+          "included": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "boolean"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Included"
+          },
+          "observed": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Observed",
+            "type": "array"
+          },
+          "roi_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roi Name"
+          },
+          "x": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "X",
+            "type": "array"
+          },
+          "x_name": {
+            "title": "X Name",
+            "type": "string"
+          },
+          "x_unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X Unit"
+          }
+        },
+        "required": [
+          "x",
+          "observed",
+          "x_name"
+        ],
+        "title": "CurveInfo",
+        "type": "object"
+      },
+      "EditWorkflow": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "maxLength": 1048576,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          }
+        },
+        "title": "EditWorkflow",
+        "type": "object"
+      },
+      "ExperimentInfo": {
+        "properties": {
+          "exp_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exp Type"
+          },
+          "frames": {
+            "title": "Frames",
+            "type": "integer"
+          },
+          "has_reconstruction": {
+            "title": "Has Reconstruction",
+            "type": "boolean"
+          },
+          "maps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Maps",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reconstruction_label": {
+            "default": "Reconstruction",
+            "title": "Reconstruction Label",
+            "type": "string"
+          },
+          "rois": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rois",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "frames",
+          "maps",
+          "has_reconstruction",
+          "rois"
+        ],
+        "title": "ExperimentInfo",
+        "type": "object"
+      },
+      "FileLocation": {
+        "properties": {
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "title": "FileLocation",
+        "type": "object"
+      },
+      "FitCheckCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "default": "cpu",
+            "title": "Device",
+            "type": "string"
+          },
+          "excluded_frames": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excluded Frames"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "roi_names": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Roi Names",
+            "type": "array"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Settings",
+            "type": "object"
+          },
+          "use_roi": {
+            "default": false,
+            "title": "Use Roi",
+            "type": "boolean"
+          },
+          "view_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "View Revision"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "FitCheckCommand",
+        "type": "object"
+      },
+      "FitOptionsCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "pool_edit": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool Edit"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "revision",
+          "settings"
+        ],
+        "title": "FitOptionsCommand",
+        "type": "object"
+      },
+      "FitReadinessResult": {
+        "properties": {
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "report": {
+            "title": "Report",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "model",
+          "ok",
+          "errors",
+          "warnings",
+          "notes",
+          "report"
+        ],
+        "title": "FitReadinessResult",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ImportCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Options",
+            "type": "object"
+          },
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root"
+          },
+          "upload": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "title": "ImportCommand",
+        "type": "object"
+      },
+      "JobInfo": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "operation": {
+            "default": "preview",
+            "title": "Operation",
+            "type": "string"
+          },
+          "pipeline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PipelineProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workspace_id",
+          "status",
+          "detail"
+        ],
+        "title": "JobInfo",
+        "type": "object"
+      },
+      "MaskPreview": {
+        "properties": {
+          "dims": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dims",
+            "type": "array"
+          },
+          "dtype": {
+            "title": "Dtype",
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pixels": {
+            "title": "Pixels",
+            "type": "integer"
+          },
+          "plane_dims": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Plane Dims",
+            "type": "array"
+          },
+          "plane_shape": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Plane Shape",
+            "type": "array"
+          },
+          "runs": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "shape": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Shape",
+            "type": "array"
+          },
+          "slice_count": {
+            "title": "Slice Count",
+            "type": "integer"
+          },
+          "slice_dim": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slice Dim"
+          },
+          "slice_index": {
+            "title": "Slice Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "dims",
+          "shape",
+          "plane_dims",
+          "plane_shape",
+          "slice_dim",
+          "slice_index",
+          "slice_count",
+          "dtype",
+          "labels",
+          "pixels",
+          "runs"
+        ],
+        "title": "MaskPreview",
+        "type": "object"
+      },
+      "NavigationCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "default": true,
+            "title": "Commit",
+            "type": "boolean"
+          },
+          "include_images": {
+            "default": true,
+            "title": "Include Images",
+            "type": "boolean"
+          },
+          "indices": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "maxProperties": 16,
+            "minProperties": 1,
+            "title": "Indices",
+            "type": "object"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "view_revision": {
+            "minimum": 0.0,
+            "title": "View Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "view_revision",
+          "indices"
+        ],
+        "title": "NavigationCommand",
+        "type": "object"
+      },
+      "NoiseEstimateCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "options": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Options",
+            "type": "object"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "NoiseEstimateCommand",
+        "type": "object"
+      },
+      "OverlayChoice": {
+        "additionalProperties": false,
+        "properties": {
+          "experiment": {
+            "title": "Experiment",
+            "type": "string"
+          },
+          "frames": {
+            "title": "Frames",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "image",
+              "map",
+              "reconstruction",
+              "registration"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "map_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Map Name"
+          },
+          "registration_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registration Key"
+          }
+        },
+        "required": [
+          "experiment",
+          "kind",
+          "label",
+          "frames"
+        ],
+        "title": "OverlayChoice",
+        "type": "object"
+      },
+      "OverlayInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "colormap": {
+            "default": "viridis",
+            "enum": [
+              "gray",
+              "viridis",
+              "diverging",
+              "hot"
+            ],
+            "title": "Colormap",
+            "type": "string"
+          },
+          "component": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "magnitude",
+              "phase",
+              "real",
+              "imag"
+            ],
+            "title": "Component",
+            "type": "string"
+          },
+          "experiment": {
+            "title": "Experiment",
+            "type": "string"
+          },
+          "fixed_range": {
+            "default": [
+              0.0,
+              1.0
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Fixed Range",
+            "type": "array"
+          },
+          "frame": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame"
+          },
+          "frame_range": {
+            "default": [
+              0.0,
+              1.0
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Frame Range",
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[\\w-]+$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "image",
+              "map",
+              "reconstruction",
+              "registration"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "map_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Map Name"
+          },
+          "opacity": {
+            "default": 0.5,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "type": "number"
+          },
+          "per_frame": {
+            "default": false,
+            "title": "Per Frame",
+            "type": "boolean"
+          },
+          "registration_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registration Key"
+          },
+          "unavailable": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable"
+          },
+          "visible": {
+            "default": true,
+            "title": "Visible",
+            "type": "boolean"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OverlayWindow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "experiment",
+          "kind",
+          "id",
+          "label"
+        ],
+        "title": "OverlayInfo",
+        "type": "object"
+      },
+      "OverlayLayer": {
+        "additionalProperties": false,
+        "properties": {
+          "colormap": {
+            "default": "viridis",
+            "enum": [
+              "gray",
+              "viridis",
+              "diverging",
+              "hot"
+            ],
+            "title": "Colormap",
+            "type": "string"
+          },
+          "component": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "magnitude",
+              "phase",
+              "real",
+              "imag"
+            ],
+            "title": "Component",
+            "type": "string"
+          },
+          "experiment": {
+            "title": "Experiment",
+            "type": "string"
+          },
+          "frame": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame"
+          },
+          "id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[\\w-]+$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "image",
+              "map",
+              "reconstruction",
+              "registration"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "map_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Map Name"
+          },
+          "opacity": {
+            "default": 0.5,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "type": "number"
+          },
+          "per_frame": {
+            "default": false,
+            "title": "Per Frame",
+            "type": "boolean"
+          },
+          "registration_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registration Key"
+          },
+          "visible": {
+            "default": true,
+            "title": "Visible",
+            "type": "boolean"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OverlayWindow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "experiment",
+          "kind",
+          "id"
+        ],
+        "title": "OverlayLayer",
+        "type": "object"
+      },
+      "OverlayWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "center": {
+            "title": "Center",
+            "type": "number"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "title": "Width",
+            "type": "number"
+          }
+        },
+        "required": [
+          "center",
+          "width"
+        ],
+        "title": "OverlayWindow",
+        "type": "object"
+      },
+      "PipelineChoice": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "cached": {
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "has_image": {
+            "title": "Has Image",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "maps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Maps",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "active",
+          "cached",
+          "has_image",
+          "maps"
+        ],
+        "title": "PipelineChoice",
+        "type": "object"
+      },
+      "PipelineEditorCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "reconstruct",
+              "fit"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "kind",
+          "options"
+        ],
+        "title": "PipelineEditorCommand",
+        "type": "object"
+      },
+      "PipelineInfo": {
+        "properties": {
+          "choices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PipelineChoice"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "fits_stale": {
+            "default": false,
+            "title": "Fits Stale",
+            "type": "boolean"
+          },
+          "generation": {
+            "default": 0,
+            "title": "Generation",
+            "type": "integer"
+          },
+          "id": {
+            "default": "main",
+            "title": "Id",
+            "type": "string"
+          },
+          "signature": {
+            "default": "original",
+            "title": "Signature",
+            "type": "string"
+          },
+          "sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PipelineSource"
+            },
+            "default": {},
+            "title": "Sources",
+            "type": "object"
+          },
+          "steps": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PipelineStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "title": "PipelineInfo",
+        "type": "object"
+      },
+      "PipelineProgress": {
+        "properties": {
+          "experiment": {
+            "title": "Experiment",
+            "type": "string"
+          },
+          "pipeline_id": {
+            "default": "main",
+            "title": "Pipeline Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "stale"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineStepProgress"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "experiment",
+          "status",
+          "steps"
+        ],
+        "title": "PipelineProgress",
+        "type": "object"
+      },
+      "PipelineSource": {
+        "properties": {
+          "format": {
+            "title": "Format",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "image",
+              "kspace"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          }
+        },
+        "required": [
+          "kind",
+          "format",
+          "location"
+        ],
+        "title": "PipelineSource",
+        "type": "object"
+      },
+      "PipelineStep": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "family": {
+            "title": "Family",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_grid": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Grid"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "noise_estimate": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Noise Estimate"
+          },
+          "options": {
+            "additionalProperties": true,
+            "title": "Options",
+            "type": "object"
+          },
+          "output_grid": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Grid"
+          },
+          "pending": {
+            "default": false,
+            "title": "Pending",
+            "type": "boolean"
+          },
+          "plane_dims": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Plane Dims",
+            "type": "array"
+          },
+          "result_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Key"
+          },
+          "result_maps": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Result Maps",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "kind",
+          "method",
+          "family",
+          "label",
+          "enabled",
+          "options"
+        ],
+        "title": "PipelineStep",
+        "type": "object"
+      },
+      "PipelineStepProgress": {
+        "properties": {
+          "client_id": {
+            "title": "Client Id",
+            "type": "string"
+          },
+          "family": {
+            "title": "Family",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "progress": {
+            "title": "Progress",
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "skipped",
+              "unchanged",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "client_id",
+          "label",
+          "kind",
+          "family",
+          "method",
+          "status",
+          "progress"
+        ],
+        "title": "PipelineStepProgress",
+        "type": "object"
+      },
+      "PreviewCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "default": "cpu",
+            "title": "Device",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "roi_name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Roi Name",
+            "type": "string"
+          },
+          "steps": {
+            "default": 600,
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Steps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "roi_name"
+        ],
+        "title": "PreviewCommand",
+        "type": "object"
+      },
+      "PreviewResult": {
+        "properties": {
+          "dimension": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimension"
+          },
+          "included": {
+            "items": {
+              "type": "boolean"
+            },
+            "title": "Included",
+            "type": "array"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "observed": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Observed",
+            "type": "array"
+          },
+          "parameter_units": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parameter Units"
+          },
+          "parameters": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parameters"
+          },
+          "predicted": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Predicted",
+            "type": "array"
+          },
+          "relative_rmse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Rmse"
+          },
+          "roi_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roi Name"
+          },
+          "x": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "X",
+            "type": "array"
+          },
+          "x_name": {
+            "title": "X Name",
+            "type": "string"
+          },
+          "x_unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X Unit"
+          }
+        },
+        "required": [
+          "x",
+          "observed",
+          "x_name",
+          "included",
+          "predicted",
+          "model"
+        ],
+        "title": "PreviewResult",
+        "type": "object"
+      },
+      "ProcessingAxisInfo": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "spatial": {
+            "title": "Spatial",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "size",
+          "spatial"
+        ],
+        "title": "ProcessingAxisInfo",
+        "type": "object"
+      },
+      "ProcessingCatalog": {
+        "properties": {
+          "axes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Axes",
+            "type": "array"
+          },
+          "axis_info": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ProcessingAxisInfo"
+            },
+            "title": "Axis Info",
+            "type": "array"
+          },
+          "history": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "methods": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingMethod"
+            },
+            "title": "Methods",
+            "type": "array"
+          },
+          "series_axes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Series Axes",
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "spatial_axes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Spatial Axes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "methods",
+          "sources",
+          "axes",
+          "spatial_axes",
+          "series_axes",
+          "history"
+        ],
+        "title": "ProcessingCatalog",
+        "type": "object"
+      },
+      "ProcessingField": {
+        "properties": {
+          "choices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "default": {
+            "title": "Default"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "number",
+              "integer",
+              "boolean",
+              "choice"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "nullable": {
+            "title": "Nullable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "kind",
+          "default",
+          "choices",
+          "minimum",
+          "maximum",
+          "nullable"
+        ],
+        "title": "ProcessingField",
+        "type": "object"
+      },
+      "ProcessingMethod": {
+        "properties": {
+          "axes": {
+            "enum": [
+              "filter",
+              "series",
+              "none"
+            ],
+            "title": "Axes",
+            "type": "string"
+          },
+          "axis_count": {
+            "anyOf": [
+              {
+                "enum": [
+                  2,
+                  3
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Axis Count"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingField"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "unavailable": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "group",
+          "fields",
+          "axes",
+          "unavailable"
+        ],
+        "title": "ProcessingMethod",
+        "type": "object"
+      },
+      "RectangleCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "bounds": {
+            "maxItems": 4,
+            "minItems": 4,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              }
+            ],
+            "title": "Bounds",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[\\w .-]+$",
+            "title": "Name",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "view_revision": {
+            "minimum": 0.0,
+            "title": "View Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "view_revision",
+          "name",
+          "bounds"
+        ],
+        "title": "RectangleCommand",
+        "type": "object"
+      },
+      "RoiAppearance": {
+        "additionalProperties": false,
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "pattern": "^#[0-9a-fA-F]{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "hidden_labels": {
+            "default": [],
+            "items": {
+              "maximum": 65535.0,
+              "minimum": 1.0,
+              "type": "integer"
+            },
+            "title": "Hidden Labels",
+            "type": "array"
+          },
+          "label_colors": {
+            "additionalProperties": {
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "type": "string"
+            },
+            "default": {},
+            "title": "Label Colors",
+            "type": "object"
+          },
+          "label_opacities": {
+            "additionalProperties": {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "default": {},
+            "title": "Label Opacities",
+            "type": "object"
+          },
+          "opacity": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opacity"
+          }
+        },
+        "title": "RoiAppearance",
+        "type": "object"
+      },
+      "RoiInfo": {
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "labels": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "mask": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Mask",
+            "type": "array"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pixels": {
+            "title": "Pixels",
+            "type": "integer"
+          },
+          "runs": {
+            "default": [],
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "visible": {
+            "default": true,
+            "title": "Visible",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "pixels",
+          "mask"
+        ],
+        "title": "RoiInfo",
+        "type": "object"
+      },
+      "SaveFile": {
+        "properties": {
+          "overwrite": {
+            "default": false,
+            "title": "Overwrite",
+            "type": "boolean"
+          },
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "revision"
+        ],
+        "title": "SaveFile",
+        "type": "object"
+      },
+      "SceneInfo": {
+        "properties": {
+          "comparison": {
+            "$ref": "#/components/schemas/ComparisonSettings"
+          },
+          "comparison_sources": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonChoice"
+            },
+            "title": "Comparison Sources",
+            "type": "array"
+          },
+          "fit_region": {
+            "enum": [
+              "rois",
+              "all"
+            ],
+            "title": "Fit Region",
+            "type": "string"
+          },
+          "fit_rois": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fit Rois"
+          },
+          "hidden_rois": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Hidden Rois",
+            "type": "array"
+          },
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/OverlayInfo"
+            },
+            "title": "Layers",
+            "type": "array"
+          },
+          "roi_opacity": {
+            "title": "Roi Opacity",
+            "type": "number"
+          },
+          "roi_styles": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RoiAppearance"
+            },
+            "default": {},
+            "title": "Roi Styles",
+            "type": "object"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/OverlayChoice"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "layers",
+          "sources",
+          "hidden_rois",
+          "roi_opacity",
+          "fit_region",
+          "fit_rois",
+          "comparison",
+          "comparison_sources"
+        ],
+        "title": "SceneInfo",
+        "type": "object"
+      },
+      "SceneUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "comparison": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ComparisonSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fit_region": {
+            "anyOf": [
+              {
+                "enum": [
+                  "rois",
+                  "all"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fit Region"
+          },
+          "fit_rois": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fit Rois"
+          },
+          "hidden_rois": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden Rois"
+          },
+          "layers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OverlayLayer"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layers"
+          },
+          "roi_opacity": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roi Opacity"
+          },
+          "roi_styles": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/RoiAppearance"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roi Styles"
+          }
+        },
+        "title": "SceneUpdate",
+        "type": "object"
+      },
+      "TaskCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "enum": [
+              "preview",
+              "full_fit",
+              "register",
+              "drift",
+              "reconstruct",
+              "process",
+              "pipeline",
+              "save",
+              "export"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Options",
+            "type": "object"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "operation"
+        ],
+        "title": "TaskCommand",
+        "type": "object"
+      },
+      "TimecourseCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "axis": {
+            "default": "",
+            "title": "Axis",
+            "type": "string"
+          },
+          "component": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "magnitude",
+              "phase",
+              "real",
+              "imag"
+            ],
+            "title": "Component",
+            "type": "string"
+          },
+          "input": {
+            "default": "image",
+            "enum": [
+              "image",
+              "original",
+              "view",
+              "reconstruction"
+            ],
+            "title": "Input",
+            "type": "string"
+          },
+          "respect_exclusions": {
+            "default": false,
+            "title": "Respect Exclusions",
+            "type": "boolean"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "roi_names": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Roi Names",
+            "type": "array"
+          },
+          "statistic": {
+            "default": "mean",
+            "enum": [
+              "mean",
+              "median",
+              "std",
+              "variance",
+              "sum"
+            ],
+            "title": "Statistic",
+            "type": "string"
+          },
+          "view_revision": {
+            "minimum": 0.0,
+            "title": "View Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "view_revision",
+          "roi_names"
+        ],
+        "title": "TimecourseCommand",
+        "type": "object"
+      },
+      "TimecourseResult": {
+        "properties": {
+          "axis": {
+            "title": "Axis",
+            "type": "string"
+          },
+          "component": {
+            "title": "Component",
+            "type": "string"
+          },
+          "experiment": {
+            "title": "Experiment",
+            "type": "string"
+          },
+          "included": {
+            "items": {
+              "type": "boolean"
+            },
+            "title": "Included",
+            "type": "array"
+          },
+          "input": {
+            "title": "Input",
+            "type": "string"
+          },
+          "respect_exclusions": {
+            "title": "Respect Exclusions",
+            "type": "boolean"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/TimecourseSeries"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "statistic": {
+            "title": "Statistic",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "view_revision": {
+            "title": "View Revision",
+            "type": "integer"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          },
+          "x": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "X",
+            "type": "array"
+          },
+          "x_name": {
+            "title": "X Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "experiment",
+          "revision",
+          "view_revision",
+          "input",
+          "component",
+          "statistic",
+          "axis",
+          "x",
+          "x_name",
+          "unit",
+          "included",
+          "respect_exclusions",
+          "series"
+        ],
+        "title": "TimecourseResult",
+        "type": "object"
+      },
+      "TimecourseSeries": {
+        "properties": {
+          "counts": {
+            "items": {
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "array"
+          },
+          "roi": {
+            "title": "Roi",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "roi",
+          "values",
+          "counts"
+        ],
+        "title": "TimecourseSeries",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "ViewCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "coil": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coil"
+          },
+          "colormap": {
+            "anyOf": [
+              {
+                "enum": [
+                  "gray",
+                  "viridis",
+                  "diverging",
+                  "hot"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Colormap"
+          },
+          "component": {
+            "anyOf": [
+              {
+                "enum": [
+                  "auto",
+                  "magnitude",
+                  "phase",
+                  "real",
+                  "imag"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Component"
+          },
+          "experiment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experiment"
+          },
+          "frame": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame"
+          },
+          "indices": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indices"
+          },
+          "kspace_centering": {
+            "anyOf": [
+              {
+                "enum": [
+                  "auto",
+                  "none",
+                  "fftshift"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kspace Centering"
+          },
+          "kspace_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kspace Mode"
+          },
+          "map_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Map Name"
+          },
+          "plane": {
+            "anyOf": [
+              {
+                "enum": [
+                  "axial",
+                  "coronal",
+                  "sagittal"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plane"
+          },
+          "plot_axis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plot Axis"
+          },
+          "plot_whole_image": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plot Whole Image"
+          },
+          "reconstruction_component": {
+            "anyOf": [
+              {
+                "enum": [
+                  "magnitude",
+                  "phase"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconstruction Component"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "scene": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SceneUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selected_roi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Roi"
+          },
+          "unwrap_phase": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unwrap Phase"
+          },
+          "view": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "View"
+          },
+          "z": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Z"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "ViewCommand",
+        "type": "object"
+      },
+      "WorkflowBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "anyOf": [
+              {
+                "const": "target",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default"
+          },
+          "experiment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experiment"
+          },
+          "id": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "roi",
+              "experiment",
+              "image",
+              "map"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label"
+        ],
+        "title": "WorkflowBinding",
+        "type": "object"
+      },
+      "WorkflowDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowBinding"
+            },
+            "maxItems": 128,
+            "title": "Bindings",
+            "type": "array"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 8000,
+            "title": "Description",
+            "type": "string"
+          },
+          "extensions": {
+            "additionalProperties": true,
+            "title": "Extensions",
+            "type": "object"
+          },
+          "format": {
+            "const": "mrax.workflow",
+            "title": "Format",
+            "type": "string"
+          },
+          "kind": {
+            "default": "processing",
+            "enum": [
+              "processing",
+              "reconstruction",
+              "fitting",
+              "registration",
+              "denoising"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "mrax_version": {
+            "description": "MRax release that wrote the workflow and defines its file format.",
+            "maxLength": 80,
+            "pattern": "^\\d+\\.\\d+\\.\\d+[a-zA-Z0-9.+_-]*$",
+            "title": "Mrax Version",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowStep"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "format",
+          "mrax_version",
+          "name",
+          "steps"
+        ],
+        "title": "WorkflowDocument",
+        "type": "object"
+      },
+      "WorkflowLibraryEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/WorkflowDocument"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "suggested_bindings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Suggested Bindings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "document",
+          "suggested_bindings",
+          "origin"
+        ],
+        "title": "WorkflowLibraryEntry",
+        "type": "object"
+      },
+      "WorkflowPreset": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/WorkflowDocument"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "requirements": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Requirements",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "document",
+          "requirements"
+        ],
+        "title": "WorkflowPreset",
+        "type": "object"
+      },
+      "WorkflowStep": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "process",
+              "register",
+              "drift",
+              "reconstruct",
+              "fit"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "version": {
+            "const": 1,
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "operation",
+          "version",
+          "settings"
+        ],
+        "title": "WorkflowStep",
+        "type": "object"
+      },
+      "WorkspaceInfo": {
+        "properties": {
+          "active_map": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Map"
+          },
+          "can_change_plane": {
+            "default": false,
+            "title": "Can Change Plane",
+            "type": "boolean"
+          },
+          "can_load_raw": {
+            "default": false,
+            "title": "Can Load Raw",
+            "type": "boolean"
+          },
+          "can_reconstruct": {
+            "default": false,
+            "title": "Can Reconstruct",
+            "type": "boolean"
+          },
+          "channels": {
+            "default": 1,
+            "title": "Channels",
+            "type": "integer"
+          },
+          "coil_count": {
+            "default": 0,
+            "title": "Coil Count",
+            "type": "integer"
+          },
+          "data_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Role"
+          },
+          "diagnostics_count": {
+            "default": 0,
+            "title": "Diagnostics Count",
+            "type": "integer"
+          },
+          "dimension_controls": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Dimension Controls",
+            "type": "array"
+          },
+          "dimensions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "dirty": {
+            "title": "Dirty",
+            "type": "boolean"
+          },
+          "display": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Display",
+            "type": "object"
+          },
+          "drifts": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Drifts",
+            "type": "array"
+          },
+          "editable": {
+            "default": true,
+            "title": "Editable",
+            "type": "boolean"
+          },
+          "experiment": {
+            "title": "Experiment",
+            "type": "string"
+          },
+          "experiment_catalog": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ExperimentInfo"
+            },
+            "title": "Experiment Catalog",
+            "type": "array"
+          },
+          "experiments": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Experiments",
+            "type": "array"
+          },
+          "file_location": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Location"
+          },
+          "fit_info": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fit Info"
+          },
+          "fit_settings": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Fit Settings",
+            "type": "object"
+          },
+          "fixed_range": {
+            "default": [
+              0.0,
+              1.0
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Fixed Range",
+            "type": "array"
+          },
+          "frame": {
+            "title": "Frame",
+            "type": "integer"
+          },
+          "frame_count": {
+            "title": "Frame Count",
+            "type": "integer"
+          },
+          "frame_exclusions": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Frame Exclusions",
+            "type": "array"
+          },
+          "has_kspace": {
+            "default": false,
+            "title": "Has Kspace",
+            "type": "boolean"
+          },
+          "has_reconstruction": {
+            "default": false,
+            "title": "Has Reconstruction",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "image_dtype": {
+            "default": "float32-le",
+            "title": "Image Dtype",
+            "type": "string"
+          },
+          "indices": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Indices",
+            "type": "object"
+          },
+          "kspace_centering": {
+            "default": "auto",
+            "title": "Kspace Centering",
+            "type": "string"
+          },
+          "kspace_mode": {
+            "default": "log_magnitude",
+            "title": "Kspace Mode",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "loaded": {
+            "default": true,
+            "title": "Loaded",
+            "type": "boolean"
+          },
+          "maps": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Maps",
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "models": {
+            "default": [],
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "non_imaging": {
+            "default": false,
+            "title": "Non Imaging",
+            "type": "boolean"
+          },
+          "pipeline": {
+            "$ref": "#/components/schemas/PipelineInfo"
+          },
+          "plane": {
+            "default": "axial",
+            "title": "Plane",
+            "type": "string"
+          },
+          "plane_axis_directions": {
+            "default": [],
+            "items": {
+              "enum": [
+                -1,
+                1
+              ],
+              "type": "integer"
+            },
+            "title": "Plane Axis Directions",
+            "type": "array"
+          },
+          "plane_axis_labels": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Plane Axis Labels",
+            "type": "array"
+          },
+          "plane_dims": {
+            "default": [
+              "x",
+              "y"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "title": "Plane Dims",
+            "type": "array"
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviewResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reconstruction_coil": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconstruction Coil"
+          },
+          "reconstruction_component": {
+            "default": "magnitude",
+            "title": "Reconstruction Component",
+            "type": "string"
+          },
+          "reconstruction_encoding": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconstruction Encoding"
+          },
+          "reconstruction_label": {
+            "default": "Reconstruction",
+            "title": "Reconstruction Label",
+            "type": "string"
+          },
+          "reconstruction_unavailable": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconstruction Unavailable"
+          },
+          "registrations": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Registrations",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "roi_undo": {
+            "default": false,
+            "title": "Roi Undo",
+            "type": "boolean"
+          },
+          "rois": {
+            "items": {
+              "$ref": "#/components/schemas/RoiInfo"
+            },
+            "title": "Rois",
+            "type": "array"
+          },
+          "scene": {
+            "$ref": "#/components/schemas/SceneInfo"
+          },
+          "selected_roi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Roi"
+          },
+          "shape": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Shape",
+            "type": "array"
+          },
+          "slice_count": {
+            "title": "Slice Count",
+            "type": "integer"
+          },
+          "slice_dim": {
+            "default": "z",
+            "title": "Slice Dim",
+            "type": "string"
+          },
+          "spacing": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Spacing",
+            "type": "array"
+          },
+          "spacing_unit": {
+            "default": "mm",
+            "title": "Spacing Unit",
+            "type": "string"
+          },
+          "timecourse": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CurveInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "unwrap_phase": {
+            "default": true,
+            "title": "Unwrap Phase",
+            "type": "boolean"
+          },
+          "view": {
+            "default": "Image",
+            "title": "View",
+            "type": "string"
+          },
+          "view_revision": {
+            "title": "View Revision",
+            "type": "integer"
+          },
+          "visual_state": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Visual State",
+            "type": "object"
+          },
+          "z": {
+            "title": "Z",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "revision",
+          "view_revision",
+          "frame",
+          "z",
+          "frame_count",
+          "slice_count",
+          "shape",
+          "spacing",
+          "experiment",
+          "rois",
+          "timecourse",
+          "preview",
+          "dirty",
+          "scene",
+          "pipeline"
+        ],
+        "title": "WorkspaceInfo",
+        "type": "object"
+      },
+      "WriteText": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "overwrite": {
+            "default": false,
+            "title": "Overwrite",
+            "type": "boolean"
+          },
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "revision",
+          "workspace_id",
+          "content"
+        ],
+        "title": "WriteText",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "MRax local browser API",
+    "version": "0.4.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/catalog": {
+      "get": {
+        "operationId": "catalog_api_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Catalog"
+      }
+    },
+    "/api/files/folder": {
+      "post": {
+        "operationId": "new_folder_api_files_folder_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileLocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "New Folder"
+      }
+    },
+    "/api/files/list": {
+      "get": {
+        "operationId": "files_api_files_list_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "root",
+            "required": true,
+            "schema": {
+              "title": "Root",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Search",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Files"
+      }
+    },
+    "/api/files/preview": {
+      "post": {
+        "operationId": "preview_source_api_files_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Source"
+      }
+    },
+    "/api/files/roots": {
+      "get": {
+        "operationId": "roots_api_files_roots_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Roots"
+      }
+    },
+    "/api/files/stat": {
+      "get": {
+        "operationId": "stat_api_files_stat_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "root",
+            "required": true,
+            "schema": {
+              "title": "Root",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stat"
+      }
+    },
+    "/api/files/text": {
+      "get": {
+        "operationId": "read_text_api_files_text_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "root",
+            "required": true,
+            "schema": {
+              "title": "Root",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Text"
+      },
+      "post": {
+        "operationId": "write_text_api_files_text_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Write Text"
+      }
+    },
+    "/api/files/upload": {
+      "post": {
+        "operationId": "upload_api_files_upload_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "filename",
+            "required": false,
+            "schema": {
+              "default": "upload.npy",
+              "title": "Filename",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unpack",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Unpack",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload"
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/api/import": {
+      "post": {
+        "operationId": "import_study_api_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Study"
+      }
+    },
+    "/api/jobs/{key}": {
+      "get": {
+        "operationId": "job_api_jobs__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job"
+      }
+    },
+    "/api/jobs/{key}/cancel": {
+      "post": {
+        "operationId": "cancel_job_api_jobs__key__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Job"
+      }
+    },
+    "/api/jobs/{key}/download": {
+      "get": {
+        "operationId": "download_api_jobs__key__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download"
+      }
+    },
+    "/api/session": {
+      "get": {
+        "operationId": "session_api_session_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Session"
+      }
+    },
+    "/api/workflow-presets": {
+      "get": {
+        "operationId": "bundled_presets_api_workflow_presets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowPreset"
+                  },
+                  "title": "Response Bundled Presets Api Workflow Presets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Bundled Presets"
+      }
+    },
+    "/api/workflow-presets/{key}/open": {
+      "post": {
+        "operationId": "open_preset_api_workflow_presets__key__open_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Command"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowLibraryEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Preset"
+      }
+    },
+    "/api/workflow-targets": {
+      "get": {
+        "operationId": "targets_api_workflow_targets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Targets"
+      }
+    },
+    "/api/workflows": {
+      "get": {
+        "operationId": "workflows_api_workflows_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowLibraryEntry"
+                  },
+                  "title": "Response Workflows Api Workflows Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Workflows"
+      },
+      "post": {
+        "operationId": "create_api_workflows_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditWorkflow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowLibraryEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create"
+      }
+    },
+    "/api/workflows/open-file": {
+      "post": {
+        "operationId": "open_file_api_workflows_open_file_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileLocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowLibraryEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open File"
+      }
+    },
+    "/api/workflows/{key}": {
+      "delete": {
+        "operationId": "remove_api_workflows__key__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "title": "Revision",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove"
+      },
+      "put": {
+        "operationId": "edit_api_workflows__key__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditWorkflow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowLibraryEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit"
+      }
+    },
+    "/api/workflows/{key}/save-file": {
+      "post": {
+        "operationId": "save_file_api_workflows__key__save_file_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveFile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save File"
+      }
+    },
+    "/api/workspaces": {
+      "get": {
+        "operationId": "workspaces_api_workspaces_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceInfo"
+                  },
+                  "title": "Response Workspaces Api Workspaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Workspaces"
+      }
+    },
+    "/api/workspaces/new": {
+      "post": {
+        "operationId": "new_workspace_api_workspaces_new_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "New Workspace"
+      }
+    },
+    "/api/workspaces/open": {
+      "post": {
+        "operationId": "open_workspace_api_workspaces_open_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileLocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Workspace"
+      }
+    },
+    "/api/workspaces/synthetic": {
+      "post": {
+        "operationId": "synthetic_api_workspaces_synthetic_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "t2",
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Synthetic"
+      }
+    },
+    "/api/workspaces/upload": {
+      "post": {
+        "operationId": "upload_api_workspaces_upload_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Upload"
+      }
+    },
+    "/api/workspaces/{key}": {
+      "delete": {
+        "operationId": "close_workspace_api_workspaces__key__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Close Workspace"
+      },
+      "get": {
+        "operationId": "workspace_api_workspaces__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Workspace"
+      }
+    },
+    "/api/workspaces/{key}/actions": {
+      "post": {
+        "operationId": "action_api_workspaces__key__actions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Action"
+      }
+    },
+    "/api/workspaces/{key}/analysis/timecourse": {
+      "post": {
+        "operationId": "timecourse_api_workspaces__key__analysis_timecourse_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimecourseCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimecourseResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Timecourse"
+      }
+    },
+    "/api/workspaces/{key}/comparison": {
+      "get": {
+        "operationId": "comparison_api_workspaces__key__comparison_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Comparison"
+      }
+    },
+    "/api/workspaces/{key}/fit-check": {
+      "post": {
+        "operationId": "fit_check_api_workspaces__key__fit_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FitCheckCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FitReadinessResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fit Check"
+      }
+    },
+    "/api/workspaces/{key}/fit-frames": {
+      "get": {
+        "operationId": "fit_frames_api_workspaces__key__fit_frames_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 32,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fit Frames"
+      }
+    },
+    "/api/workspaces/{key}/fit-options": {
+      "get": {
+        "operationId": "fit_options_api_workspaces__key__fit_options_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fit Options"
+      },
+      "post": {
+        "operationId": "proposed_fit_options_api_workspaces__key__fit_options_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FitOptionsCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proposed Fit Options"
+      }
+    },
+    "/api/workspaces/{key}/inspect": {
+      "get": {
+        "operationId": "inspect_api_workspaces__key__inspect_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect"
+      }
+    },
+    "/api/workspaces/{key}/navigate": {
+      "post": {
+        "operationId": "navigate_api_workspaces__key__navigate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NavigationCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Navigate"
+      }
+    },
+    "/api/workspaces/{key}/noise-estimate": {
+      "post": {
+        "operationId": "noise_estimate_api_workspaces__key__noise_estimate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoiseEstimateCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Noise Estimate"
+      }
+    },
+    "/api/workspaces/{key}/parameters": {
+      "get": {
+        "operationId": "parameters_api_workspaces__key__parameters_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Parameters"
+      }
+    },
+    "/api/workspaces/{key}/pipeline-blocks": {
+      "get": {
+        "operationId": "pipeline_blocks_api_workspaces__key__pipeline_blocks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pipeline Blocks"
+      }
+    },
+    "/api/workspaces/{key}/pipeline-editor": {
+      "post": {
+        "operationId": "pipeline_editor_api_workspaces__key__pipeline_editor_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineEditorCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pipeline Editor"
+      }
+    },
+    "/api/workspaces/{key}/preview-fit": {
+      "post": {
+        "operationId": "preview_fit_api_workspaces__key__preview_fit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Fit"
+      }
+    },
+    "/api/workspaces/{key}/processing": {
+      "get": {
+        "operationId": "processing_api_workspaces__key__processing_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "input_source",
+            "required": false,
+            "schema": {
+              "default": "image",
+              "title": "Input Source",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "package",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Package"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Processing"
+      }
+    },
+    "/api/workspaces/{key}/reconstruction": {
+      "get": {
+        "operationId": "reconstruction_api_workspaces__key__reconstruction_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconstruction"
+      }
+    },
+    "/api/workspaces/{key}/roi-mask": {
+      "get": {
+        "operationId": "preview_roi_mask_api_workspaces__key__roi_mask_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "axes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 161,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Axes"
+            }
+          },
+          {
+            "in": "query",
+            "name": "slice_index",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Slice Index",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaskPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Roi Mask"
+      }
+    },
+    "/api/workspaces/{key}/roi-statistics": {
+      "get": {
+        "operationId": "roi_statistics_api_workspaces__key__roi_statistics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "map_name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Map Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Roi Statistics"
+      }
+    },
+    "/api/workspaces/{key}/rois": {
+      "post": {
+        "operationId": "rectangle_api_workspaces__key__rois_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RectangleCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rectangle"
+      }
+    },
+    "/api/workspaces/{key}/save": {
+      "post": {
+        "operationId": "save_api_workspaces__key__save_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save"
+      }
+    },
+    "/api/workspaces/{key}/save-file": {
+      "post": {
+        "operationId": "save_file_api_workspaces__key__save_file_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveFile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save File"
+      }
+    },
+    "/api/workspaces/{key}/slice": {
+      "get": {
+        "operationId": "image_api_workspaces__key__slice_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "layer",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Layer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Image"
+      }
+    },
+    "/api/workspaces/{key}/tasks": {
+      "post": {
+        "operationId": "task_api_workspaces__key__tasks_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Task"
+      }
+    },
+    "/api/workspaces/{key}/view": {
+      "patch": {
+        "operationId": "view_api_workspaces__key__view_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ViewCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "View"
+      }
+    },
+    "/api/workspaces/{key}/workflows": {
+      "post": {
+        "operationId": "capture_api_workspaces__key__workflows_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureWorkflow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowLibraryEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capture"
+      }
+    },
+    "/api/workspaces/{key}/workflows/{workflow}/apply": {
+      "post": {
+        "operationId": "apply_api_workspaces__key__workflows__workflow__apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workflow",
+            "required": true,
+            "schema": {
+              "title": "Workflow",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyWorkflow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply"
+      }
+    },
+    "/api/workspaces/{key}/workflows/{workflow}/validate": {
+      "post": {
+        "operationId": "validate_api_workspaces__key__workflows__workflow__validate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "workflow",
+            "required": true,
+            "schema": {
+              "title": "Workflow",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyWorkflow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validate"
+      }
+    }
+  }
+}

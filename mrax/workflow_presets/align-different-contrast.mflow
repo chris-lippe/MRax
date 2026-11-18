@@ -1,0 +1,70 @@
+{
+  "format": "mrax.workflow",
+  "kind": "registration",
+  "mrax_version": "0.4.0",
+  "name": "Rigid alignment: different contrasts",
+  "description": "Align anatomical acquisitions with rigid mutual information.",
+  "bindings": [
+    {
+      "id": "reference",
+      "kind": "experiment",
+      "label": "Reference experiment"
+    }
+  ],
+  "steps": [
+    {
+      "id": "align",
+      "operation": "register",
+      "version": 1,
+      "enabled": true,
+      "settings": {
+        "reference_experiment": {
+          "$binding": "reference"
+        },
+        "moving_source": "image",
+        "reference_source": "image",
+        "moving_frame": 0,
+        "reference_frame": 0,
+        "scope": "volume",
+        "settings": {
+          "transform": "rigid",
+          "metric": "mattes_mi",
+          "optimizer": "regular_step_gradient_descent",
+          "interpolator": "linear",
+          "initializer": "geometry",
+          "sampling_strategy": "none",
+          "sampling_percentage": 0.2,
+          "histogram_bins": 32,
+          "learning_rate": 0.25,
+          "min_step": 0.0001,
+          "iterations": 200,
+          "convergence_minimum": 0.000001,
+          "convergence_window": 10,
+          "shrink_factors": [
+            2,
+            1
+          ],
+          "smoothing_sigmas": [
+            1,
+            0
+          ],
+          "normalize_intensity": true,
+          "validate_alignment": true,
+          "prealign_translation": true,
+          "initialization_mask_padding": 8,
+          "max_displacement_voxels": null,
+          "extra": {}
+        }
+      }
+    }
+  ],
+  "extensions": {
+    "org.mrax.preset": {
+      "requirements": [
+        "Overlapping images of the same section or volume, with similar initial orientation and valid geometry.",
+        "The first frame estimates a single transform for the whole target experiment.",
+        "Review the overlay after alignment."
+      ]
+    }
+  }
+}

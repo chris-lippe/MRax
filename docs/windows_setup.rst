@@ -5,8 +5,8 @@ Windows setup
 
    Native Windows installations use CPU JAX. GPU calculations require
    the Linux version of MRax inside WSL 2, optionally in a Linux Docker container,
-   with CUDA-enabled JAX. JAX lists NVIDIA GPU support under WSL 2 as experimental;
-   see `JAX platform support
+   with CUDA-enabled JAX. JAX lists NVIDIA GPU support under WSL 2 as experimental.
+   See `JAX platform support
    <https://docs.jax.dev/en/latest/installation.html#supported-platforms>`_.
 
 Minimal WSL 2 and Docker Setup
@@ -60,8 +60,7 @@ integration enabled.
       docker run --rm -it -v "$PWD":/workspace -w /workspace mrax-dev
 
 For best filesystem performance, keep the repository inside the WSL Linux
-filesystem, for example under ``~/code/``, instead of editing it from
-``/mnt/c/``.
+filesystem, for example under ``~/code/``.
 
 Native Windows Pip Installs
 ---------------------------
@@ -75,9 +74,11 @@ its dependencies provide Windows wheels:
    python -m pip install --upgrade pip
    python -m pip install mrax
 
-GUI, registration, reconstruction, denoising, and importer workflows may have
-platform-specific requirements. WSL 2 plus Docker is the documented Windows
-development path for those workflows.
+Use ``mrax[full]`` for specialized scientific tools or ``mrax[gui]`` for the
+browser GUI and its scientific features. Start the latter with ``mrax-gui``.
+The separate CPU desktop installer includes Python and a browser runtime and
+starts through **MRax.exe**. Neither native CPU option requires WSL or Docker.
+See :doc:`setup` for the installation profiles.
 
 The optional ``mrax[denoise-external]`` extra installs upstream BM3D/BM4D packages
 whose licenses permit non-commercial use only.

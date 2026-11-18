@@ -1,4 +1,4 @@
-"""Bruker parameters translation; MRI reconstruction is separate."""
+"""Bruker parameter translation."""
 from __future__ import annotations
 
 import re

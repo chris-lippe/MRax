@@ -51,6 +51,7 @@ def save_roi_set(
     path: str | Path,
     *,
     metadata: dict[str, Any] | None = None,
+    overwrite: bool = False,
 ) -> tuple[Path, Path]:
     """Save ROI masks as ``.npz`` data plus sidecar JSON metadata.
 
@@ -58,6 +59,10 @@ def save_roi_set(
     """
 
     npz_path, json_path = _paths(path)
+    from mrax.io.output_guard import require_new_file
+
+    require_new_file(npz_path, overwrite=overwrite, warn=True)
+    require_new_file(json_path, overwrite=overwrite, warn=True)
     npz_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -161,10 +166,17 @@ def import_mask(
     allow_transpose: bool = True,
     metadata: dict[str, Any] | None = None,
 ) -> ROI:
-    """Create an MRax :class:`ROI` from a raw mask array or NumPy mask file."""
+    """Create an ROI from an array, NumPy file or NIfTI file."""
 
+    extra = dict(metadata or {})
     if isinstance(mask, (str, Path)):
-        arr = load_mask_array(mask)
+        if str(mask).lower().endswith((".nii", ".nii.gz")):
+            from mrax.io.nifti import load_nifti
+
+            arr, affine = load_nifti(mask)
+            extra["nifti_affine"] = affine.tolist()
+        else:
+            arr = load_mask_array(mask)
     else:
         arr = np.asarray(mask)
     roi_dims = tuple(dims) if dims is not None else None
@@ -183,7 +195,7 @@ def import_mask(
         name,
         np.asarray(arr),
         dims=roi_dims,
-        metadata=dict(metadata or {}),
+        metadata=extra,
     )
 
 
@@ -206,7 +218,7 @@ def mask_slice_for_display(
     """Return the displayed 2D plane from a 2D/3D spatial mask."""
 
     arr = np.asarray(mask)
-    if arr.ndim <= 2:
+    if arr.ndim < 2:
         return arr
     dim_names = _mask_dims(arr.ndim, dims)
     plane = tuple(str(dim) for dim in plane_dims)
@@ -247,7 +259,7 @@ def embed_mask_slice(
     dim_names = tuple(str(dim) for dim in spatial_dims)
     if len(target) != len(dim_names):
         raise ValueError("spatial_shape and spatial_dims must describe the same number of axes")
-    if len(target) <= 2:
+    if len(target) < 2:
         return np.asarray(match_spatial_mask(mask_2d, target))
 
     plane = tuple(str(dim) for dim in plane_dims)
@@ -289,7 +301,7 @@ def replace_mask_slice(
     """Replace, add, or erase the displayed 2D plane in a spatial mask."""
 
     arr = np.asarray(mask).copy()
-    if arr.ndim <= 2:
+    if arr.ndim < 2:
         plane_mask = np.asarray(match_spatial_mask(mask_2d, arr.shape))
         if mode == "add":
             out = arr.copy()
@@ -310,6 +322,9 @@ def replace_mask_slice(
         raise ValueError(f"Plane dims {plane} are not present in mask dims {dim_names}")
     plane_shape = tuple(arr.shape[dim_names.index(dim)] for dim in plane)
     plane_mask = np.asarray(match_spatial_mask(mask_2d, plane_shape))
+    selected_dims = tuple(dim for dim in dim_names if dim in plane)
+    if selected_dims != plane:
+        plane_mask = np.transpose(plane_mask, [plane.index(dim) for dim in selected_dims])
     index_map = dict(indices or {})
     slicer: list[object] = []
     for axis, dim in enumerate(dim_names):
@@ -380,9 +395,9 @@ def interpolate_mask_along_slices(
 
     ``interpolation`` controls slices between annotated masks. ``extrapolation``
     controls slices before the first and after the last annotated mask. Supported
-    strategies are ``"linear"``, ``"spline"``, and ``"constant"``; extrapolation
-    also accepts ``"none"``. Linear and spline modes interpolate signed distance
-    fields so ROI boundaries morph smoothly instead of switching voxel labels.
+    strategies are ``"linear"``, ``"spline"``, and ``"constant"``. Extrapolation
+    also accepts ``"none"``. Linear and spline modes interpolate signed distance fields for smooth ROI
+    boundaries.
     """
 
     arr = np.asarray(mask, dtype=bool)

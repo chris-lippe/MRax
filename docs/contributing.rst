@@ -27,9 +27,10 @@ Run these checks from the repository root before opening a pull request:
    python -m sphinx -W --keep-going -E -b html docs docs/_build/html
    git diff --check
 
-For documentation-only changes, run the Sphinx build and ``git diff --check``. For code
-changes, run the test suite. Report each check's outcome and any environment
-requirements in the pull request.
+For documentation-only changes, run the Sphinx build and ``git diff --check``.
+For code changes, run the affected feature tests. Run the CPU regression suite
+before a release or when changes cross feature boundaries. Cover each public behavior in the relevant feature workflow. See ``tests/README.md`` for the regression scope.
+Report each check's outcome and environment requirements in the pull request.
 
 Docs changes:
 
@@ -38,9 +39,31 @@ Docs changes:
 
 Dependency and release changes:
 
-- Runtime dependencies live in ``pyproject.toml`` when required by ``pip install mrax``.
+- Shared runtime dependencies live in ``pyproject.toml``. The ``full`` extra adds
+  specialized scientific tools. ``gui`` adds those tools and the web backend.
+  Keep imports usable without unrelated extras and make missing-feature errors
+  name the required extra.
 - Development, documentation, and notebook authoring tools belong in contributor extras.
 - Release notes list user-facing changes.
+- Build and qualify each installation profile in an isolated environment. Keep
+  desktop installer recipes, browser runtimes and installer outputs outside this
+  repository.
+
+GUI development
+---------------
+
+After installing the editable checkout, build the frontend before starting
+its GUI:
+
+.. code-block:: bash
+
+   npm --prefix frontend ci
+   npm --prefix frontend run build
+   mrax-gui
+
+Run the Chromium workflows with ``npm --prefix frontend test``. A single complete
+workflow is available through ``npm --prefix frontend run test:smoke``. Use
+``test:cross-browser`` for the Firefox/WebKit smoke checks.
 
 Documentation build
 -------------------

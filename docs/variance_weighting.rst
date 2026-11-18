@@ -66,9 +66,9 @@ This leave-one-frame-out construction prevents a frame from selecting pixels
 simply because their noise happened to be unusually small in that same frame.
 MRax then:
 
-1. keeps spatial locations with finite, nonzero support;
+1. keeps spatial locations with finite, nonzero support.
 2. selects approximately the lowest one percent of :math:`R_{-t}`, enlarged as
-   needed to provide enough samples; and
+   needed to provide enough samples. And
 3. accepts the selection only when its median is below 25 percent of the field's
    75th-percentile signal.
 
@@ -131,7 +131,7 @@ Exactly constant blocks are excluded to reduce zero-padding bias.
 Minimum support and shrinkage
 -----------------------------
 
-Each frame requires at least ``min_samples`` valid samples or coefficients; the
+Each frame requires at least ``min_samples`` valid samples or coefficients. The
 default is 32. Raw estimates are stabilized toward the median usable frame
 variance:
 
@@ -194,10 +194,10 @@ high SNR.
 
 Use acquisition-specific explicit variances when working with:
 
-- low-SNR magnitude signals where Rician bias materially affects the model;
-- multi-coil noncentral-chi magnitude noise;
-- parallel-imaging or compressed-sensing spatial noise fields;
-- correlated reconstruction noise; or
+- low-SNR magnitude signals where Rician bias materially affects the model.
+- multi-coil noncentral-chi magnitude noise.
+- parallel-imaging or compressed-sensing spatial noise fields.
+- correlated reconstruction noise. Or
 - repeat measurements that provide a direct experimental variance estimate.
 
 In these cases, pass the resulting positive variance vector or map through

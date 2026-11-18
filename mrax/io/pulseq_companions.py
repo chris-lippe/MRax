@@ -192,7 +192,7 @@ def nifti_options(path, info, options):
                 options.setdefault('spatial_ndim', 2)
                 compact = options['spatial_ndim'] == 2
             elif 'spatial_ndim' not in options:
-                raise ValueError("NIfTI third axis conflicts with the declared 2D encoding; specify spatial_ndim and contrast ordering explicitly")
+                raise ValueError("NIfTI third axis conflicts with the declared 2D encoding. Specify spatial_ndim and contrast ordering explicitly")
     if compact and 'frame_order' not in options:
         coordinates, norms = companion.coordinates, companion.norms
         data = np.asanyarray(image.dataobj)
@@ -213,7 +213,7 @@ def nifti_options(path, info, options):
         rows, columns = linear_sum_assignment(np.abs(target[:, None] - source[None]))
         if (np.max(np.abs(target[rows] - source[columns])) > 1e-4
                 or np.min(np.diff(np.sort(target)), initial=np.inf) < 1e-4):
-            raise ValueError("Compact NIfTI contrast order is ambiguous; supply frame_order explicitly")
+            raise ValueError("Compact NIfTI contrast order is ambiguous. Supply frame_order explicitly")
         options['frame_order'] = columns.tolist()
     if image.header.get_xyzt_units()[0] == 'unknown' and 'spatial_unit' not in options:
         fov = companion.fov_m if compact else np.asarray(info.definitions.get('FOV', []), float)

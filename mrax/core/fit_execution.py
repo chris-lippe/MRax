@@ -34,7 +34,7 @@ class FitState:
 
 @dataclass(frozen=True)
 class FitInfo:
-    """Optional fit status; convergence describes the requested stopping tolerances."""
+    """Optional fit status. Convergence describes the requested stopping tolerances."""
 
     state: FitState
     iterations: int
@@ -102,11 +102,11 @@ def execute_optimizer(
     convergence_check: Callable | None = None,
     device: DeviceLike = "cpu",
 ) -> tuple[dict, list[float], FitInfo]:
-    """Run fixed-size device chunks; histories contain losses before each update.
+    """Run fixed-size device chunks. Histories contain losses before each update.
 
     Convergence requires both scaled objective changes and relative raw-parameter
     updates to meet their tolerances for consecutive updates. Stopping counters
-    start afresh when resuming. Accepted proposals are finite; errors retain the
+    start afresh when resuming. Accepted proposals are finite. Errors retain the
     last verified chunk-boundary checkpoint.
     ``device`` defaults to CPU and also places resumed parameters and moments.
     """

@@ -207,8 +207,8 @@ def fit_dti_log_linear(
 ) -> dict[str, np.ndarray]:
     """Fit DTI fields with a voxelwise log-linear least-squares estimate.
 
-    When the b-vector design is rank-deficient, an isotropic ADC estimate from
-    b-values is returned instead of a poorly constrained tensor.
+    When the b-vector design is rank-deficient, return an isotropic ADC estimate
+    from b-values.
     """
 
     arr = np.asarray(data, dtype=float)

@@ -2,14 +2,14 @@ Pulseq import
 =============
 
 MRax reads extracted ISMRMRD/HDF5 (including ``.mrd``), Siemens ``.dat``, NIfTI and DICOM
-measurements. A Pulseq ``.seq`` describes the executed sequence;
-the paired measurement file supplies the signal. Pair it with the measurement using ``sequence_path`` or a matching
+measurements. A Pulseq ``.seq`` describes the executed sequence.
+The paired measurement file supplies the signal. Pair it with the measurement using ``sequence_path`` or a matching
 filename. Archives must be extracted first.
 
 Read, reconstruct and save
 --------------------------
 
-Import prepares samples; reconstruction is a separate, vendor-independent step.
+Import prepares samples. Reconstruction is a separate, vendor-independent step.
 
 .. code-block:: python
 
@@ -43,7 +43,7 @@ available. Compressed DICOM transfer syntaxes require ``pip install "mrax[dicom-
 For sweeps stored as separate DICOM series, pass
 ``series_groups={"relaxation": [series_uid_1, series_uid_2, ...]}`` to
 ``load_dicom_study`` (``dicom_series_groups`` in ``import_pulseq_study``).
-Selected series must share physical geometry and study; relaxation frames are
+Selected series must share physical geometry and study. Relaxation frames are
 sorted by their timing. Unlisted series remain separate.
 MATLAB input uses ``read_measurement(..., image_key=..., axes=...)``
 or explicit raw-array keys and encoding geometry.
@@ -51,8 +51,8 @@ or explicit raw-array keys and encoding geometry.
 Metadata and units
 ------------------
 
-Pulseq timing definitions use seconds; MRax quantitative observables use
-milliseconds. FOV uses metres; ``FOVUnit = mm`` declares millimetres. Large
+Pulseq timing definitions use seconds. MRax quantitative observables use
+milliseconds. FOV uses metres. ``FOVUnit = mm`` declares millimetres. Large
 undeclared FOV values are interpreted as millimetres with a warning. NIfTI
 spatial and temporal units are respected. Image pixels retain their stored
 scaling. Model amplitude initialization follows image scale and survives bundle
@@ -68,9 +68,9 @@ fields, with times in milliseconds and flip angles in degrees.
 For DICOM preparation sweeps, ``import_pulseq_study`` accepts
 ``sequence_map={"dicom:" + series_uid: "preparation.seq"}`` and
 ``metadata_overrides`` with the same keys. DICOM ``.IMA`` files are discovered
-alongside ``.dcm`` files. Preparation offsets must follow decoded volume order;
-pair sequences explicitly and verify their acquisition parameters. Separate MRD
-echo contrasts use executed ADC timing; a declared echo spacing and train length
+alongside ``.dcm`` files. Preparation offsets must follow decoded volume order.
+Pair sequences explicitly and verify their acquisition parameters. Separate MRD
+echo contrasts use executed ADC timing. A declared echo spacing and train length
 are used only when they match the contrast counters.
 
 A JSON sidecar alongside the measurement can provide ``sequence_path``,
@@ -92,18 +92,18 @@ along with suggested readout and EPI corrections. Review or change these in a
 spatial encoding remain ADC data and need encoding information before reconstruction.
 
 MRD trajectory units can be selected explicitly with
-``reader_options={"trajectory_units": "cycles/fov"}``; other choices are
+``reader_options={"trajectory_units": "cycles/fov"}``. Other choices are
 ``cycles/pixel``, ``cycles/m`` and ``radians/pixel``. Automatic interpretation
 warns when assuming cycles/FOV. Use ``density_column`` for a declared quadrature
 column.
 Missing patient orientation remains marked as partial geometry. Supply
 ``density`` explicitly to override sampled quadrature.
 The default sampled preview estimates
-quadrature on a sampling mesh; iterative solvers use separately specified
+quadrature on a sampling mesh. Iterative solvers use separately specified
 statistical weights. ``frame_selection`` limits raw/image loading. FFT
-reconstruction automatically batches large recordings before device placement;
+reconstruction automatically batches large recordings before device placement.
 ``frame_batch_size`` overrides the batch size while retaining complete slice and
-repeat groups. Batched coil images stay in host memory; the combined image uses
+repeat groups. Batched coil images stay in host memory. The combined image uses
 the requested device. Set the batch size to zero to disable batching.
 
 Advanced reader options
@@ -112,33 +112,33 @@ Advanced reader options
 When conversion leaves placeholder acquisition counters, supply a matching MRD
 metadata file through ``reader_options={"metadata_template": "metadata.h5"}``.
 Its records must follow exactly the raw acquisition order. Relative paths resolve
-beside the measurement. The template supplies encoding, roles and geometry;
-raw sample sizes, receiver layout and discard windows are retained.
+beside the measurement. The template supplies encoding, roles and geometry.
+Raw sample sizes, receiver layout and discard windows are retained.
 For incomplete conversions, explicit MRD reader options ``noise_records`` and
 ``exclude_records`` select zero-based record indices. ``sample_window=[start,
 stop]`` trims imaging readouts and ``center_sample`` sets their zero-frequency
 sample in original readout coordinates. ``trajectory_mode="cartesian"`` uses
-declared Cartesian counters instead of stored trajectories, with a warning;
-the default retains supplied trajectories. These controls require knowledge of
+declared Cartesian counters and issues a warning.
+The default retains supplied trajectories. These controls require knowledge of
 the conversion. Input files remain intact.
 
 ``prewhiten_acquisition`` in ``mrax.reco`` uses attached or explicit noise samples
 before any reconstruction method and returns the transformed acquisition and
 receiver matrix. Calibrate sensitivities afterwards, or apply that matrix to
 external sensitivity maps with ``apply_receiver_transform``. Whitening expresses
-amplitudes in noise units; use ``covariance_scale`` for differing calibration bandwidths.
+amplitudes in noise units. Use ``covariance_scale`` for differing calibration bandwidths.
 
 FFT gives a zero-filled preview for undersampled Cartesian data. For a complete
 centred calibration block, ``estimate_cartesian_sensitivities(acquisition)``
 provides smooth normalized receiver maps for iterative unfolding. External maps
 can also be supplied. Non-Cartesian iterative methods use the built-in JAX NUFFT.
-Reconstruction plans remain editable; see :doc:`acquisition_reconstruction`.
+Reconstruction plans remain editable. See :doc:`acquisition_reconstruction`.
 
 Scanner planes supply image affines when the mapping to sequence axes is known.
 For a nonstandard Siemens ``OrientationMapping``, provide ``gradient_directions``
 through ``reader_options``: a 3-by-3 matrix whose columns map sequence gradient
 axes to patient LPS directions. Otherwise orientation stays unknown with a warning.
-Complete, uniformly spaced parallel slice sets become volumes; incomplete sets
+Complete, uniformly spaced parallel slice sets become volumes. Incomplete sets
 retain separate frame affines. If an interpreter repeats one prototype plane,
 explicit sequence ``SlicePositions`` resolve slice offsets in metres
 (``SlicePositionsUnit = mm`` declares millimetres). Unspecified slice offsets

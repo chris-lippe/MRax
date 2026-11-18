@@ -36,7 +36,7 @@ def make_fista_kernel(loss, smooth_loss, bounds, operators, step_size, *,
     resets momentum on the standard gradient/displacement inner-product test.
     A nonfinite extrapolated gradient always retries at the accepted point.
     An exhausted line search returns status 3 and preserves the input state.
-    The step schedule specifies trial steps; backtracking may reduce them.
+    The step schedule specifies trial steps. Backtracking may reduce them.
     ``backtracking='full'`` uses Algorithm 3.5 of Scheinberg et al.
     (doi:10.1007/s10208-014-9189-9), recomputing extrapolation on rate changes.
     """
@@ -99,8 +99,11 @@ def make_fista_kernel(loss, smooth_loss, bounds, operators, step_size, *,
         direction = gradient
         dtype = value.dtype
         eps = max([jnp.finfo(dtype).eps] + [jnp.finfo(jnp.real(x).dtype).eps for x in jax.tree.leaves(point)])
-        # Scale floating-point comparison allowances with the objective.
-        allowance = 16 * eps * jnp.maximum(jnp.abs(value), jnp.finfo(dtype).tiny)
+        # Include coordinate rounding in the smooth linearization. Near a fit,
+        # the residual loss can be much smaller than its evaluation error.
+        linear_scale = sum(jnp.sum(jnp.abs(g) * jnp.abs(x)) for g, x in
+                           zip(jax.tree.leaves(gradient), jax.tree.leaves(point), strict=True))
+        allowance = 16 * eps * jnp.maximum(jnp.abs(value) + linear_scale, jnp.finfo(dtype).tiny)
         good_gradient = _finite((gradient, value))
 
         def trial(carry):
@@ -114,7 +117,7 @@ def make_fista_kernel(loss, smooth_loss, bounds, operators, step_size, *,
             accepted = good_gradient & certified & _finite((x, ps, candidate))
             if objective_check:
                 quadratic = _dot(delta, delta) / (2 * rate)
-                # IEEE Inf <= Inf evaluates true; certificates require finite values.
+                # IEEE Inf <= Inf evaluates true. Certificates require finite values.
                 accepted &= _finite((remainder, quadratic)) & (remainder <= quadratic + allowance)
             return rate, x, ps, gap, work + steps, accepted, trials + 1
 
@@ -169,7 +172,7 @@ def make_fista_kernel(loss, smooth_loss, bounds, operators, step_size, *,
     def step(params, state):
         scheduled = rate_at(state["count"], state["rate"].dtype)
         # Retain the certified Lipschitz estimate. An explicit schedule change
-        # rescales that estimate; every trial requires majorization.
+        # rescales that estimate. Every trial requires majorization.
         rate = state["rate"] * (scheduled / state["schedule_rate"])
         cap = trial_cap(params, scheduled)
         rate = jnp.minimum(rate, cap)
@@ -191,7 +194,7 @@ def make_fista_kernel(loss, smooth_loss, bounds, operators, step_size, *,
         t = .5 * (1 + jnp.sqrt(1 + 4 * state["t"]**2))
         t = jnp.where(restarted, 1., t)
         momentum = jnp.where(restarted, 0., (state["t"] - 1) / t)
-        # Extrapolate y freely; enforce the box in prox(g + I_box).
+        # Extrapolate y freely. Enforce the box in prox(g + I_box).
         y = jax.tree.map(lambda a, d: a + momentum.astype(jnp.real(a).dtype) * d, x, delta)
         norm = jnp.sqrt(_dot(jax.tree.map(lambda a, b: a - b, x, point),
                               jax.tree.map(lambda a, b: a - b, x, point))) / rate
@@ -262,8 +265,7 @@ def make_fista_kernel(loss, smooth_loss, bounds, operators, step_size, *,
                       [jnp.finfo(jnp.real(x).dtype).eps for x in jax.tree.leaves(params)])
         grow = jnp.abs(old_loss - new_loss) > 16 * epsilon * jnp.maximum(jnp.abs(old_loss), jnp.finfo(old_loss.dtype).tiny)
         # Full backtracking must be able to recover a collapsed local step.
-        # Recover gradually rather than imposing the nominal rate as a floor
-        # on every trial (which repeats expensive rejected proximal solves).
+        # Recover gradually to avoid repeating rejected proximal solves.
         grow |= rate < scheduled * 1e-3
         new = dict(y=y, previous=params, t=t, rate=rate, schedule_rate=scheduled,
                    cached_loss=new_loss, safe_rate=jnp.where(grow, rate, state["safe_rate"]), grow=grow,
@@ -275,8 +277,7 @@ def make_fista_kernel(loss, smooth_loss, bounds, operators, step_size, *,
         return old_loss, x, new, jnp.where(limited, 4, jnp.where(accepted, 0, 3)).astype(jnp.int32)
 
     def convergence(params, state, target):
-        # Certify at the returned point, rather than y, with the actual smooth
-        # gradient even when a caller requested clipping during the iterations.
+        # Certify at the returned point with the unclipped smooth gradient.
         gradient = jax.tree.map(jnp.conj, jax.grad(smooth_loss)(params))
         rate = state["rate"]
         forward = jax.tree.map(lambda x, g: x - rate.astype(jnp.real(x).dtype) * g, params, gradient)

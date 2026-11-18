@@ -34,7 +34,7 @@ def _version_tuple(value: object) -> tuple[int, int, int]:
     match = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?(?:[-+].*)?", text)
     if match is None:
         raise MRaxVersionTagError(
-            f"Invalid MRax producer-version tag {text!r}; expected a semantic version such as '1.2.3'."
+            f"Invalid MRax producer-version tag {text!r}. Expected a semantic version such as '1.2.3'."
         )
     return int(match.group(1)), int(match.group(2)), int(match.group(3) or 0)
 
@@ -43,13 +43,16 @@ def mrax_versions_are_compatible(producer: object, current: object = MRAX_VERSIO
     """Return persisted-data contract compatibility across package versions.
 
     Stable releases share a data-compatibility line by major version. While MRax is
-    pre-1.0, the minor version identifies that line; patch releases remain compatible.
+    pre-1.0, the minor version identifies that line. Patch releases remain compatible.
+    MRax 0.4 also reads the unchanged persisted-data schemas written by 0.3.
     """
 
     producer_version = _version_tuple(producer)
     current_version = _version_tuple(current)
     if current_version[0] == 0 or producer_version[0] == 0:
-        return producer_version[:2] == current_version[:2]
+        return producer_version[:2] == current_version[:2] or (
+            current_version[:2] == (0, 4) and producer_version[:2] == (0, 3)
+        )
     return producer_version[0] == current_version[0]
 
 
@@ -58,7 +61,7 @@ def validate_mrax_file_version(
     *,
     file_kind: str,
 ) -> MRaxVersionInfo:
-    """Validate producer versions; callers report missing tags separately."""
+    """Validate producer versions. Callers report missing tags separately."""
 
     raw_version = payload.get(MRAX_VERSION_TAG)
     if raw_version is None or not str(raw_version).strip():
@@ -69,7 +72,7 @@ def validate_mrax_file_version(
         raise MRaxVersionIncompatibilityError(
             f"MRax version incompatibility: {file_kind} was created with MRax {producer}, "
             f"but this installation is MRax {current}. Files are compatible within supported "
-            "data-version lines; this file is outside the line supported by the running version."
+            "data-version lines. This file is outside the line supported by the running version."
         )
     return MRaxVersionInfo(producer)
 

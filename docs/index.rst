@@ -6,7 +6,7 @@ MRax
    <section class="mrax-hero">
      <div class="mrax-hero-inner">
        <div class="mrax-hero-mark">
-         <img src="_static/MRax_logo_square.png" alt="MRax logo">
+          <img class="dark-light" src="_static/MRax_logo.svg" alt="MRax logo">
        </div>
        <div class="mrax-hero-content">
          <p class="mrax-hero-title">A Python library for quantitative MRI research.</p>
@@ -62,7 +62,7 @@ Core workflow
    :func:`mrax.core.study_runner.execute_study_plan`, or call
    :func:`mrax.core.loss_builder.run_fit` directly for a single experiment.
 4. Inspect fitted fields, derived maps, and convergence history.
-5. Save the study and results in a ``.mrax`` bundle; see :doc:`storage`. Use
+5. Save the study and results in a ``.mrax`` bundle. See :doc:`storage`. Use
    :doc:`analysis` for ROI or group summaries.
 
 Start Here
@@ -74,7 +74,6 @@ Start Here
    overview
    guides
    models
-   gui
    api
    notebooks
    references

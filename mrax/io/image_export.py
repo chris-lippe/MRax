@@ -12,8 +12,7 @@ from mrax.data_struct.geometry import SpatialGeometry
 from mrax.io.nifti import mrax_to_nifti_volume, save_nifti
 
 
-def image_frames(array, dims=None):
-    """Yield (index, suffix, spatial volume), retaining singleton spatial axes."""
+def _image_layout(array, dims=None):
     arr = np.asarray(array)
     if np.iscomplexobj(arr):
         raise ValueError("Choose a real image component before image export")
@@ -33,10 +32,14 @@ def image_frames(array, dims=None):
             candidates = [axes for axes in combinations(non_spatial, len(leading))
                           if tuple(dims[name] for name in axes) == leading]
             if len(candidates) != 1:
-                repeats = [axes for axes in candidates if all(name in ("t", "frame") for name in axes)]
+                repeats = [
+                    axes
+                    for axes in candidates
+                    if all(name in ("t", "frame", "slice_package") for name in axes)
+                ]
                 candidates = repeats if len(repeats) == 1 else candidates
             if len(candidates) != 1:
-                raise ValueError("Ambiguous map dimensions; provide the map's explicit dimension names")
+                raise ValueError("Ambiguous map dimensions. Provide the map's explicit dimension names")
             names = list(candidates[0]) + spatial
         else:
             raise ValueError("Image dimensions do not match the exported array")
@@ -46,6 +49,12 @@ def image_frames(array, dims=None):
             names = list(("x", "y", "z")[:arr.ndim])
         if len(names) != arr.ndim:
             raise ValueError("Name spatial and frame dimensions before image export")
+    return arr, names
+
+
+def image_frames(array, dims=None):
+    """Yield (index, suffix, spatial volume), retaining singleton spatial axes."""
+    arr, names = _image_layout(array, dims)
     spatial_axes = [i for i, name in enumerate(names) if name in ("x", "y", "z")]
     if len(spatial_axes) not in (2, 3):
         raise ValueError("Image export requires two or three spatial dimensions")
@@ -61,17 +70,60 @@ def image_frames(array, dims=None):
         yield flat, "_".join(labels), np.asarray(arr[tuple(selection)])
 
 
-def export_image_files(path, array, *, dims=None, affine=None, geometry=None, format="nifti", unit="", description="MRax image"):
+def export_image_files(path, array, *, dims=None, affine=None, geometry=None, format="nifti", unit="", description="MRax image", overwrite=False):
     """Write one NIfTI per spatial frame, or one DICOM series per frame."""
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    from .output_guard import require_new_file
+
+    if format not in {"nifti", "dicom"}:
+        raise ValueError("Image format must be 'nifti' or 'dicom'")
     if isinstance(geometry, Mapping):
         geometry = SpatialGeometry.from_metadata(geometry)
+    shaped, names = _image_layout(array, dims)
+    frame_dims = [
+        (name, shaped.shape[axis]) for axis, name in enumerate(names) if name not in {"x", "y", "z"}
+    ]
+
+    def measured_frame(index, volume):
+        geometry_index = index
+        if geometry is not None and geometry.frame_dims:
+            coordinates = dict(
+                zip(
+                    (name for name, _ in frame_dims),
+                    np.unravel_index(index, tuple(size for _, size in frame_dims)),
+                )
+            )
+            geometry_index = int(
+                np.ravel_multi_index(
+                    tuple(coordinates.get(name, 0) for name, _ in geometry.frame_dims),
+                    tuple(size for _, size in geometry.frame_dims),
+                )
+            )
+        shape = geometry.shape_for_frame(geometry_index) if geometry is not None else None
+        if shape:
+            volume = volume[tuple(slice(0, size) for size in shape)]
+        return geometry_index, volume
+
+    # Check every frame and slice before writing any file in a series.
+    for index, suffix, volume in image_frames(array, dims):
+        _, volume = measured_frame(index, volume)
+        stem = path.name[:-7] if path.name.endswith(".nii.gz") else path.stem
+        stem += "_" + suffix if suffix else ""
+        if format == "nifti":
+            extension = ".nii.gz" if path.name.endswith(".nii.gz") else ".nii"
+            require_new_file(path.with_name(stem + extension), overwrite=overwrite)
+        else:
+            slices = mrax_to_nifti_volume(volume).shape[2]
+            for z in range(slices):
+                name = stem + (f"_slice-{z:04d}" if slices != 1 else "") + ".dcm"
+                require_new_file(path.with_name(name), overwrite=overwrite, warn=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     default_affine = np.eye(4) if affine is None else np.asarray(affine, dtype=float)
     outputs = []
     study_uid = reference_uid = None
     for index, suffix, volume in image_frames(array, dims):
-        frame_affine = geometry.affine_for_frame(index) if geometry is not None else None
+        geometry_index, volume = measured_frame(index, volume)
+        frame_affine = geometry.affine_for_frame(geometry_index) if geometry is not None else None
         matrix = default_affine if frame_affine is None else frame_affine
         stem = path.name[:-7] if path.name.endswith(".nii.gz") else path.stem
         stem += "_" + suffix if suffix else ""
@@ -79,7 +131,7 @@ def export_image_files(path, array, *, dims=None, affine=None, geometry=None, fo
             extension = ".nii.gz" if path.name.endswith(".nii.gz") else ".nii"
             output = path.with_name(stem + extension)
             exported = volume.astype(np.uint8) if volume.dtype == bool else volume
-            save_nifti(output, exported, matrix, dtype=exported.dtype)
+            save_nifti(output, exported, matrix, dtype=exported.dtype, overwrite=overwrite)
             outputs.append(output)
         elif format == "dicom":
             files, study_uid, reference_uid = _export_dicom_frame(path.with_name(stem + ".dcm"), volume, matrix,
@@ -105,7 +157,7 @@ def _export_dicom_frame(path, volume, affine, unit, description, study_uid, fram
         raise ValueError("DICOM export requires a finite, nondegenerate affine")
     directions = lps[:3, :3] / spacing
     if not np.allclose(directions.T @ directions, np.eye(3), atol=1e-5):
-        raise ValueError("DICOM export requires orthogonal image axes; resample sheared geometry first")
+        raise ValueError("DICOM export requires orthogonal image axes. Resample sheared geometry first")
     lo, hi = float(np.min(xyz)), float(np.max(xyz))
     integer = np.all(xyz == np.rint(xyz))
     unsigned = integer and lo >= 0 and hi > 32767 and hi <= 65535

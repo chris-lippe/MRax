@@ -8,8 +8,8 @@ import numpy as np
 def spectral_window(shape, kinds, parameters=(), powers=()):
     """Return separable windows on the centered encoding grid.
 
-    Sine-bell parameters below two specify a full lobe; two specifies a cosine
-    half-lobe; larger values begin at phase pi/parameter and end at pi. Windows
+    Sine-bell parameters below two specify a full lobe. Two specifies a cosine
+    half-lobe. Larger values begin at phase pi/parameter and end at pi. Windows
     are periodic-grid samples with t=n/N, so a full sine lobe peaks at DC.
     """
     shape, kinds = tuple(shape), tuple(kinds)

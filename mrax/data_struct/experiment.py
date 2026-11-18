@@ -49,7 +49,7 @@ class Experiment:
         dims = ", ".join(f"{name}={size}" for name, size in self.dims.items())
         obs = ", ".join(f"{name}: {list(val.shape)}" for name, val in self.observables.items())
         obs_str = obs if obs else "none"
-        return f"dims({dims}); observables({obs_str})"
+        return f"dims({dims}). Observables({obs_str})"
 
     def merged_observables(self, study_globals: Mapping[str, Quantity] | None = None) -> dict[str, Quantity]:
         """Return observables merged with study-level globals (if available)."""
@@ -195,7 +195,7 @@ class Experiment:
         if exp_type in ("mse", "mge"):
             lines.append("available models: t2_se, t2star_se")
         if exp_type in ("dce",):
-            lines.append("available models: identity (default); use mrax.analysis.dce for concentration analysis")
+            lines.append("available models: identity (default). Use mrax.analysis.dce for concentration analysis")
         if exp_type in ("dti", "dki"):
             lines.append("available models: dti_tensor (default), dki")
 

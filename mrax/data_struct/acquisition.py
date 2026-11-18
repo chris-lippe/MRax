@@ -56,8 +56,11 @@ class ReconstructionRecipe:
     kspace_window: tuple[str, ...] = ()
     window_parameters: tuple[float, ...] = ()
     window_powers: tuple[int, ...] = ()
+    output_slice_counts: tuple[int, ...] = ()
 
     def __post_init__(self):
+        if any(index(count) < 1 or count > self.stack_slices for count in self.output_slice_counts):
+            raise ValueError("Output slice counts must fit the declared spatial stack")
         if any(index(power) < 1 for power in self.window_powers):
             raise ValueError("Window powers must be positive integers")
         if len(set(self.output_flips)) != len(self.output_flips) or any(index(axis) < 0 for axis in self.output_flips):
@@ -152,12 +155,12 @@ class AcquisitionData:
     """Measured samples with explicit frame, receiver, and encoding axes.
 
     Cartesian samples are ``(frame, coil, *encoding_shape)``. Sampled data are
-    ``(frame, coil, sample)``; trajectory columns follow ``encoding_axes`` and
+    ``(frame, coil, sample)``. Trajectory columns follow ``encoding_axes`` and
     use cycles/pixel of the explicitly declared encoding grid. This normalized
     coordinate view is independent of the source's physical coordinate units.
     Validity is separate from signal values and from quadrature/statistical
-    weights. The numerical contract contains normalized arrays and geometry;
-    import metadata retains source paths and vendor dictionaries.
+    weights. The numerical contract contains normalized arrays and geometry.
+    Import metadata retains source paths and vendor dictionaries.
     """
 
     samples: np.ndarray
@@ -297,7 +300,7 @@ class AcquisitionData:
         """Select reconstructed frames while retaining their raw slice groups.
 
         Encoding coordinates and calibration streams remain unchanged. Arrays
-        with an explicit acquisition-frame axis follow the selection; shared
+        with an explicit acquisition-frame axis follow the selection. Shared
         masks and weights remain shared. Selection follows the explicitly declared
         acquisition-frame axis.
         """
@@ -309,13 +312,20 @@ class AcquisitionData:
         recipe = self.recipe
         order = np.asarray(recipe.output_frame_indices or tuple(range(self.frame_count)))
         product_frames = 2 if recipe.output_product == "frequency_hz" else 1
-        group_size = recipe.stack_slices * recipe.average_repeats * product_frames
-        if len(order) % group_size:
-            raise ValueError("Output frames do not contain complete slice groups")
-        groups = order.reshape((-1, group_size))
+        counts = recipe.output_slice_counts
+        if counts:
+            sizes = np.asarray(counts) * recipe.average_repeats * product_frames
+            if int(sizes.sum()) != len(order):
+                raise ValueError("Output frames do not contain complete slice groups")
+            groups = np.split(order, np.cumsum(sizes)[:-1])
+        else:
+            group_size = recipe.stack_slices * recipe.average_repeats * product_frames
+            if len(order) % group_size:
+                raise ValueError("Output frames do not contain complete slice groups")
+            groups = list(order.reshape((-1, group_size)))
         if np.any(requested < 0) or np.any(requested >= len(groups)):
             raise ValueError("Selected frame exceeds reconstructed frame count")
-        selected = groups[requested].ravel()
+        selected = np.concatenate([groups[int(i)] for i in requested])
         options = {}
         for name in ("acquired", "statistical_weights", "readout_polarity"):
             value = getattr(self, name)
@@ -327,10 +337,24 @@ class AcquisitionData:
             options[field_name] = {name: np.take(value, selected, axis=self.auxiliary_frame_axes[name])
                 if name in self.auxiliary_frame_axes else value
                 for name, value in getattr(self, field_name).items()}
-        return replace(self, samples=self.samples[selected],
-            frame_coordinates={name: np.asarray(value)[selected] for name, value in self.frame_coordinates.items()},
-            recipe=replace(recipe, output_frame_indices=(), frame_image_shifts=frame_shifts,
-                frame_permutations=permutations), **options)
+        return replace(
+            self,
+            samples=self.samples[selected],
+            geometry=self.geometry.select_frames(requested)
+            if counts and self.geometry is not None
+            else self.geometry,
+            frame_coordinates={
+                name: np.asarray(value)[selected] for name, value in self.frame_coordinates.items()
+            },
+            recipe=replace(
+                recipe,
+                output_frame_indices=(),
+                frame_image_shifts=frame_shifts,
+                output_slice_counts=tuple(counts[int(i)] for i in requested) if counts else (),
+                frame_permutations=permutations,
+            ),
+            **options,
+        )
 
     def require_prepared(self) -> None:
         if self.domain != "kspace":

@@ -1,0 +1,43 @@
+{
+  "name": "mrax-browser",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.22.2 <25"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "schema": "python scripts/export_schema.py && openapi-typescript openapi.json -o src/api.generated.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests vite.config.ts playwright.config.ts",
+    "format:check": "prettier --check src/*.tsx src/api.ts src/styles.css tests/*.ts *.ts *.json *.js",
+    "build": "npm run typecheck && vite build",
+    "test": "playwright test --project=chromium",
+    "test:ui": "playwright test --project=chromium --ui",
+    "test:smoke": "playwright test workflow.spec.ts --project=chromium",
+    "test:cross-browser": "playwright test workflow.spec.ts --project=firefox --project=webkit",
+    "verify:schema": "python scripts/export_schema.py --check && openapi-typescript openapi.json -o src/api.generated.ts --check"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "1.3.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.14.0",
+    "openapi-typescript": "7.13.0",
+    "prettier": "3.9.10",
+    "typescript-eslint": "8.72.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.6"
+  }
+}

@@ -55,13 +55,25 @@ To start Jupyter from the container and access it on the host:
 
 Then open ``http://localhost:8888`` on the host.
 
+Starting the GUI
+----------------
+
+Build the frontend assets as described in :doc:`contributing`, then run:
+
+.. code-block:: bash
+
+   mrax-gui --host 0.0.0.0 --no-browser
+
+Forward port 8765 to localhost and open it in your browser. With ``docker run``,
+add ``-p 127.0.0.1:8765:8765`` when creating the container.
+
 VS Code Dev Container
 ---------------------
 
 Choose a dev container configuration, both using ``docker/Dockerfile.dev``:
 
-- **CPU (default):** ``.devcontainer/devcontainer.json``; standard CPU JAX.
-- **NVIDIA GPU:** ``.devcontainer/gpu/devcontainer.json``; GPU passthrough and
+- **CPU (default):** ``.devcontainer/devcontainer.json``. Standard CPU JAX.
+- **NVIDIA GPU:** ``.devcontainer/gpu/devcontainer.json``. GPU passthrough and
   CUDA 12-enabled JAX.
 
 With Docker running, use ``Dev Containers: Reopen in Container`` and select a
@@ -71,6 +83,10 @@ extras:
 .. code-block:: bash
 
    python -m pip install -e ".[all,dev,docs,notebooks]"
+
+The post-create step also creates ``data/`` for local test measurements and ``tmp/``
+for results and scratch work. Both are ordinary workspace folders, ignored by Git
+and excluded from container images. Add test data manually to ``data/``.
 
 NVIDIA GPU Development
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -87,7 +103,7 @@ The host needs an NVIDIA GPU and compatible driver. Configure the
 <https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html>`_
 on Linux or `Docker Desktop WSL 2 GPU support
 <https://docs.docker.com/desktop/features/gpu/>`_ on Windows. JAX's pip extra
-supplies CUDA libraries; see `JAX requirements
+supplies CUDA libraries. See `JAX requirements
 <https://docs.jax.dev/en/latest/installation.html#nvidia-gpu>`_.
 
 After switching configurations, run ``Dev Containers: Rebuild Container``. Verify

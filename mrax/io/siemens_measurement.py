@@ -17,7 +17,7 @@ def read_siemens_measurement(path, *, sequence_info=None, scan_index=None, spati
     """Read the selected measurement in acquisition order, retaining oversampling.
 
     A matching Pulseq descriptor supplies the encoding executed by the external
-    interpreter; scanner protocol placeholders remain auxiliary metadata.
+    interpreter. Scanner protocol placeholders remain auxiliary metadata.
     """
     try:
         from mapvbvd import mapVBVD
@@ -25,7 +25,7 @@ def read_siemens_measurement(path, *, sequence_info=None, scan_index=None, spati
         raise ImportError("Siemens measurement import requires pymapvbvd") from exc
     if sequence_info is None:
         raise ValueError("Siemens Pulseq measurements require a matching sequence_path")
-    # The reader prints progress even in quiet mode; keep library imports quiet.
+    # The reader prints progress even in quiet mode. Keep library imports quiet.
     with contextlib.redirect_stdout(io.StringIO()):
         scans = mapVBVD(str(path), quiet=True, disableReflect=True, ignoreROoffcenter=True, removeOS=False, regrid=False)
     scans = scans if isinstance(scans, list) else [scans]
@@ -71,7 +71,7 @@ def read_siemens_measurement(path, *, sequence_info=None, scan_index=None, spati
     if expected == columns * int(image.NAcq):
         selected_events = np.arange(int(image.NAcq))
     else:
-        # Feedback/VOP records describe monitoring rather than emitted ADC events.
+        # Feedback/VOP records contain monitoring data.
         counter_sets = [('image', 'phasecor', 'refscan'), ('image', 'phasecor', 'refscan', 'noise')]
         for roles in counter_sets:
             candidate = np.unique(np.concatenate([scan[role].scancounter for role in roles if role in scan]))
@@ -169,14 +169,14 @@ def _calibration(reference, info, raw, counters, axis_order, acquisition):
     lower, upper = np.rint(phase.min(0)).astype(int), np.rint(phase.max(0)).astype(int)
     size = upper - lower + 1
     if np.any(lower != -(size // 2)):
-        warnings.warn("Calibration is not a centred block; raw reference records were retained", RuntimeWarning, stacklevel=3)
+        warnings.warn("Calibration is not a centred block. Raw reference records were retained", RuntimeWarning, stacklevel=3)
         return None
     shape = tuple(size[::-1]) + (columns,)
     serial = np.asarray(raw).transpose(1, 0, 2)
     prepared = prepare_line_acquisition(serial, physical, fov, shape, shape,
         (columns,) * len(events), frame_indices=np.zeros(len(physical), int))
     if prepared is None or prepared.readout_coordinates is not None or not np.all(prepared.acquired):
-        warnings.warn("Calibration requires explicit reconstruction; raw reference records were retained", RuntimeWarning, stacklevel=3)
+        warnings.warn("Calibration requires explicit reconstruction. Raw reference records were retained", RuntimeWarning, stacklevel=3)
         return None
     return prepared.samples[0]
 
@@ -207,11 +207,11 @@ def _attach_geometry(acquisition, image, indices, frame_indices, info, axis_orde
     if poses.shape != (len(indices), 7) or not np.isfinite(poses).all() or np.any(np.linalg.norm(poses[:, 3:], axis=1) < 1e-6):
         return acquisition
     if gradient_directions is None and str(info.definitions.get('OrientationMapping', 'TRA')).upper() != 'TRA':
-        warnings.warn("Nonstandard sequence orientation requires explicit gradient_directions (LPS columns); scanner poses were retained without an assumed affine", RuntimeWarning, stacklevel=3)
+        warnings.warn("Nonstandard sequence orientation requires explicit gradient_directions (LPS columns). Scanner poses were retained without an assumed affine", RuntimeWarning, stacklevel=3)
         return acquisition
     frames = [np.flatnonzero(frame_indices == i) for i in range(acquisition.frame_count)]
     if any(not len(frame) or not np.allclose(poses[frame], poses[frame[0]], atol=1e-3) for frame in frames):
-        warnings.warn("Scanner pose varies inside a frame; no single image affine was assigned", RuntimeWarning, stacklevel=3)
+        warnings.warn("Scanner pose varies inside a frame. No single image affine was assigned", RuntimeWarning, stacklevel=3)
         return acquisition
     poses = poses[[frame[0] for frame in frames]]
     # Siemens MDH stores WXYZ, with phase/read/slice rotation columns.

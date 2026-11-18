@@ -53,8 +53,8 @@ class Study:
 
         if "field_strength_mhz" not in globals_map:
             warnings.warn(
-                "Study created without field_strength_mhz. Models that depend on it will raise an error; "
-                "set Study.study_globals['field_strength_mhz'] to a Quantity with MHz units.",
+                "Study created without field_strength_mhz. Models that depend on it will raise an error. "
+                "Set Study.study_globals['field_strength_mhz'] to a Quantity with MHz units.",
                 RuntimeWarning,
                 stacklevel=2,
             )

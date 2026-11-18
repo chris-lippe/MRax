@@ -17,7 +17,7 @@ Extending Bruker definitions
 ``mrax/io/definitions/bruker.toml`` maps acquisition settings to storage, event,
 readout and product resolvers. Its predicates support values, lists, existence,
 prefixes, numeric ranges and version bounds. ``definition_paths`` loads additional
-TOML files; ``profiles`` selects a named definition. Ambiguous matches raise an error.
+TOML files. ``profiles`` selects a named definition. Ambiguous matches raise an error.
 
 A resolver implements an encoding representation, so several sequences can share
 one. A new representation, such as a coupled phase/partition event table, needs
@@ -26,8 +26,8 @@ different decoding from independent nested phase tables.
 The implementation separates parsing (``bruker_parameters``), images/geometry
 (``bruker_images``), experiment metadata (``bruker_metadata``), sampling hints
 (``bruker_sampling``) and raw records/events (``bruker_storage``).
-``bruker_acquisition`` assembles acquisitions; ``bruker_graph`` resolves declared
-window applications; ``bruker_import`` builds experiments and studies.
+``bruker_acquisition`` assembles acquisitions. ``bruker_graph`` resolves declared
+window applications. ``bruker_import`` builds experiments and studies.
 Numerical algorithms are implemented in ``mrax.reco``.
 
 Extracted-file readers and Pulseq metadata
@@ -44,7 +44,7 @@ separate operation.
 
 Executed Pulseq coordinates establish physical trajectory units and gradient-channel
 order. Automatic Cartesian assignment cross-checks sequence trajectories, stored
-coordinates and encoding counters; fractional samples retain their trajectories.
+coordinates and encoding counters. Fractional samples retain their trajectories.
 EPI navigator records retain polarity and ADC timing for reconstruction calibration.
 
 DICOM metadata adapters
@@ -53,7 +53,7 @@ DICOM metadata adapters
 ``mrax.io.dicom`` handles discovery, pixel decoding, scaling, geometry and standard
 MR observables. ``mrax.io.dicom_bruker`` supplements these with Bruker-specific
 metadata. Other origins can implement ``DicomMetadataAdapter`` and return a
-``DicomMetadataPatch``; adapters are passed through ``metadata_adapters`` in
+``DicomMetadataPatch``. Adapters are passed through ``metadata_adapters`` in
 ``load_dicom_series`` or ``load_dicom_study``.
 
 Import failures

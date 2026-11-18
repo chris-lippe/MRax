@@ -13,14 +13,14 @@ with MRax's Python readers. Raw reconstruction is a separate operation.
    dataset = study.datasets[0]
    result = reconstruct_acquisition(dataset.acquisition, device="cpu")
 
-``import_bruker_study`` returns ``(study, metadata)``;
+``import_bruker_study`` returns ``(study, metadata)``.
 ``import_bruker_experiment`` returns ``(experiment, dataset, model, metadata)``.
 Study folders and standalone exports are accepted, including nonnumeric experiment
-names. ``dataset.data`` holds the scanner image; ``dataset.acquisition`` holds
+names. ``dataset.data`` holds the scanner image. ``dataset.acquisition`` holds
 prepared measurements. Set ``load_raw_kspace=False`` for image-only import.
 
 Study import warns and skips incomplete or unsupported experiments while retaining
-valid scans. Images remain available when raw data are missing; metadata reports
+valid scans. Images remain available when raw data are missing. Metadata reports
 raw availability. ``metadata['import_issues']`` lists skipped scans and their
 failure reasons. Unknown layouts raise an error. Supply
 ``field_strength_mhz`` for models that require the scanner field strength.
@@ -33,8 +33,8 @@ voxel spacing and physical affines. Differently oriented slice packages keep
 per-frame geometry. Reconstruction uses the declared image layout and slice order.
 
 Raw import resolves FID/job records, receiver calibration, encoding events,
-polarity and nonuniform coordinates. Measured support includes measured zeros;
-auxiliary ADC windows are retained. ADC-only data require spatial encoding before
+polarity and nonuniform coordinates. Measured support includes measured zeros.
+Auxiliary ADC windows are retained. ADC-only data require spatial encoding before
 MRI reconstruction. See :doc:`acquisition_reconstruction` for conventions.
 
 Custom definitions

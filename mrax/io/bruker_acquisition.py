@@ -1,12 +1,14 @@
 """Pure translation of Bruker storage and metadata into the acquisition contract."""
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
 from mrax.data_struct.acquisition import AcquisitionData, ReconstructionRecipe
 
+from .bruker_frames import output_frame_grid, slice_packages
 from .bruker_storage import cartesian_event_map, coordinate_event_map, decode_records
 from .definitions import DefinitionLibrary
 
@@ -28,16 +30,13 @@ def _series(value, count, default=0):
     return np.tile(data, count // len(data))
 
 
-def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), profiles=None):
+def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), profiles=None, slice_package=None):
     """Read prepared samples and geometry for explicit reconstruction.
 
-    Calibration and source loop interpretation are resolved here; image reconstruction only
+    Calibration and source loop interpretation are resolved here. Image reconstruction only
     consumes the returned vendor-independent acquisition contract.
     """
     from .bruker_images import (
-        _bruker_decoded_in_plane_axis_order,
-        _bruker_has_mixed_slice_geometry,
-        _visu_fg_count,
         bruker_spatial_geometry,
     )
     from .bruker_parameters import parse_jcamp
@@ -59,24 +58,84 @@ def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), pro
     method, acqp = parse_jcamp(folder / "method"), parse_jcamp(folder / "acqp")
     pdata = folder / "pdata" / str(pdata_index)
     reco, visu = parse_jcamp(pdata / "reco"), parse_jcamp(pdata / "visu_pars")
-    image_frames = int(visu.get("VisuCoreFrameCount", 1))
-    visu["_mrax_mixed_slice_geometry"] = _bruker_has_mixed_slice_geometry(visu, image_frames)
+    packages = slice_packages(visu)
+    package_grids = (
+        [output_frame_grid(visu, package)[0] for package in range(len(packages))]
+        if slice_package is None and len(packages) > 1
+        else []
+    )
+    frame_grid, has_slices = output_frame_grid(visu, 0 if package_grids else slice_package)
+    if package_grids:
+        visu["_mrax_package_frame_indices"] = [grid.tolist() for grid in package_grids]
+    else:
+        visu["_mrax_output_frame_indices"] = frame_grid.tolist()
+    visu["_mrax_selected_package"] = slice_package
     sizes = tuple(int(v) for v in _numbers(visu.get("VisuCoreSize")))
     if len(sizes) == 2:
-        sizes = tuple(sizes[i] for i in _bruker_decoded_in_plane_axis_order(visu))
-        slices = _visu_fg_count(visu, "FG_SLICE")
-        if slices and not _bruker_has_mixed_slice_geometry(visu, image_frames):
-            sizes += (int(slices),)
+        if package_grids or (has_slices and frame_grid.shape[1] > 1):
+            sizes += (
+                max(grid.shape[1] for grid in package_grids)
+                if package_grids
+                else frame_grid.shape[1],
+            )
     geometry = bruker_spatial_geometry(visu, spatial_shape=sizes)
+
+    def image_layout(result):
+        acquisition, report = result
+        repeats = acquisition.recipe.average_repeats
+        if (has_slices and len(acquisition.encoding_shape) == 2 and
+                acquisition.frame_count == int(visu.get("VisuCoreFrameCount", 1)) * repeats and
+                acquisition.domain == "kspace"):
+            # Start with independent acquired objects, then use the exact same
+            # package selection and spatial ordering as the vendor image decoder.
+            ungrouped = replace(acquisition, recipe=replace(acquisition.recipe,
+                stack_slices=1, average_repeats=1, output_frame_indices=(), output_flips=()))
+            grids = package_grids or [frame_grid]
+            indices = np.concatenate(
+                [
+                    (grid[:, None, :] * repeats + np.arange(repeats)[None, :, None]).ravel()
+                    for grid in grids
+                ]
+            )
+            selected = ungrouped.select_frames(indices)
+            acquisition = replace(
+                selected,
+                geometry=geometry,
+                recipe=replace(
+                    selected.recipe,
+                    stack_slices=max(grid.shape[1] for grid in grids),
+                    average_repeats=repeats,
+                    output_slice_counts=tuple(grid.shape[1] for grid in package_grids for _ in grid)
+                    if package_grids
+                    else (),
+                ),
+            )
+        elif (slice_package is not None or package_grids) and acquisition.domain == "kspace":
+            raise ValueError("The raw acquisition does not establish a mapping to the selected slice package")
+        if acquisition.domain == "kspace" and geometry.spatial_shape:
+            recipe = acquisition.recipe
+            shape = tuple(recipe.output_shape or acquisition.encoding_shape)
+            if recipe.output_permutation:
+                shape = tuple(shape[i] for i in recipe.output_permutation)
+            for permutation in set(recipe.frame_permutations or (tuple(range(len(shape))),)):
+                formatted = tuple(shape[i] for i in permutation)
+                if recipe.stack_slices > 1 or recipe.output_slice_counts:
+                    formatted += (recipe.stack_slices,)
+                if recipe.output_stack_permutation:
+                    formatted = tuple(formatted[i] for i in recipe.output_stack_permutation)
+                if formatted != tuple(geometry.spatial_shape):
+                    raise ValueError("The raw reconstruction layout does not match this vendor image geometry")
+        return acquisition, report
+
     regrid = _bruker_regrid_metadata(method, reco)
     if method.get("PVM_EpiMatrix"):
         from .bruker_epi import read_epi_acquisition
-        return read_epi_acquisition(folder, method, acqp, reco, visu, geometry=geometry,
+        return image_layout(read_epi_acquisition(folder, method, acqp, reco, visu, geometry=geometry,
             library=DefinitionLibrary(definition_paths), storage_profile=profiles.get("storage"),
-            event_profile=profiles.get("events"), readout_profile=profiles.get("readout"))
+            event_profile=profiles.get("events"), readout_profile=profiles.get("readout")))
     if regrid is None:
-        return read_cartesian_acquisition(folder, method, acqp, reco, visu,
-            geometry=geometry, definition_paths=definition_paths, profiles=profiles)
+        return image_layout(read_cartesian_acquisition(folder, method, acqp, reco, visu,
+            geometry=geometry, definition_paths=definition_paths, profiles=profiles))
     library = DefinitionLibrary(definition_paths)
     delayed = _bruker_inverse_fid_active(reco)
     events = library.select("events", {**method, **acqp, "encoding": "sampled", "delayed_readout": delayed}, profile=profiles.get("events"))
@@ -110,8 +169,7 @@ def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), pro
     if sorting["ignored_scan_count"]:
         # A reversible raw import is still possible when a reconstruction graph
         # describes additional profile groups with unresolved roles.
-        # Preserve every ADC record rather than discarding it or labelling an
-        # approximate inverse-FID transform as measured Fourier data.
+        # Preserve every ADC record for profile groups with unresolved roles.
         return AcquisitionData(records.samples, (records.samples.shape[-1],),
             ("readout_sample",), domain="adc", geometry=geometry, auxiliary_samples=auxiliary), {
             "raw_status": "decoded", "storage_profile": records.profile,
@@ -154,12 +212,12 @@ def read_bruker_acquisition(folder, *, pdata_index="1", definition_paths=(), pro
         checkerboard="RecoPhasCorrFilter" in stages,
         elliptical_support="RecoMaskFilter" in stages,
         coil_combine="rss" if "RecoSumOfSquaresFilter" in stages else "sum",
-        stack_slices=slices, output_permutation=(1, 0) if ndim == 2 else ())
-    return AcquisitionData(samples, output, tuple(f"encoding_{i}" for i in range(ndim)),
+        stack_slices=slices)
+    return image_layout((AcquisitionData(samples, output, tuple(f"encoding_{i}" for i in range(ndim)),
         kind="sampled", trajectory=trajectory, density=density, geometry=geometry,
         readout_model=readout_model, auxiliary_samples=auxiliary,
         recipe=recipe), {"storage_profile": records.profile, "event_profile": events.name,
-        "raw_status": "prepared", "approximate_preprocessing": bool(inverse.get("applied"))}
+        "raw_status": "prepared", "approximate_preprocessing": bool(inverse.get("applied"))}))
 
 
 def read_cartesian_acquisition(folder, method, acqp, reco, visu, *, geometry=None, definition_paths=(), profiles=None):
@@ -248,22 +306,27 @@ def read_cartesian_acquisition(folder, method, acqp, reco, visu, *, geometry=Non
     # the existing image-container layout.
     reconstruction_transpose = _series(reco.get("RECO_transposition"), count).astype(int)
     image_transpose = _series(visu.get("VisuCoreTransposition"), count).astype(int)
-    from .bruker_images import _bruker_decoded_in_plane_axis_order
-
-    decoded_base = _bruker_decoded_in_plane_axis_order({**visu,
-        "VisuCoreTransposition": 0, "_mrax_frame_transposition": 0})
-    base_permutation = tuple(1 - axis for axis in decoded_base)
+    image_sizes = tuple(int(value) for value in _numbers(visu.get("VisuCoreSize")))
+    if len(image_sizes) == 2 and image_sizes[0] == image_sizes[1]:
+        image_transpose = np.zeros_like(image_transpose)
+    base_permutation = (1, 0)
     permutations = tuple(base_permutation[::-1] if bool(a) != bool(b) else base_permutation
         for a, b in zip(reconstruction_transpose, image_transpose)) if ndim == 2 else ()
     if ndim == 3:
         volume_permutations = []
-        for code in reconstruction_transpose:
+        for code, image_code in zip(reconstruction_transpose, image_transpose, strict=True):
             if not 0 <= code <= ndim:
                 raise ValueError("Volume transposition code exceeds the encoding dimensions")
             permutation = list(range(ndim))
             if code:
                 first, second = int(code - 1), int(code % ndim)
                 permutation[first], permutation[second] = permutation[second], permutation[first]
+            if image_code:
+                if not 0 <= image_code <= ndim:
+                    raise ValueError("Image transposition code exceeds the encoding dimensions")
+                first, second = int(image_code - 1), int(image_code % ndim)
+                if len(image_sizes) == ndim and image_sizes[first] != image_sizes[second]:
+                    permutation[first], permutation[second] = permutation[second], permutation[first]
             volume_permutations.append(tuple(permutation))
         permutations = tuple(volume_permutations)
     rotate = np.asarray(_numbers(reco.get("RECO_rotate")), float)

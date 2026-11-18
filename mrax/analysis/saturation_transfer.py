@@ -7,7 +7,6 @@ import numpy as np
 
 from mrax.data_struct import DataSet, Experiment, Quantity, Study
 from mrax.data_struct.dimensions import (
-    non_spatial_names,
     reshape_dims_to_frames,
     reshape_frames_to_dims,
     spatial_shape_from_dims,
@@ -67,6 +66,34 @@ def _resolve_study_index(study: Study, target: str | int) -> int:
     return names.index(target)
 
 
+def _reference_grid_matches(study: Study, target: int, reference: int) -> bool:
+    target_exp, ref_exp = study.experiments[target], study.experiments[reference]
+    if spatial_shape_from_dims(target_exp.dims) != spatial_shape_from_dims(ref_exp.dims):
+        return False
+    datasets = study.datasets
+    if any(
+        "registration_space" in (datasets[index].processed or {}) for index in (target, reference)
+    ):
+        names = list(study.names)
+        target_space = (datasets[target].processed or {}).get("registration_space", names[target])
+        ref_space = (datasets[reference].processed or {}).get(
+            "registration_space", names[reference]
+        )
+        if target_space != ref_space:
+            return False
+    a, b = study.datasets[target].spatial_geometry, study.datasets[reference].spatial_geometry
+    ref_affine = b.affine_for_frame(0) if b is not None else None
+    for frame in range(max(1, len(a.frame_affines) if a is not None else 0)):
+        affine = a.affine_for_frame(frame) if a is not None else None
+        if (affine is None) != (ref_affine is None):
+            return False
+        if affine is not None and not np.allclose(affine, ref_affine, atol=1e-5, rtol=1e-5):
+            return False
+    if a is not None and b is not None and a.voxel_sizes and b.voxel_sizes:
+        return bool(np.allclose(a.voxel_sizes, b.voxel_sizes, atol=1e-6, rtol=1e-5))
+    return True
+
+
 def choose_z_reference_scan(study: Study, target: str | int) -> int | None:
     """Pick the single-frame saturation-transfer reference scan for ``target``."""
 
@@ -80,7 +107,7 @@ def choose_z_reference_scan(study: Study, target: str | int) -> int | None:
     for idx, exp in enumerate(study.experiments):
         if idx == target_idx or exp.exp_type != "sat_trans" or int(exp.frame_count) != 1:
             continue
-        if spatial_shape_from_dims(exp.dims) != target_shape:
+        if spatial_shape_from_dims(exp.dims) != target_shape or not _reference_grid_matches(study, target_idx, idx):
             continue
         amp_val = _quantity_scalar(exp.observables, "sat_b1", reducer="first", fallback=1e9)
         tr_val = _quantity_scalar(exp.observables, "TR", reducer="max", fallback=0.0)
@@ -111,6 +138,8 @@ def get_z_spectra(
     ref_data = reshape_dims_to_frames(study.datasets[ref_idx].data, ref_exp.dims)
     if ref_data.shape[0] != 1:
         raise ValueError("Saturation-transfer reference scan must contain exactly one frame")
+    if not _reference_grid_matches(study, target_idx, ref_idx):
+        raise ValueError("The saturation-transfer reference uses a different image grid. Register it to the target before normalization")
 
     z = compute_z_spectra(target_data, ref_data[0], epsilon=epsilon)
     z = reshape_frames_to_dims(z, target_exp.dims)
@@ -149,6 +178,8 @@ def dataset_with_z_spectra(
         density=source.density,
         sampling_mask=source.sampling_mask,
         kspace_metadata=source.kspace_metadata,
+        spatial_geometry=source.spatial_geometry,
+        acquisition=source.acquisition,
     )
 
 
@@ -159,10 +190,21 @@ def experiment_with_ab_mt_z_prev(
 ) -> Experiment:
     """Return ``experiment`` with AB-MT runtime observables derived from Z-spectra."""
 
-    dim_names = non_spatial_names(experiment.dims)
-    axis = dim_names.index("offset") if "offset" in dim_names else (0 if dim_names else None)
-    z_values = jnp.asarray(z_spectra)
-    z_prev = jnp.roll(z_values, shift=1, axis=axis) if axis is not None else z_values
+    def previous_readout(values, dims):
+        frames = reshape_dims_to_frames(values, dims)
+        previous = jnp.concatenate((frames[:1], frames[:-1]), axis=0)
+        return reshape_frames_to_dims(previous, dims)
+
+    z_values = reshape_frames_to_dims(jnp.asarray(z_spectra), experiment.dims)
+    if "slice_package" in experiment.dims:
+        axis = list(experiment.dims).index("slice_package")
+        dims = {name: size for name, size in experiment.dims.items() if name != "slice_package"}
+        z_prev = jnp.stack([
+            previous_readout(jnp.take(z_values, index, axis=axis), dims)
+            for index in range(experiment.dims["slice_package"])
+        ], axis=axis)
+    else:
+        z_prev = previous_readout(z_values, experiment.dims)
     observables: dict[str, Quantity] = {
         "z_prev": Quantity(z_prev, "1"),
     }
@@ -198,6 +240,8 @@ def prepare_ab_mt_z_spectra(
         density=source.density,
         sampling_mask=source.sampling_mask,
         kspace_metadata=source.kspace_metadata,
+        spatial_geometry=source.spatial_geometry,
+        acquisition=source.acquisition,
     )
     experiment = experiment_with_ab_mt_z_prev(
         study.experiments[target_idx],

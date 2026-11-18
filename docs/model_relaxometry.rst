@@ -11,7 +11,7 @@ T1 inversion recovery (``make_t1_ir_model``)
 
 - Parameters: ``amplitude`` (a.u.), ``t1`` (ms).
 - Observables: inversion times ``TI`` (ms) provided either in ``offsets`` or ``experiment.observables``.
-- Default parameter bounds: ``t1`` in ``[50, 5000]`` ms via a sigmoid mapping; amplitude constrained positive.
+- Default parameter bounds: ``t1`` in ``[50, 5000]`` ms via a sigmoid mapping. Amplitude constrained positive.
   (See ``parameter_library.toml`` for the editable defaults.)
 
 FAIR ASL (``make_fair_asl_model``)
@@ -36,7 +36,7 @@ FAIR ASL (``make_fair_asl_model``)
      f = \lambda\,60000\,\frac{T_{1,non}}{T_{1,blood}}
      \left(\frac{1}{T_{1,sel}}-\frac{1}{T_{1,non}}\right).
 
-  Defaults to ``t1_blood=2430`` ms and ``partition_coeff=90``; override via observables or study globals with keys
+  Defaults to ``t1_blood=2430`` ms and ``partition_coeff=90``. Override via observables or study globals with keys
   ``t1_blood``/``t1_blood_ms`` and ``partition_coeff``/``partition_coefficient``/``lambda``.
 - FAIR scans default to experiment type ``fair_asl`` and use this model.
 
@@ -66,14 +66,14 @@ Exponential decay, T2, and T2* (``make_exp_decay_model``, ``make_t2_se_model``, 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 - Shared defining equation: :math:`S(TE) = A\exp(-TE/\tau)+c`.
 - The generic ``make_exp_decay_model`` exposes ``decay_time`` (ms).
-- ``make_t2_se_model`` uses the same model with the decay parameter named ``t2``;
-  multi-spin-echo (``mse``) experiments default to this model.
+- ``make_t2_se_model`` uses the same model with the decay parameter named ``t2``.
+  Multi-spin-echo (``mse``) experiments default to this model.
 - Defining T2 equation: :math:`S(TE) = A\exp(-TE/T_2)+c`.
 - Parameters: ``amplitude`` (a.u.), ``t2`` (ms), ``bias`` (a.u.).
 - Observables: echo times ``TE`` (ms) via ``offsets`` or ``experiment.observables``.
 - Default parameter bounds: ``t2`` in ``[5, 200]`` ms, amplitudes positive.
 - ``make_t2star_se_model`` uses the same model with the decay parameter named
-  ``t2star``; multi-gradient-echo (``mge``) experiments default to this model.
+  ``t2star``. Multi-gradient-echo (``mge``) experiments default to this model.
 - Defining T2* equation: :math:`S(TE) = A\exp(-TE/T_2^*)+c`.
 - Parameters: ``amplitude`` (a.u.), ``t2star`` (ms), ``bias`` (a.u.).
 - Observables: echo times ``TE`` (ms).

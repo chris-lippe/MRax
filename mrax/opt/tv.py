@@ -190,8 +190,8 @@ def tv_prox(value, operators, rate, bounds, duals=None, *, tolerance=1e-7, max_s
         return project(value), (), jnp.asarray(0.0, dtype=jnp.real(value).dtype), jnp.asarray(0)
     if len(active) == 1 and isinstance(active[0], CallbackOperator):
         op = active[0]
-        # Dykstra computes prox(g + box), including nonseparable custom proxs;
-        # the correction state makes the composition a joint proximal solve.
+        # Dykstra computes prox(g + box), including nonseparable custom proxs.
+        # The correction state makes the composition a joint proximal solve.
         def body(state):
             x, p, q, count, _ = state
             y = op.prox((x + p)[..., None], rate)[..., 0]

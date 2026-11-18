@@ -18,8 +18,8 @@ parameter set via ``param_key`` (default ``"default"``) and apply targeted overr
        },
    )
 
-Use ``init`` when you want to specify the starting value in constrained physical units;
-it takes precedence if an inherited default also defines ``init_raw``. Built-in defaults
+Use ``init`` when you want to specify the starting value in constrained physical units.
+It takes precedence if an inherited default also defines ``init_raw``. Built-in defaults
 use physical ``init`` values throughout. Scale-relative softplus amplitudes use
 ``init_scale_key`` to keep the physical initialization tied to the model scale. Use
 ``init_raw`` only when you deliberately want to initialize the unconstrained optimizer
@@ -27,5 +27,5 @@ coordinate directly.
 
 The parameter library is plain TOML. You can point to another file with
 ``MRAX_PARAMETER_LIBRARY``. For local pool definitions outside the public defaults, set
-``MRAX_PRIVATE_PARAMETER_LIBRARY`` to an overlay TOML file; its contents are merged on
+``MRAX_PRIVATE_PARAMETER_LIBRARY`` to an overlay TOML file. Its contents are merged on
 top of the public library.

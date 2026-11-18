@@ -49,7 +49,21 @@ BM3D and BM4D (optional, non-commercial license)
 in the optional ``denoise-external`` extra. Install it with
 ``pip install "mrax[denoise-external]"``. The upstream packages allow non-commercial
 use under their own licenses. BM3D follows Dabov et al.
-[Dabov2007]_; BM4D follows Maggioni et al. [Maggioni2013]_.
+[Dabov2007]_. BM4D follows Maggioni et al. [Maggioni2013]_.
+
+``sigma`` is the noise standard deviation in input intensity units. If unset,
+MRax estimates it from robust local patches and fine-scale differences.
+Magnitude estimates prefer signal-bearing regions and exclude zero-filled padding.
+``estimate_noise`` reports sigma, the patch range and diagnostic warnings.
+
+Use ``noise_model="gaussian"`` for a uniform signal ROI. For a signal-free
+magnitude ROI, use ``noise_model="background"`` and set ``noise_coils`` to the
+effective number of independent complex channels. One channel gives Rician noise.
+This count may differ from the receiver count.
+
+``noise_mask`` limits estimation. Denoising still uses the chosen processing
+region. A single sigma approximates spatially varying noise. It does not correct
+magnitude bias, noise correlation or artifacts. Set it explicitly when known.
 
 Drift Correction
 ----------------

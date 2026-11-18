@@ -1,0 +1,113 @@
+{
+  "format": "mrax.workflow",
+  "kind": "processing",
+  "mrax_version": "0.4.0",
+  "name": "Cartesian reconstruction and smoothing",
+  "description": "Cartesian Fourier reconstruction followed by light spatial smoothing.",
+  "bindings": [],
+  "steps": [
+    {
+      "id": "reconstruction",
+      "operation": "reconstruct",
+      "version": 1,
+      "enabled": true,
+      "settings": {
+        "component": "magnitude",
+        "pipeline": {
+          "schema_version": 1,
+          "name": "Cartesian Fourier",
+          "encoding": "cartesian",
+          "stages": [
+            {
+              "kind": "profile_inversion",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "shift",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "readout_regrid",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "epi_phase",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "window",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "partial_fourier",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            },
+            {
+              "kind": "fft",
+              "enabled": true,
+              "when": "always",
+              "options": {}
+            },
+            {
+              "kind": "format",
+              "enabled": true,
+              "when": "always",
+              "options": {}
+            },
+            {
+              "kind": "combine",
+              "enabled": true,
+              "when": "always",
+              "options": {}
+            },
+            {
+              "kind": "product",
+              "enabled": true,
+              "when": "configured",
+              "options": {}
+            }
+          ]
+        }
+      },
+      "target": null
+    },
+    {
+      "id": "smooth",
+      "operation": "process",
+      "version": 1,
+      "enabled": true,
+      "settings": {
+        "method": "gaussian",
+        "input": "image",
+        "scope": "dataset",
+        "parameters": {
+          "sigma": 0.6,
+          "preserve_nan": true,
+          "mode": "reflect",
+          "complex_mode": "real_imag"
+        }
+      }
+    }
+  ],
+  "extensions": {
+    "org.mrax.preset": {
+      "requirements": [
+        "Prepared Cartesian k-space with acquisition geometry.",
+        "The reconstruction must start the chain.",
+        "All spatial axes are smoothed by 0.6 voxels."
+      ]
+    }
+  }
+}

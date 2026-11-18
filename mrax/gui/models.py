@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from mrax.data_struct.model import Model
 
@@ -108,7 +109,7 @@ def make_model(
 
     key = normalize_model_key(name) or "identity"
     param_overrides = _filter_param_overrides_for_model(key, param_overrides)
-    if param_overrides or pools is not None:
+    if param_overrides or pools is not None or pool_overrides:
         from mrax.library import (
             make_AB_MT_n_model,
             make_exp_decay_model,
@@ -205,14 +206,52 @@ def model_default_pools(name: str | None) -> tuple[str, ...]:
         return ()
 
 
-def model_available_pools(name: str | None) -> tuple[str, ...]:
+def model_pool_definitions(
+    name: str | None,
+    overrides: Mapping[str, dict[str, object]] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Return library pool definitions with the current parameter edits."""
     key = normalize_model_key(name) or "identity"
     try:
         from mrax.library.parameter_library import get_model_pools
 
-        return tuple(str(item) for item in get_model_pools(key).keys())
+        definitions = copy.deepcopy(get_model_pools(key))
     except Exception:
-        return ()
+        definitions = {}
+    for pool, values in (overrides or {}).items():
+        target = definitions.setdefault(pool, {})
+        for parameter, value in values.items():
+            if isinstance(value, dict) and isinstance(target.get(parameter), dict):
+                target[parameter] = {**target[parameter], **copy.deepcopy(value)}
+            else:
+                target[parameter] = copy.deepcopy(value)
+    return definitions
+
+
+def model_available_pools(
+    name: str | None,
+    overrides: Mapping[str, dict[str, object]] | None = None,
+) -> tuple[str, ...]:
+    return tuple(model_pool_definitions(name, overrides))
+
+
+@dataclass(frozen=True)
+class ModelFitInputs:
+    reference_scan: bool
+    prior_maps: tuple[str, ...]
+    derived_maps: bool
+
+
+@lru_cache(maxsize=None)
+def model_fit_inputs(name: str | None) -> ModelFitInputs:
+    """Return auxiliary inputs used by a built-in fitting model."""
+    key = normalize_model_key(name) or "identity"
+    model = make_model(key)
+    return ModelFitInputs(
+        reference_scan="freq_offsets" in (model.required_observables or ()),
+        prior_maps=("t1", "b1", "b0") if key in {"ab_mt_n", "zaiss_full"} else (),
+        derived_maps=callable(getattr(model, "derived_maps", None)),
+    )
 
 
 def model_parameter_specs(
@@ -247,30 +286,32 @@ def model_parameter_specs(
             "initial": initial,
             "bounds": None,
             "unit": (model.parameter_units or {}).get(str(key), ""),
+            "trainable": True,
         }
     try:
         from mrax.library.parameter_library import resolve_param_specs
 
         base_specs = resolve_param_specs(model_key, overrides=param_overrides)
         for param_name, cfg in base_specs.items():
-            if param_name in specs and cfg.get("bounds") is not None:
-                specs[param_name]["bounds"] = list(cfg["bounds"])
+            if param_name in specs:
+                specs[param_name]["trainable"] = bool(cfg.get("trainable", True))
+                if cfg.get("bounds") is not None:
+                    specs[param_name]["bounds"] = list(cfg["bounds"])
     except Exception:
         _LOG.debug("Ignored optional operation failure", exc_info=True)
     if model_key in {"multipool_lorentzian", "ab_mt_n", "zaiss_full"}:
         try:
-            from mrax.library.parameter_library import get_model_pools
-
-            available = get_model_pools(model_key)
+            available = model_pool_definitions(model_key, pool_overrides)
             for pool_name in pools or model_default_pools(model_key):
                 pool_spec = dict(available.get(str(pool_name), {}))
-                pool_spec.update((pool_overrides or {}).get(str(pool_name), {}))
                 for raw_param, cfg in pool_spec.items():
                     if not isinstance(cfg, dict):
                         continue
                     param_name = f"{raw_param}_{pool_name}"
-                    if param_name in specs and cfg.get("bounds") is not None:
-                        specs[param_name]["bounds"] = list(cfg["bounds"])
+                    if param_name in specs:
+                        specs[param_name]["trainable"] = bool(cfg.get("trainable", True))
+                        if cfg.get("bounds") is not None:
+                            specs[param_name]["bounds"] = list(cfg["bounds"])
         except Exception:
             _LOG.debug("Ignored optional operation failure", exc_info=True)
     return specs
@@ -284,5 +325,7 @@ __all__ = [
     "model_available_pools",
     "model_default_pools",
     "model_parameter_specs",
+    "model_fit_inputs",
+    "model_pool_definitions",
     "normalize_model_key",
 ]

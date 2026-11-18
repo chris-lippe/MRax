@@ -30,17 +30,9 @@ dependencies = [
     "scipy>=1.14,<2",
     "ismrmrd>=1.14,<2",
     "h5py>=3.11,<4",
-    "pymapvbvd>=0.7,<1",
     "nibabel>=5.3,<6",
     "pydicom>=3,<4",
-    "dipy>=1.10,<2",
-    "pypulseq>=1.4,<2",
-    "SimpleITK>=2.4,<3",
-    "PySide6>=6.8,<7",
-    "pyqtgraph>=0.13,<0.15",
-    "qtpy>=2.4,<3",
-    "superqt>=0.7,<1",
-    "matplotlib>=3.9,<4",
+    "pydantic>=2.9,<3",
 ]
 
 [project.urls]
@@ -50,6 +42,19 @@ Repository = "https://github.com/chris-lippe/MRax"
 Issues = "https://github.com/chris-lippe/MRax/issues"
 
 [project.optional-dependencies]
+
+full = [
+    "pymapvbvd>=0.7,<1",
+    "dipy>=1.10,<2",
+    "pypulseq>=1.4,<2",
+    "SimpleITK>=2.4,<3",
+    "matplotlib>=3.9,<4",
+]
+gui = [
+    "mrax[full]",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+]
 dicom-codecs = [
     "pylibjpeg>=2,<3",
     "pylibjpeg-libjpeg>=2.1,<3",
@@ -60,11 +65,7 @@ denoise-external = [
     "bm4d>=4,<5",
 ]
 all = [
-    "pylibjpeg>=2,<3",
-    "pylibjpeg-libjpeg>=2.1,<3",
-    "pylibjpeg-openjpeg>=2.4,<3",
-    "bm3d>=4,<5",
-    "bm4d>=4,<5",
+    "mrax[gui,dicom-codecs,denoise-external]",
 ]
 docs = [
     "sphinx>=8,<11",
@@ -77,6 +78,7 @@ notebooks = [
     "scikit-image>=0.25,<1",
 ]
 dev = [
+    "httpx>=0.27,<1",
     "build>=1.2,<2",
     "coverage>=7.6,<8",
     "isort>=5.13,<7",
@@ -87,7 +89,7 @@ dev = [
 ]
 
 [project.scripts]
-mrax-gui = "mrax.gui.app:main"
+mrax-gui = "mrax.web.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["mrax*"]
@@ -101,8 +103,11 @@ exclude = [
 version = { attr = "mrax._version.MRAX_VERSION" }
 
 [tool.setuptools.package-data]
+"mrax.reco" = ["presets/*.mflow"]
+"mrax.workflow_presets" = ["*.mflow"]
 "mrax.library" = ["parameter_library.toml"]
 "mrax.io.definitions" = ["*.toml"]
+"mrax.web" = ["static/*", "static/assets/*"]
 
 [tool.ruff]
 target-version = "py312"

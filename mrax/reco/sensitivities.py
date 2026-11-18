@@ -10,10 +10,10 @@ def estimate_cartesian_sensitivities(acquisition, *, smoothing_sigma=2., relativ
     """Estimate RSS-normalized maps on the acquisition encoding grid.
 
     ``auxiliary_samples['calibration_grid']`` must contain a complete centred
-    Cartesian block with receiver and spatial axes. Calibration is zero-padded;
-    coil images are RSS-normalized, smoothed and normalized again. Processing
-    receivers one at a time bounds temporary memory. These maps are an estimate;
-    externally calibrated maps can be passed directly to reconstruction.
+    Cartesian block with receiver and spatial axes. Calibration is zero-padded.
+    Coil images are RSS-normalized, smoothed and normalized again. Processing
+    receivers one at a time bounds temporary memory. These maps are an estimate.
+    Externally calibrated maps can be passed directly to reconstruction.
     """
     acquisition.require_prepared()
     if acquisition.kind != 'cartesian' or acquisition.readout_coordinates is not None:
@@ -22,7 +22,7 @@ def estimate_cartesian_sensitivities(acquisition, *, smoothing_sigma=2., relativ
         raise ValueError("Sensitivity smoothing and relative_floor must be finite and nonnegative")
     calibration = acquisition.auxiliary_samples.get('calibration_grid')
     if calibration is None:
-        raise ValueError("No complete centred calibration_grid is available; supply sensitivity maps explicitly")
+        raise ValueError("No complete centred calibration_grid is available. Supply sensitivity maps explicitly")
     shape = acquisition.encoding_shape
     calibration = np.asarray(calibration)
     if calibration.shape[0] != acquisition.coil_count or calibration.ndim != len(shape) + 1 or any(a > b for a, b in zip(calibration.shape[1:], shape)):

@@ -11,11 +11,58 @@ from mrax.data_struct.geometry import SpatialGeometry
 _TIME_TO_SECONDS = {"s": 1., "ms": .001, "us": 1e-6, "min": 60.}
 
 
-def axis_coordinates(experiment, dimension, indices=None, *, geometry=None):
+def _spectral_coordinates(experiment):
+    names = {"frequency", "frequencies", "freq", "spectral_frequency", "chemical_shift", "ppm", "freq_offsets", "offsets"}
+    for name, quantity in experiment.observables.items():
+        values = np.asarray(quantity.values)
+        if name.casefold() not in names or values.ndim != 1 or values.size <= 1:
+            continue
+        dimensions = tuple(getattr(quantity, "dims", None) or ())
+        matches = list(dimensions) if dimensions else [dim for dim, size in experiment.dims.items() if size == values.size]
+        if len(matches) == 1 and experiment.dims.get(matches[0]) == values.size:
+            yield matches[0], name, quantity
+
+
+def profile_dimension(experiment, requested="auto", *, non_imaging=False):
+    """Choose a varying profile axis, using declared spectral coordinates when available."""
+    if requested in experiment.dims:
+        return requested
+    if non_imaging:
+        spectral = next(_spectral_coordinates(experiment), None)
+        if spectral is not None:
+            return spectral[0]
+        named = [name for name in experiment.dims
+                 if name.casefold() in {"frequency", "frequencies", "freq", "f", "ppm", "spectral", "spectrum", "sample", "samples"}
+                 and experiment.dims[name] > 1]
+        if named:
+            return max(named, key=lambda name: experiment.dims[name])
+        spatial = [name for name in experiment.spatial_dim_names if experiment.dims[name] > 1]
+        if spatial:
+            return max(spatial, key=lambda name: experiment.dims[name])
+    non_spatial = [name for name in experiment.non_spatial_dim_names if name != "slice_package"]
+    candidates = non_spatial or list(experiment.spatial_dim_names)
+    return next((name for name in candidates if experiment.dims[name] > 1), next(iter(experiment.dims)))
+
+
+def axis_coordinates(experiment, dimension, indices=None, *, geometry=None, spectral=False):
     """Return a unit-labelled coordinate vector for a declared dimension."""
     indices = indices or {}
     size = experiment.dims[dimension]
     obs = experiment.observables
+    if spectral:
+        for dim, name, quantity in _spectral_coordinates(experiment):
+            if dim == dimension:
+                unit = "" if quantity.si_unit == "1" else f" ({quantity.si_unit})"
+                return f"{name}{unit}", np.asarray(quantity.values)
+        mapping = getattr(experiment, "_mrax_dim_observables", None) or {}
+        for name, quantity in obs.items():
+            declared = tuple(getattr(quantity, "dims", None) or ()) == (dimension,)
+            matched = mapping.get(dimension) == name or name.casefold() == dimension.casefold()
+            timed = name.casefold() in {"time", "t", "sample_times"} and sum(value == size for value in experiment.dims.values()) == 1
+            if (declared or matched or timed) and np.shape(quantity.values) == (size,):
+                unit = "" if quantity.si_unit == "1" else f" ({quantity.si_unit})"
+                return f"{name}{unit}", np.asarray(quantity.values)
+        return "Sample index" if dimension in experiment.spatial_dim_names else f"{dimension} index", np.arange(size)
     if dimension in experiment.spatial_dim_names:
         if isinstance(geometry, dict):
             geometry = SpatialGeometry.from_metadata(geometry)
@@ -47,13 +94,21 @@ def axis_coordinates(experiment, dimension, indices=None, *, geometry=None):
     if mapping is None:
         mapping = dim_observable_map(experiment.exp_type)
     key = (mapping or {}).get(dimension)
+    if key is None:
+        matches = [
+            name for name, value in obs.items()
+            if name.casefold() == dimension.casefold()
+            or tuple(getattr(value, "dims", None) or ()) == (dimension,)
+        ]
+        if len(matches) == 1:
+            key = matches[0]
     if dimension == "frame" and experiment.exp_type in ("dti", "dki"):
         key = "bvals" if "bvals" in obs else "bval"
     qty = obs.get(key) if key else None
     if qty is not None:
         values = np.asarray(qty.values)
-        if values.ndim == 1 and values.size == size:
-            result = values
+        if values.ndim <= 1 and values.size == size:
+            result = values.reshape(-1)
         elif values.size == experiment.frame_count:
             grid = values.reshape(experiment.non_spatial_shape)
             selection = tuple(slice(None) if dim == dimension else indices.get(dim, 0)
@@ -80,10 +135,23 @@ def profile_selection(experiment, dimension, indices):
     return tuple(selected), frame_ids
 
 
-def image_profile(data, experiment, dimension, indices, *, roi=None, plane_dims=("x", "y")):
+def scalar_component(array, component="auto"):
+    array = np.asarray(array)
+    if component == "phase":
+        return np.angle(array)
+    if component == "imag":
+        return np.imag(array)
+    if component == "real":
+        return np.real(array)
+    if component == "magnitude" or (component == "auto" and np.iscomplexobj(array)):
+        return np.abs(array)
+    return array
+
+
+def image_profile(
+    data, experiment, dimension, indices, *, roi=None, plane_dims=("x", "y"), component="auto"
+):
     arr = np.asarray(reshape_frames_to_dims(data, experiment.dims))
-    if roi is not None:
-        mask = broadcast_mask(roi.mask, arr.shape, mask_dims=roi.dims, target_dims=tuple(experiment.dims))
     selection = []
     retained = []
     for name in experiment.dims:
@@ -93,10 +161,34 @@ def image_profile(data, experiment, dimension, indices, *, roi=None, plane_dims=
         else:
             index = indices.get(name, indices.get("frame", 0) if name in ("t", "frame") else 0)
             selection.append(max(0, min(int(index), experiment.dims[name] - 1)))
-    sliced = arr[tuple(selection)]
-    sliced = np.abs(sliced) if np.iscomplexobj(sliced) else sliced
+    sliced = scalar_component(arr[tuple(selection)], component)
     if roi is not None:
-        sliced = np.where(np.asarray(mask)[tuple(selection)], sliced, np.nan)
+        # Select the ROI before broadcasting: a plane/curve must not allocate a
+        # mask the size of the entire multi-frame acquisition.
+        source = np.asarray(roi.mask)
+        dimensions = tuple(experiment.dims)
+        mask_dims = (
+            tuple(roi.dims)
+            if roi.dims is not None
+            else dimensions[len(dimensions) - source.ndim :]
+        )
+        if len(mask_dims) != source.ndim or set(mask_dims) - set(dimensions):
+            raise ValueError("ROI dimensions do not match the experiment")
+        mask_selection = [selection[dimensions.index(name)] for name in mask_dims]
+        for axis, index in enumerate(mask_selection):
+            if isinstance(index, int) and source.shape[axis] == 1:
+                mask_selection[axis] = 0
+        selected_dims = tuple(
+            name for name, index in zip(mask_dims, mask_selection) if isinstance(index, slice)
+        )
+        ordered_dims = tuple(name for name in retained if name in selected_dims)
+        selected_mask = source[tuple(mask_selection)].transpose(
+            tuple(selected_dims.index(name) for name in ordered_dims)
+        )
+        mask = broadcast_mask(
+            selected_mask, sliced.shape, mask_dims=ordered_dims, target_dims=tuple(retained)
+        )
+        sliced = np.where(mask, sliced, np.nan)
     reduce_axes = tuple(i for i, name in enumerate(retained) if name != dimension)
     if reduce_axes:
         finite = np.isfinite(sliced)

@@ -1,4 +1,4 @@
-"""Bruker sampling translation; MRI reconstruction is separate."""
+"""Bruker sampling interpretation."""
 from __future__ import annotations
 
 import re
@@ -591,6 +591,6 @@ def _bruker_epi_prefix_nav_points(method: dict, readout: int, *, reco: dict | No
             if key in {"navSize", "junkSize", "echoSize", "nEchoes", "nSegments", "useNav"}
         }
     if read > 0 and int(nav_points) > 0 and int(nav_points) % read != 0:
-        meta["warning"] = "Navigator prefix size is not readout-aligned; skipping the exact recorded raw point count."
+        meta["warning"] = "Navigator prefix size is not readout-aligned. Skipping the exact recorded raw point count."
 
     return int(skipped_points), meta

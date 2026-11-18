@@ -228,10 +228,10 @@ def _resolve_string_observable(
 
 
 def _resolve_field_strength_mhz(observables: dict | None) -> float:
-    """Extract scanner field strength in MHz; raises if absent."""
+    """Extract scanner field strength in MHz. Raises if absent."""
     if observables is None or "field_strength_mhz" not in observables:
         raise ValueError(
-            "field_strength_mhz is required; set it once via Study.study_globals['field_strength_mhz']"
+            "field_strength_mhz is required. Set it once via Study.study_globals['field_strength_mhz']"
         )
     field = observables.get("field_strength_mhz")
     arr = jnp.asarray(field.values if isinstance(field, Quantity) else field)
@@ -772,6 +772,7 @@ def make_fair_asl_model(
         },
     )
     model.derived_maps = derived_maps  # type: ignore[attr-defined]
+    model.derived_map_units = {"t1_sel": "ms", "t1_non": "ms", "perfusion_map": "mL/100g/min"}
     return model
 
 
@@ -962,7 +963,7 @@ def make_dti_tensor_model(
 
     def model_apply(fields, freq_offsets, observables=None):
         bvals, bvecs = _require_diffusion_observables(observables, "dti")
-        spatial_ndim = fields["s0"].ndim
+        spatial_ndim = _field_ndim(fields, observables)
         reshape = (bvals.shape[0],) + (1,) * spatial_ndim
         b = bvals.reshape(reshape)
         gx = bvecs[:, 0].reshape(reshape)
@@ -1034,7 +1035,7 @@ def make_dki_kurtosis_model(
 
     def model_apply(fields, freq_offsets, observables=None):
         bvals, bvecs = _require_diffusion_observables(observables, "dki")
-        spatial_ndim = fields["s0"].ndim
+        spatial_ndim = _field_ndim(fields, observables)
         reshape = (bvals.shape[0],) + (1,) * spatial_ndim
         b = bvals.reshape(reshape)
         gx = bvecs[:, 0].reshape(reshape)
@@ -1126,7 +1127,7 @@ def make_wasabi_model(
         b0_map = delta  # ppm
         return {"B1_map": b1_map, "B0_map": b0_map}
 
-    return _make_sat_trans_model(
+    model = _make_sat_trans_model(
         name=name,
         param_specs=param_specs,
         signal_fn=signal_fn,
@@ -1134,6 +1135,8 @@ def make_wasabi_model(
         require_sat_time=True,
         require_sat_b1=True,
     )
+    model.derived_map_units = {"B1_map": "%", "B0_map": "ppm"}
+    return model
 
 
 def make_multipool_lorentzian_model(

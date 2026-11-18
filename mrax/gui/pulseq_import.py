@@ -187,7 +187,7 @@ def load_pulseq_import_plan(plan, options, progress=None):
                 image = measured.image_data
                 if image is None:
                     if not options.get('load_raw_kspace', True):
-                        raise ValueError('Raw-only measurement requires reconstruction; enable raw k-space import')
+                        raise ValueError('Raw-only measurement requires reconstruction. Enable raw k-space import')
                     if progress:
                         progress(index, len(entries), 'Reconstructing ' + entry['path'].name)
                     image = np.abs(reconstruct_acquisition(measured.acquisition, method='fft', device='cpu').image)
@@ -209,7 +209,7 @@ def load_pulseq_import_plan(plan, options, progress=None):
             metadata['import_issues'].append({'path': str(entry['path']), 'message': str(exc)})
             warnings.warn(f'Skipped Pulseq measurement {key}: {exc}', RuntimeWarning, stacklevel=2)
     if not names:
-        raise ValueError('No selected Pulseq measurements could be imported; check their metadata and reconstruction requirements')
+        raise ValueError('No selected Pulseq measurements could be imported. Check their metadata and reconstruction requirements')
     if not frequency:
         frequency = next((experiment.observables['field_strength_mhz'].values for experiment in experiments
             if 'field_strength_mhz' in experiment.observables), None)

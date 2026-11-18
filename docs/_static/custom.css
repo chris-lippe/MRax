@@ -25,11 +25,17 @@
   align-items: center;
   justify-content: center;
   min-width: 0;
+  width: 150px;
+  aspect-ratio: 1;
+  box-sizing: border-box;
+  padding: 12px;
+  border-radius: 12px;
+  background: #fff;
 }
 
 .mrax-hero-mark img {
   display: block;
-  width: 150px;
+  width: 100%;
   max-width: 100%;
   height: auto;
 }
@@ -115,10 +121,6 @@
   }
 
   .mrax-hero-mark {
-    justify-content: flex-start;
-  }
-
-  .mrax-hero-mark img {
     width: 112px;
   }
 

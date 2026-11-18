@@ -14,8 +14,8 @@ from .dicom import DicomMetadataPatch
 class BrukerDicomMetadataAdapter:
     """Interpret Bruker conventions layered on Enhanced MR/PET DICOM objects.
 
-    Bruker exports used by this adapter contain standards-based functional groups;
-    pixel decoding and geometry therefore remain in the general DICOM layer. This
+    Bruker exports used by this adapter contain standards-based functional groups.
+    Pixel decoding and geometry therefore remain in the general DICOM layer. This
     adapter is limited to origin detection, sequence naming, frame annotations, and
     Bruker-specific experiment hints.
     """
@@ -36,8 +36,8 @@ class BrukerDicomMetadataAdapter:
 
         ParaVision may assign the same Series Instance UID to a quantitative
         enhanced object and smaller auxiliary parallel-imaging objects. Enhanced
-        objects that belong to one standard DICOM concatenation stay together;
-        otherwise the most complete original quantitative stack is selected.
+        objects that belong to one standard DICOM concatenation stay together.
+        Otherwise the most complete original quantitative stack is selected.
         Classic single-frame series are left untouched.
         """
 

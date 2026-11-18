@@ -31,12 +31,19 @@ def encoding_frame_map(acquisition: AcquisitionData):
     recipe = acquisition.recipe
     order = np.asarray(recipe.output_frame_indices or tuple(range(acquisition.frame_count)))
     if len(order) != acquisition.frame_count or not np.array_equal(np.sort(order), np.arange(acquisition.frame_count)):
-        raise ValueError("Model-based encoding requires every acquired frame exactly once; subset the acquisition first")
-    group = recipe.stack_slices * recipe.average_repeats
-    if len(order) % group:
-        raise ValueError("Acquisition frames do not contain complete output groups")
+        raise ValueError("Model-based encoding requires every acquired frame exactly once. Subset the acquisition first")
+    if recipe.output_slice_counts:
+        groups = np.asarray(recipe.output_slice_counts) * recipe.average_repeats
+        if int(groups.sum()) != len(order):
+            raise ValueError("Acquisition frames do not contain complete output groups")
+        mapped = np.repeat(np.arange(len(groups)), groups)
+    else:
+        group = recipe.stack_slices * recipe.average_repeats
+        if len(order) % group:
+            raise ValueError("Acquisition frames do not contain complete output groups")
+        mapped = np.arange(len(order)) // group
     result = np.empty(len(order), int)
-    result[order] = np.arange(len(order)) // group
+    result[order] = mapped
     return result
 
 
@@ -58,10 +65,17 @@ def image_to_encoding(image, acquisition: AcquisitionData):
     output_frames = int(frame_map.max()) + 1
     if array.shape[0] != output_frames:
         raise ValueError("Predicted image frame count does not match the acquisition layout")
-    if recipe.average_repeats > 1:
+    if recipe.output_slice_counts:
+        volumes = []
+        for frame, count in zip(array, recipe.output_slice_counts, strict=True):
+            volume = jnp.moveaxis(frame[..., :count], -1, 0)
+            volumes.append(jnp.tile(volume, (recipe.average_repeats, 1, 1)))
+        array = jnp.concatenate(volumes)[:, None]
+    elif recipe.average_repeats > 1:
         array = jnp.repeat(array, recipe.average_repeats, axis=0)
-    array = array[:, None]
-    if recipe.stack_slices > 1:
+    if not recipe.output_slice_counts:
+        array = array[:, None]
+    if recipe.stack_slices > 1 and not recipe.output_slice_counts:
         if ndim != 2 or array.shape[-1] != recipe.stack_slices:
             raise ValueError("Predicted image slice axis does not match the acquisition layout")
         array = jnp.transpose(array, (0, 4, 1, 2, 3))

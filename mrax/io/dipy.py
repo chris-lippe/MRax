@@ -11,7 +11,7 @@ def _import_dipy():
         import dipy  # type: ignore
     except Exception as exc:  # pragma: no cover - invalid runtime environment
         raise ImportError(
-            "dipy is required for DIPY I/O helpers. Reinstall MRax with `pip install mrax`."
+            "dipy is required for DIPY I/O helpers. Install `pip install 'mrax[full]'`."
         ) from exc
     return dipy
 
@@ -34,9 +34,13 @@ def save_dipy_nifti(
     affine: np.ndarray,
     *,
     dtype: np.dtype | None = None,
+    overwrite: bool = False,
 ) -> None:
     """Save a NIfTI file using DIPY's I/O helpers."""
 
+    from .output_guard import require_new_file
+
+    require_new_file(path, overwrite=overwrite, warn=True)
     _import_dipy()
     from dipy.io.image import save_nifti  # type: ignore
 

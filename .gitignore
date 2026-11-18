@@ -204,11 +204,13 @@ marimo/_lsp/
 __marimo__/
 
 # Output files
+/frontend/node_modules/
+/frontend/test-results/
+/frontend/playwright-report/
+/mrax/web/static/
 /data/
 tmp/
 *.png
-!MRax_logo.png
-!docs/_static/MRax_logo*
 *.mp4
 *.pkl
 *.mrd
@@ -219,3 +221,14 @@ tmp/
 *.nii.gz
 *.csv
 *.mrax
+*.npy
+*.npz
+*.hdf5
+*.dat
+*.raw
+*.bin
+*.pickle
+*.[dD][cC][mM]
+*.[iI][mM][aA]
+*.[nN][iI][iI]
+*.[nN][iI][iI].[gG][zZ]

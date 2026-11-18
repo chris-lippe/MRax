@@ -32,7 +32,7 @@ def scalar_dtype(acqp, *, byte_order=None):
         types.update({"_8_BIT": "i1", "_16_BIT": "i2", "_32_BIT": "i4", "_64_BIT": "i8"})
         token = width
     if token not in types:
-        raise ValueError("Raw scalar type is absent or unsupported; image types are not raw types")
+        raise ValueError("Raw scalar type is absent or unsupported. Image types are not raw types")
     order = str(byte_order or acqp.get("ACQ_byte_order") or acqp.get("BYTORDA") or "little").lower()
     return np.dtype(types[token]).newbyteorder(">" if order.startswith("big") else "<")
 

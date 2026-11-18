@@ -1,6 +1,22 @@
 Release Notes
 =============
 
+Version 0.4.0
+-------------
+
+Highlights
+~~~~~~~~~~
+
+- Browser-based desktop GUI with action-oriented controls, adjustable panels,
+  light/dark themes, keyboard shortcuts, accessibility preferences and a guided
+  synthetic-study tutorial.
+- A shared workflow for viewing, reconstruction, preprocessing, registration,
+  segmentation, fitting and analysis, including overlays and split comparison.
+- Editable processing pipelines retain original image data and fitted maps.
+  Reusable presets and combined processing workflows use versioned ``.mflow`` files.
+- Improved Bruker geometry and multi-package viewing and reconstruction, plus
+  scoped denoising with automatic or ROI-based MRI noise estimates.
+
 Version 0.3.2
 -------------
 
@@ -35,40 +51,29 @@ Highlights
 
 - Unified Bruker and Pulseq import with editable plans for FFT, variational and
   model-based reconstruction.
-- Bruker import now includes PV 360 3.x and PV 6.0.1 support.
+- Bruker import supports PV 360 3.x and PV 6.0.1.
 - Expanded Pulseq support for MRD, Siemens, NIfTI and DICOM measurements, with
   improved quantitative timing and frame alignment.
 - Built-in CPU/GPU JAX NUFFT replaces ``jax-finufft`` and the ``nufft`` extra,
   with bounded workspace memory.
 - Improved FISTA and split Bregman optimizers. TV regularization selects FISTA
-  automatically; explicit Adam uses smoothed TV with a warning.
+  automatically. Explicit Adam uses smoothed TV with a warning.
 - Fitting defaults to CPU and ROI-based normalization, with explicit device
   selection. See :doc:`models` for regularizer-weight adjustments.
 - Reference-image forward fitting supports conventional and model-based fits,
   with consistent loss scaling and reduced model-based memory use.
-- Portable ``.mrax`` bundles are the default study format. GUI saves show progress;
-  exports support multi-frame NIfTI and DICOM.
+- Portable ``.mrax`` bundles are the default study format. GUI saves show progress.
+  Exports support multi-frame NIfTI and DICOM.
 - GUI import detects Bruker or Pulseq folders automatically. Improved plot axes,
   elapsed-time display, ROI fitting and drawing, and GPU startup memory use.
 
 API changes: replace ``load_bruker_*`` with ``import_bruker_*``. Pulseq raw import
 uses ``read_pulseq_acquisition``. Reconstruct explicitly with
-``reconstruct_acquisition`` or ``ReconstructionPipeline``; these replace
+``reconstruct_acquisition`` or ``ReconstructionPipeline``. These replace
 ``RecoPipeline``/``RecoState`` and the separate FFT/regridding helpers.
-Configure reconstruction and cropping in the plan; import options
+Configure reconstruction and cropping in the plan. Import options
 ``prefer_raw_image``, ``reco_pipeline`` and ``slice_crop_mode`` are removed.
 Low-level solvers are ``solve_variational`` and ``solve_model_based``.
-
-Version 0.2.1
--------------
-
-Bug fixes
-~~~~~~~~~
-
-- Fixed Qt popup and transient-window handling when MRax runs through VS Code's
-  forwarded Wayland socket. MRax now uses the accompanying X11/XWayland display
-  in that environment, allowing combo-box menus to close normally, dialogs to be
-  dismissed, and parameter-table values to be edited reliably.
 
 Version 0.2.0
 -------------
@@ -86,11 +91,11 @@ Highlights
 - Added axial, coronal, and sagittal GUI views with geometry-aware aspect ratios,
   plus reference-aware NIfTI ROI export.
 - Added combined and per-coil magnitude/phase reconstruction views and exports.
-  Phase images use a fast JAX-native, magnitude-weighted unwrapping implementation;
-  wrapped phase remains available.
+  Phase images use a fast JAX-native, magnitude-weighted unwrapping implementation.
+  Wrapped phase remains available.
 - Added variance-aware fitting and diagnostics for quantitative experiments.
 - Added a global package/data version source. MRax manifests, bundles, ROI sets, and
-  GUI state now record their producer version and spatial geometry, while MRD image
+  GUI state record their producer version and spatial geometry, while MRD image
   payloads remain unchanged. Untagged legacy files are still loaded with a warning.
 - Improved GUI DICOM folder import, window sizing, view state, and reconstruction
   controls.
@@ -98,7 +103,7 @@ Highlights
 Compatibility notes
 ~~~~~~~~~~~~~~~~~~~
 
-- DICOM import requires ``pydicom``, which is now a base dependency.
+- DICOM import requires the base dependency ``pydicom``.
 - Producer-version checks diagnose tagged data-format compatibility and attempt
   loading untagged legacy MRax files.
 - The DICOM layer imports the exported metadata. Additional vendor acquisition
@@ -128,6 +133,6 @@ Notes
 
 - Bruker import has been tested on ParaVision 360 3.6 data.
 - Initial Pulseq coverage used demo workflows.
-- Initial NUFFT support used the optional ``jax-finufft`` backend on Linux;
+- Initial NUFFT support used the optional ``jax-finufft`` backend on Linux.
   :ref:`api-nufft-plans` describes the current built-in implementation.
 - The upstream BM3D/BM4D packages retain their non-commercial licensing terms.

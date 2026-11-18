@@ -5,12 +5,12 @@ import numpy as np
 
 from mrax.data_struct.acquisition import AcquisitionData, ReconstructionRecipe
 
+from .bruker_frames import frame_group_entries
 from .bruker_storage import decode_records
 from .definitions import DefinitionLibrary
 
 
 def read_epi_acquisition(folder, method, acqp, reco, visu, *, geometry=None, library=None, storage_profile=None, event_profile=None, readout_profile=None):
-    from .bruker_images import _bruker_decoded_in_plane_axis_order, _visu_fg_order_entries
     from .bruker_sampling import (
         _apply_bruker_epi_alternating_readout_reversal,
         _bruker_epi_prefix_nav_points,
@@ -158,10 +158,9 @@ def read_epi_acquisition(folder, method, acqp, reco, visu, *, geometry=None, lib
     shift = np.repeat(np.broadcast_to(shift, (original_frames, ndim)), repeats, axis=0)
     slices = int(np.asarray(method.get("PVM_SPackArrNSlices", 1)).sum()) if ndim == 2 else 1
     transpose = np.asarray(reco.get("RECO_transposition", 0)).ravel()
-    decoded_axes = _bruker_decoded_in_plane_axis_order(visu)
-    permutations = tuple(tuple(1 - axis for axis in decoded_axes)[::(-1 if transpose[(i // repeats) % len(transpose)] else 1)] for i in range(frames)) if ndim == 2 else ()
+    permutations = tuple((1, 0)[::(-1 if transpose[(i // repeats) % len(transpose)] else 1)] for i in range(frames)) if ndim == 2 else ()
     frame_indices = ()
-    groups = _visu_fg_order_entries(visu)
+    groups = frame_group_entries(visu)
     counts = [int(group[0]) for group in groups]
     slice_group = next((i for i, group in enumerate(groups) if len(group) > 1 and "FG_SLICE" in str(group[1]).upper()), None)
     indices = np.arange(original_frames)

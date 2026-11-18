@@ -1,8 +1,9 @@
-"""Non-Qt session state for the MRax GUI."""
+"""Scientific session state for the MRax browser application."""
 
 from __future__ import annotations
 
 import logging
+from copy import copy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
@@ -14,7 +15,7 @@ from mrax.analysis import ROI, broadcast_mask, collect_roi_stats, prepare_ab_mt_
 from mrax.analysis.dti import dti_design_rank, fit_dti_log_linear
 from mrax.analysis.timecourse import extract_timecourse as extract_timecourse_array
 from mrax.analysis.timecourse import extract_timecourse_from_experiment
-from mrax.core.loss_builder import run_fit
+from mrax.core.loss_builder import _field_metadata, run_fit
 from mrax.data_struct import (
     DataSet,
     Experiment,
@@ -24,6 +25,7 @@ from mrax.data_struct import (
     save_study_results,
 )
 from mrax.data_struct.dimensions import (
+    expand_observables_to_frames,
     frame_count_from_dims,
     non_spatial_names,
     reshape_dims_to_frames,
@@ -33,9 +35,9 @@ from mrax.data_struct.dimensions import (
 from mrax.data_struct.quantity import require_quantity_dict
 from mrax.data_struct.storage import load_study_results
 from mrax.devices import DeviceLike
-from mrax.reco.components import reconstruction_coil_count, reconstruction_variant
+from mrax.reco.components import reconstruction_variant
 
-from .models import make_model, normalize_model_key
+from .models import make_model, model_fit_inputs, normalize_model_key
 
 _LOG = logging.getLogger(__name__)
 
@@ -106,16 +108,57 @@ class FitSettings:
     optimizer_name: str = "auto"
     num_steps: int = 200
     step_size: float = 0.02
+    data_normalization: str = "roi"
     selected_roi: str | None = None
     output_dir: Path | None = None
     mask_fill_value: float | None = 0.0
     auto_mask_nan_observables: bool = True
     use_view_state_data: bool = False
     compute_derived_maps: bool | None = None
-    sat_trans_reference_scan: str | None = None
-    ab_mt_t1_map_ref: str | None = None
-    ab_mt_b1_map_ref: str | None = None
-    ab_mt_b0_map_ref: str | None = None
+    sat_trans_reference_scan: str | None = field(
+        default=None,
+        metadata={
+            "workflow_input": {
+                "role": "reference",
+                "kind": "image",
+                "label": "Reference scan",
+                "capability": "reference_scan",
+            }
+        },
+    )
+    ab_mt_t1_map_ref: str | None = field(
+        default=None,
+        metadata={
+            "workflow_input": {
+                "role": "t1",
+                "kind": "map",
+                "label": "T1 prior map",
+                "capability": "prior_maps",
+            }
+        },
+    )
+    ab_mt_b1_map_ref: str | None = field(
+        default=None,
+        metadata={
+            "workflow_input": {
+                "role": "b1",
+                "kind": "map",
+                "label": "B1 prior map",
+                "capability": "prior_maps",
+            }
+        },
+    )
+    ab_mt_b0_map_ref: str | None = field(
+        default=None,
+        metadata={
+            "workflow_input": {
+                "role": "b0",
+                "kind": "map",
+                "label": "B0 prior map",
+                "capability": "prior_maps",
+            }
+        },
+    )
     selected_pools: tuple[str, ...] = ()
     param_overrides: dict[str, dict[str, object]] = field(default_factory=dict)
     pool_overrides: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -172,7 +215,7 @@ class Diagnostic:
 
 @dataclass
 class GuiSession:
-    """Qt-independent, manifest-backed GUI session state."""
+    """Manifest-backed image-analysis session state."""
 
     manifest_path: Path | None = None
     data: dict[str, Any] | None = None
@@ -275,6 +318,7 @@ class GuiSession:
         *,
         field_strength_mhz: float | Quantity | None = None,
         pdata_index: str | Mapping[str, str] = "1",
+        selected_experiments: Sequence[str] | None = None,
         load_raw_kspace: bool = False,
         type_overrides: Mapping[str, str] | None = None,
         model_overrides_by_name: Mapping[str, str] | None = None,
@@ -302,6 +346,7 @@ class GuiSession:
             model_map_by_name=model_map_by_name,
             field_strength_mhz=field_strength_mhz,
             pdata_index=pdata_index,
+            selected_experiments=selected_experiments,
             load_raw_kspace=load_raw_kspace,
             progress_callback=progress_callback,
         )
@@ -449,7 +494,10 @@ class GuiSession:
         if non_imaging:
             metadata["non_imaging"] = True
         self.import_metadata = self.import_metadata or {"subject": self.study_name, "experiments": {}}
-        self.import_metadata.setdefault("experiments", {})[exp_name] = metadata
+        imported_entries = self.import_metadata.setdefault("experiments", {})
+        for old_name, old_data in previous_experiments.items():
+            imported_entries[old_name] = dict(old_data.get("extra_metadata") or {})
+        imported_entries[exp_name] = metadata
         self.data = _study_to_session_data(
             study,
             self.import_metadata,
@@ -560,7 +608,7 @@ class GuiSession:
                 return ref
             text = str(ref)
             prefix = f"{old}{_MAP_REF_SEP}"
-            return f"{new}{_MAP_REF_SEP}{text[len(prefix):]}" if text.startswith(prefix) else text
+            return f"{new}{_MAP_REF_SEP}{text[len(prefix) :]}" if text.startswith(prefix) else text
 
         def update_settings(settings: FitSettings) -> None:
             if settings.sat_trans_reference_scan == old:
@@ -572,6 +620,24 @@ class GuiSession:
         update_settings(self.fit_settings)
         for state in self.view_states.values():
             update_settings(state.fit_settings)
+        for entry in ((self.data or {}).get("experiments") or {}).values():
+            for key in ("extra_metadata", "processed"):
+                if (entry.get(key) or {}).get("registration_space") == old:
+                    entry[key]["registration_space"] = new
+        if self.study is not None:
+            for dataset in self.study.datasets:
+                if (dataset.processed or {}).get("registration_space") == old:
+                    dataset.processed["registration_space"] = new
+        for roi in [
+            *self.shared_rois,
+            *self.rois,
+            *(roi for state in self.view_states.values() for roi in state.rois),
+        ]:
+            for key in ("source_experiment", "registration_space"):
+                if roi.metadata.get(key) == old:
+                    roi.metadata[key] = new
+            if "compatible_experiments" in roi.metadata:
+                roi.metadata["compatible_experiments"] = [new if name == old else name for name in roi.metadata["compatible_experiments"]]
 
     def _rename_study_entry(self, old: str, new: str) -> None:
         if self.study is None or old not in (self.study.names or ()):
@@ -707,6 +773,13 @@ class GuiSession:
         else:
             self.frame_mask.resize(max(1, self.frame_count))
         self.visual_state = replace(state.visual_state)
+        names = self.non_spatial_dim_names
+        if names[:1] == ["t"] and "t" not in self.active_indices and "frame" in self.active_indices:
+            self.active_indices["t"] = self.active_indices["frame"]
+        if self.experiment_dims and any(name in self.active_indices for name in names):
+            self.set_active_index(names[0], self.active_indices.get(names[0], 0))
+        else:
+            self.set_active_frame(self.active_frame)
 
     def _reset_current_view_state(self) -> None:
         self.active_frame = 0
@@ -770,7 +843,9 @@ class GuiSession:
             dataset = DataSet(
                 data=jnp.asarray(_as_numpy(exp_data.get("mr_image"))),
                 name=name,
+                processed=dict(exp_data.get("processed") or {}),
                 kspace=None if exp_data.get("raw_kspace") is None else jnp.asarray(exp_data.get("raw_kspace")),
+                kspace_metadata=dict(exp_data.get("kspace_metadata") or {}),
                 spatial_geometry=_spatial_geometry_from_experiment_data(exp_data, dims=dims),
                 acquisition=exp_data.get("acquisition"),
                 trajectory=exp_data.get("trajectory"), density=exp_data.get("density"),
@@ -866,6 +941,106 @@ class GuiSession:
         return {str(key): int(value) for key, value in dims.items()}
 
     @property
+    def slice_packages(self) -> list[dict]:
+        return list(
+            (self.current_experiment.get("extra_metadata") or {}).get("slice_packages") or []
+        )
+
+    def _package_for_experiment(self, name=None):
+        name = name or self.selected_experiment
+        entry = (self.data or {}).get("experiments", {}).get(name, {})
+        packages = (entry.get("extra_metadata") or {}).get("slice_packages") or []
+        if not packages:
+            return None
+        state = self.view_states.get(name)
+        indices = (
+            self.active_indices
+            if name == self.selected_experiment
+            else (state.active_indices if state else {})
+        )
+        return packages[min(max(0, int(indices.get("slice_package", 0))), len(packages) - 1)]
+
+    def image_geometry(self, name=None) -> SpatialGeometry:
+        name = name or self.selected_experiment
+        package = self._package_for_experiment(name)
+        entry = (self.data or {}).get("experiments", {}).get(name, {})
+        dims = (self.summary_by_name.get(name) or {}).get("dims") or {}
+        geometry = _spatial_geometry_from_experiment_data(entry, dims=dims)
+        if package:
+            state = self.view_states.get(name)
+            indices = (
+                self.active_indices
+                if name == self.selected_experiment
+                else (state.active_indices if state else {})
+            )
+            frame_dims = geometry.frame_dims or tuple(
+                (dim, dims[dim]) for dim in non_spatial_names(dims)
+            )
+            frame = int(
+                np.ravel_multi_index(
+                    tuple(min(indices.get(dim, 0), size - 1) for dim, size in frame_dims),
+                    tuple(size for _, size in frame_dims),
+                )
+            )
+            if geometry.has_orientation:
+                return geometry.for_frame(frame)
+            return SpatialGeometry.from_metadata(package["spatial_geometry"])
+        return geometry
+
+    @property
+    def view_dimensions(self) -> dict[str, int]:
+        dims = self.experiment_dims
+        package = self._package_for_experiment()
+        if package and "z" in dims:
+            dims["z"] = int(self.image_geometry().spatial_shape[-1])
+        return dims
+
+    @property
+    def roi_dim_names(self) -> list[str]:
+        return (
+            ["slice_package"] if "slice_package" in self.experiment_dims else []
+        ) + self.spatial_dim_names
+
+    @property
+    def roi_shape(self) -> tuple[int, ...]:
+        return tuple(self.experiment_dims[name] for name in self.roi_dim_names)
+
+    def imported_roi(self, roi: ROI) -> ROI:
+        """Place a native mask in the selected package without altering its file."""
+        mask = np.asarray(roi.mask)
+        metadata = dict(roi.metadata or {})
+        affine = metadata.pop("nifti_affine", None)
+        if affine is not None:
+            reference = self.image_geometry().affine_for_frame(self.active_frame)
+            if reference is not None and not np.allclose(
+                affine, reference, atol=1e-4, rtol=1e-5
+            ):
+                raise ValueError(
+                    "Mask geometry differs from the displayed image. "
+                    "Register or resample the mask onto this image grid."
+                )
+        if self._package_for_experiment() and mask.shape != self.roi_shape:
+            shape = tuple(self.view_dimensions[name] for name in self.spatial_dim_names)
+            if mask.shape == shape[:2] and shape[-1] == 1:
+                mask = mask[..., None]
+            if mask.shape != shape:
+                raise ValueError("ROI dimensions do not match the selected slice package")
+            complete = np.zeros(self.roi_shape, dtype=mask.dtype)
+            index = self.active_indices.get("slice_package", 0)
+            complete[(index,) + tuple(slice(0, size) for size in shape)] = mask
+            mask = complete
+        if mask.shape != self.roi_shape:
+            raise ValueError("ROI dimensions do not match the native grid")
+        return ROI(roi.name, mask, dims=tuple(self.roi_dim_names), metadata=metadata)
+
+    def _crop_display_image(self, image):
+        for axis, name in enumerate(self.image_plane_dims):
+            count = self.view_dimensions.get(name, image.shape[axis])
+            if image.shape[axis] > count:
+                image = np.take(image, np.arange(count), axis=axis)
+        return image
+
+    @property
     def spatial_dim_names(self) -> list[str]:
         dims = self.experiment_dims
         return spatial_names(dims) if dims else ["x", "y"]
@@ -917,7 +1092,9 @@ class GuiSession:
             original = np.asarray(self.original_image_array)
         except Exception:
             return True
-        return tuple(current.shape) == tuple(original.shape) and np.array_equal(current, original)
+        return tuple(current.shape) == tuple(original.shape) and np.array_equal(
+            current, original, equal_nan=True
+        )
 
     @property
     def processed_arrays(self) -> Mapping[str, Any]:
@@ -932,7 +1109,23 @@ class GuiSession:
 
     @property
     def reconstruction_coil_count(self) -> int:
-        return reconstruction_coil_count(self.processed_arrays)
+        value = self.processed_arrays.get("raw_reconstruction_coils")
+        if value is None:
+            return 0
+        shape = _array_source(value).shape
+        if len(shape) < 4:
+            raise ValueError("MRax per-coil reconstructions must use (frame, coil, *spatial) layout.")
+        return int(shape[1])
+
+    @property
+    def has_reconstruction(self) -> bool:
+        return any(
+            self.processed_arrays.get(key) is not None
+            for key in (
+                "raw_reconstruction", "raw_reconstruction_frequency_hz",
+                "raw_reconstruction_complex", "raw_reconstruction_coils",
+            )
+        )
 
     def reconstruction_display_array(
         self,
@@ -978,17 +1171,18 @@ class GuiSession:
             or processed.get("raw_reconstruction_coils") is not None
         )
 
-    def can_lazy_load_raw_data(self, name: str | None = None) -> bool:
+    def can_lazy_load_raw_data(self, name: str | None = None, *, require_acquisition: bool = False) -> bool:
         if self.source_kind != "bruker" or not self.data:
             return False
         exp_name = name or self.selected_experiment
         if not exp_name:
             return False
         exp_data = self.data.get("experiments", {}).get(exp_name) or {}
-        if self.raw_data_loaded(exp_name):
+        available = self.can_reconstruct_raw_data(exp_name) if require_acquisition else self.raw_data_loaded(exp_name)
+        if available:
             return False
         meta = dict(exp_data.get("kspace_metadata") or {})
-        if meta.get("status") in {"loaded", "unavailable", "error"}:
+        if meta.get("status") in ({"unavailable", "error"} if require_acquisition else {"loaded", "unavailable", "error"}):
             return False
         extra = dict(exp_data.get("extra_metadata") or {})
         path = extra.get("path")
@@ -999,13 +1193,15 @@ class GuiSession:
         name: str | None = None,
         *,
         progress_callback: Callable[[int, int, str], None] | None = None,
+        require_acquisition: bool = False,
     ) -> bool:
         if not self.data:
             raise RuntimeError("No study is loaded")
         exp_name = name or self.selected_experiment
         if not exp_name:
             raise RuntimeError("No experiment is selected")
-        if self.raw_data_loaded(exp_name):
+        available = self.can_reconstruct_raw_data(exp_name) if require_acquisition else self.raw_data_loaded(exp_name)
+        if available:
             return True
         exp_data = self.data["experiments"].get(exp_name) or {}
         extra = dict(exp_data.get("extra_metadata") or {})
@@ -1022,6 +1218,7 @@ class GuiSession:
             study_globals=dict((self.data or {}).get("study_globals") or {}),
             pdata_index=str(extra.get("pdata_index") or "1"),
             load_raw_kspace=True,
+            slice_package=extra.get("slice_package"),
         )
         if progress_callback is not None:
             progress_callback(1, 2, f"Attaching raw data for scan {exp_name}")
@@ -1087,7 +1284,8 @@ class GuiSession:
         return acquisition is not None and acquisition.domain == "kspace"
 
     def reconstruct_raw_data_for_experiment(self, name: str | None = None, *, method="fft",
-                                           device: DeviceLike = "cpu", **options):
+                                           device: DeviceLike = "cpu", pipeline=None,
+                                           reconstruction_name=None, plan_settings=None, **options):
         """Run the generic reconstruction stage after raw data have been imported."""
         from mrax.reco import reconstruct_acquisition
         from mrax.reco.components import RAW_RECONSTRUCTION_FREQUENCY_KEY
@@ -1097,17 +1295,28 @@ class GuiSession:
             raise RuntimeError("This experiment has no prepared MRI acquisition")
         entry = self.data["experiments"][exp_name]
         acquisition = entry["acquisition"]
-        result = reconstruct_acquisition(acquisition, method=method, device=device, **options)
+        result = (
+            pipeline.run(acquisition, device=device, **options)
+            if pipeline is not None else reconstruct_acquisition(acquisition, method=method, device=device, **options)
+        )
         processed = dict(entry.get("processed") or {})
         processed["raw_reconstruction"] = np.asarray(result.image)
         processed["raw_reconstruction_coils"] = np.asarray(result.coil_images)
-        if acquisition.recipe.output_product == "frequency_hz":
+        product = "frequency_hz" if any(d.get("stage") == "frequency_product" for d in result.diagnostics) else "image"
+        if product == "frequency_hz":
             processed[RAW_RECONSTRUCTION_FREQUENCY_KEY] = np.asarray(result.image)
         else:
             processed.pop(RAW_RECONSTRUCTION_FREQUENCY_KEY, None)
         entry["processed"] = processed
         entry["kspace_metadata"] = {**dict(entry.get("kspace_metadata") or {}),
-            "reconstruction_status": "completed", "output_product": acquisition.recipe.output_product}
+            "reconstruction_status": "completed", "output_product": product,
+            "reconstruction_method": result.method}
+        if reconstruction_name is not None:
+            entry["kspace_metadata"]["reconstruction_name"] = reconstruction_name
+        if plan_settings is not None:
+            from copy import deepcopy
+
+            entry["kspace_metadata"]["reconstruction_pipeline"] = deepcopy(plan_settings)
         if self.study is not None and exp_name in self.study.names:
             target = self.study.datasets[list(self.study.names).index(exp_name)]
             target.processed = processed
@@ -1117,7 +1326,9 @@ class GuiSession:
 
     def prepare_raw_view(self, view: str, *, progress_callback=None, device: DeviceLike = "cpu") -> bool:
         """Import missing samples, then reconstruct only when the chosen view needs it."""
-        if not self.raw_data_loaded():
+        if view == "k_space" and self.current_experiment.get("raw_kspace") is None:
+            self.load_raw_data_for_experiment(progress_callback=progress_callback, require_acquisition=True)
+        elif not self.raw_data_loaded():
             self.load_raw_data_for_experiment(progress_callback=progress_callback)
         if view in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"} and self.reconstruction_array is None:
             if progress_callback is not None:
@@ -1168,11 +1379,61 @@ class GuiSession:
             return value.si_unit
         return (self.current_experiment.get("fitted_map_units") or {}).get(map_name)
 
-    def replace_fitted_maps(self, fields: Mapping[str, Any] | None) -> None:
+    def map_dimensions(self, name: str | None = None, *, experiment: str | None = None) -> dict[str, int]:
+        """Named axes on the stored parameter grid."""
+        experiment = experiment or self.selected_experiment
+        entry = (self.data or {}).get("experiments", {}).get(experiment, {})
+        name = name or self.active_map
+        array = _array_source((entry.get("fitted_maps") or {})[name])
+        saved = ((entry.get("extra_metadata") or {}).get("fitted_map_dims") or {}).get(name)
+        if saved and tuple(saved.values()) == array.shape:
+            return dict(saved)
+        dims = (entry.get("fit_grid") or {}).get("dims") or self.summary_by_name.get(experiment, {}).get("dims") or {}
+        spatial = {key: dims[key] for key in spatial_names(dims)}
+        if tuple(spatial.values()) == array.shape:
+            return spatial
+        if tuple(dims.values()) == array.shape:
+            return dict(dims)
+        from mrax.io.image_export import _image_layout
+
+        shaped, names = _image_layout(array, dims)
+        if shaped.shape == array.shape:
+            return dict(zip(names, array.shape, strict=True))
+        raise ValueError("The fitted map has no matching dimension metadata")
+
+    def map_frame_count(self, name: str | None = None, *, experiment: str | None = None) -> int:
+        return frame_count_from_dims(self.map_dimensions(name, experiment=experiment))
+
+    def map_frame_index(self, name: str | None = None) -> int:
+        dims = self.map_dimensions(name)
+        names = non_spatial_names(dims)
+        if not names:
+            return 0
+        return int(np.ravel_multi_index(
+            tuple(min(self.active_indices.get(key, 0), dims[key] - 1) for key in names),
+            tuple(dims[key] for key in names),
+        ))
+
+    def set_map_frame(self, value: int, name: str | None = None) -> None:
+        dims = self.map_dimensions(name)
+        names = non_spatial_names(dims)
+        count = frame_count_from_dims(dims)
+        if not 0 <= value < count:
+            raise ValueError("The fitted map has no matching frame")
+        if names:
+            for key, index in zip(names, np.unravel_index(value, tuple(dims[key] for key in names)), strict=True):
+                self.set_active_index(key, int(index))
+
+    def replace_fitted_maps(
+        self, fields: Mapping[str, Any] | None, *, dimensions: Mapping[str, Mapping[str, int]] | None = None,
+    ) -> None:
         """Replace fitted maps for the current experiment and invalidate display slices."""
 
         maps = dict(fields or {})
         self.current_experiment["fitted_maps"] = maps
+        metadata = self.current_experiment.setdefault("extra_metadata", {})
+        saved = {**metadata.get("fitted_map_dims", {}), **(dimensions or {})}
+        metadata["fitted_map_dims"] = {name: dict(saved[name]) for name in maps if name in saved}
         self.active_map = next(iter(maps), None)
         self._slice_cache.clear()
 
@@ -1221,16 +1482,65 @@ class GuiSession:
         self._slice_cache.clear()
         return changed
 
-    def dimension_controls(self, kind: str = "image") -> list[dict[str, int | str]]:
+    def dimension_controls(self, kind: str = "image") -> list[dict[str, Any]]:
+        package = self._package_for_experiment()
+        if (
+            package
+            and kind.replace("_", "") == "kspace"
+            and self.current_experiment.get("acquisition") is not None
+        ):
+            controls = [
+                {"key": name, "label": name, "axis": axis, "size": self.experiment_dims[name]}
+                for axis, name in enumerate(self.non_spatial_dim_names)
+            ]
+            controls += [{"key": "z", "label": "z", "axis": 0, "size": self.view_dimensions["z"]}]
+            if self.reconstruction_coil_count > 1:
+                controls.append(
+                    {
+                        "key": "coil",
+                        "label": "coil",
+                        "axis": 1,
+                        "size": self.reconstruction_coil_count,
+                    }
+                )
+        else:
+            controls = self._dimension_controls(kind)
+        if package:
+            for control in controls:
+                if control["key"] == "slice_package":
+                    control["label"] = "Slice package"
+                    control["choices"] = [
+                        {
+                            "value": index,
+                            "label": f"Package {index + 1} · {item['native_image_plane'].capitalize()} · {item['slice_count']} {'slice' if item['slice_count'] == 1 else 'slices'}",
+                        }
+                        for index, item in enumerate(self.slice_packages)
+                    ]
+                elif control["key"] == "z":
+                    control["size"] = self.view_dimensions.get("z", 1)
+        return controls
+
+    def _dimension_controls(self, kind: str = "image") -> list[dict[str, Any]]:
+        if self._package_for_experiment() and kind in {
+            "mrax_reconstruction",
+            "vendor_vs_mrax",
+            "vendor_mrax_diff",
+        }:
+            return _axis_controls_for_image(
+                self.image_array, self.experiment_dims, plane_dims=self.image_plane_dims
+            )
         """Return named controls for axes outside the displayed 2D plane."""
 
         if not self.is_loaded:
             return []
         kind = kind.lower().replace("-", "_").replace(" ", "_")
         if self.is_non_imaging and kind == "image":
-            return _axis_controls_for_non_image(self.image_array, self.experiment_dims)
+            return _axis_controls_for_non_image(
+                _array_source(self.current_experiment.get("mr_image")), self.experiment_dims
+            )
         if kind == "k_space":
-            arr = self.kspace_array
+            raw = self.current_experiment.get("raw_kspace")
+            arr = _array_source(raw) if raw is not None else None
             return [] if arr is None else _axis_controls_for_kspace(arr, self.experiment_dims)
         if kind in {"mrax_reconstruction", "vendor_vs_mrax", "vendor_mrax_diff"}:
             try:
@@ -1253,14 +1563,14 @@ class GuiSession:
         if kind == "map":
             try:
                 return _axis_controls_for_map(
-                    self.map_array(),
-                    self.experiment_dims,
+                    _array_source(self.fitted_maps[self.active_map or self.map_names[0]]),
+                    self.map_dimensions(self.active_map or self.map_names[0]),
                     plane_dims=self.image_plane_dims,
                 )
             except Exception:
                 return []
         return _axis_controls_for_image(
-            self.image_array,
+            _array_source(self.current_experiment.get("mr_image")),
             self.experiment_dims,
             plane_dims=self.image_plane_dims,
         )
@@ -1270,9 +1580,45 @@ class GuiSession:
         plane = _normalize_image_plane(self.active_image_plane)
         return self._image_plane_dims_for_experiment()[plane]
 
+    @property
+    def image_plane_axis_labels(self) -> tuple[str, str]:
+        """Anatomical display axes, distinct from the native storage dimensions."""
+        dims = self.image_plane_dims
+        if not self.is_loaded:
+            return dims
+        geometry = self.image_geometry()
+        labels = geometry.axis_anatomical_labels
+        spatial_dims = tuple(spatial_names(self.experiment_dims))
+        if labels is None or len(labels) != len(spatial_dims) or not geometry.has_orientation:
+            return dims
+        anatomical = dict(zip(spatial_dims, labels))
+        return tuple(anatomical.get(dim, dim) for dim in dims)
+
+    @property
+    def image_plane_axis_directions(self) -> tuple[int, int]:
+        """Screen directions of increasing anatomical coordinates (row, column).
+
+        With no orientation affine, the labels refer to array indices, which
+        increase downwards and to the right. Image arrays are never flipped.
+        """
+        if not self.is_loaded:
+            return (1, 1)
+        geometry = self.image_geometry()
+        affine = geometry.affine_for_frame(self.active_frame)
+        spatial_dims = tuple(spatial_names(self.experiment_dims))
+        if affine is None or geometry.axis_anatomical_labels is None:
+            return (1, 1)
+        directions = []
+        for dim, label in zip(self.image_plane_dims, self.image_plane_axis_labels):
+            if dim not in spatial_dims or label not in ("x", "y", "z"):
+                directions.append(1)
+                continue
+            column = len(spatial_dims) - 1 - spatial_dims.index(dim)
+            directions.append(-1 if affine["xyz".index(label), column] < 0 else 1)
+        return directions[0], directions[1]
+
     def _image_plane_dims_for_experiment(
-        self,
-        name: str | None = None,
+        self, name: str | None = None,
     ) -> dict[str, tuple[str, str]]:
         if not self.data:
             return dict(IMAGE_PLANE_DIMS)
@@ -1281,42 +1627,52 @@ class GuiSession:
         if not isinstance(exp_data, Mapping):
             return dict(IMAGE_PLANE_DIMS)
         summary = self.summary_by_name.get(exp_name or "", {})
-        dims = {
-            str(key): int(value)
-            for key, value in dict(summary.get("dims") or {}).items()
-        }
+        dims = {str(key): int(value) for key, value in dict(summary.get("dims") or {}).items()}
         spatial_dims = tuple(spatial_names(dims))
-        if spatial_dims != ("x", "y", "z"):
+        if spatial_dims not in {("x", "y"), ("x", "y", "z")}:
             return dict(IMAGE_PLANE_DIMS)
-        geometry = _spatial_geometry_from_experiment_data(exp_data, dims=dims)
+        geometry = self.image_geometry(exp_name)
         labels = geometry.axis_anatomical_labels
+        extra = exp_data.get("extra_metadata")
         if labels is None:
-            extra = exp_data.get("extra_metadata")
-            metadata_labels = (
-                extra.get("image_axis_anatomical_labels")
-                if isinstance(extra, Mapping)
-                else None
-            )
+            raw_labels = extra.get("image_axis_anatomical_labels") if isinstance(extra, Mapping) else None
             try:
-                labels = tuple(str(value).lower() for value in metadata_labels)  # type: ignore[arg-type]
+                labels = tuple(str(value).lower() for value in raw_labels)[:len(spatial_dims)]
             except TypeError:
                 labels = None
-        if labels is None or len(labels) != 3 or set(labels) != {"x", "y", "z"}:
-            return dict(IMAGE_PLANE_DIMS)
+        if labels is None or len(labels) != len(spatial_dims) or len(set(labels)) != len(labels):
+            native = extra.get("native_image_plane") if isinstance(extra, Mapping) else None
+            return {**IMAGE_PLANE_DIMS, native: ("x", "y")} if native in IMAGE_PLANE_DIMS else dict(IMAGE_PLANE_DIMS)
         dimension_for_axis = dict(zip(labels, spatial_dims))
-        return {
-            plane: (
-                dimension_for_axis[anatomical_axes[0]],
-                dimension_for_axis[anatomical_axes[1]],
-            )
-            for plane, anatomical_axes in IMAGE_PLANE_DIMS.items()
-        }
+        # A displayed array is [row, column]. Anatomical X belongs on the
+        # horizontal axis. Superior/inferior is vertical in coronal/sagittal.
+        planes = {"axial": ("y", "x"), "coronal": ("z", "x"), "sagittal": ("z", "y")}
+        result = dict(IMAGE_PLANE_DIMS)
+        for plane, axes in planes.items():
+            if all(axis in dimension_for_axis for axis in axes):
+                result[plane] = (dimension_for_axis[axes[0]], dimension_for_axis[axes[1]])
+        return result
 
     @property
     def native_image_plane(self) -> str:
         return self.native_image_plane_for_experiment()
 
     def native_image_plane_for_experiment(self, name: str | None = None) -> str:
+        exp_name = name or self.selected_experiment
+        package = self._package_for_experiment(exp_name)
+        if package:
+            labels = self.image_geometry(exp_name).axis_anatomical_labels
+            return (
+                {"x": "sagittal", "y": "coronal", "z": "axial"}[labels[2]]
+                if labels
+                else str(package["native_image_plane"])
+            )
+        if self.data and "z" not in dict(self.summary_by_name.get(exp_name or "", {}).get("dims") or {}):
+            entry = self.data.get("experiments", {}).get(exp_name or "", {})
+            extra = entry.get("extra_metadata")
+            native = extra.get("native_image_plane") if isinstance(extra, Mapping) else None
+            if native in IMAGE_PLANE_DIMS:
+                return native
         plane_dims = self._image_plane_dims_for_experiment(name)
         for plane, dims in plane_dims.items():
             if set(dims) == {"x", "y"}:
@@ -1344,10 +1700,7 @@ class GuiSession:
 
         if not self.is_loaded:
             return (1.0, 1.0)
-        geometry = _spatial_geometry_from_experiment_data(
-            self.current_experiment,
-            dims=self.experiment_dims,
-        )
+        geometry = self.image_geometry()
         spatial_dims = tuple(spatial_names(self.experiment_dims))
         if geometry.voxel_sizes is None or len(geometry.voxel_sizes) < len(spatial_dims):
             return (1.0, 1.0)
@@ -1363,6 +1716,8 @@ class GuiSession:
     def supports_image_planes(self, kind: str = "image") -> bool:
         kind = kind.lower().replace("-", "_").replace(" ", "_")
         if self.is_non_imaging or kind == "k_space":
+            return False
+        if self._package_for_experiment() and self.view_dimensions.get("z", 1) == 1:
             return False
         if not {"x", "y", "z"}.issubset(self.experiment_dims):
             return False
@@ -1416,7 +1771,13 @@ class GuiSession:
         self._slice_cache.clear()
 
     def set_active_index(self, key: str, value: int) -> None:
-        size = None
+        if key == "frame" and (key not in self.non_spatial_dim_names or not self.experiment_dims):
+            if self.experiment_dims and self.non_spatial_dim_names[:1] == ["t"]:
+                key = "t"
+            else:
+                self.set_active_frame(value)
+                return
+        size = self.view_dimensions.get(key)
         for kind in ("image", "k_space", "map"):
             for control in self.dimension_controls(kind):
                 if control["key"] == key:
@@ -1427,11 +1788,45 @@ class GuiSession:
         value = max(0, int(value))
         if size is not None:
             value = min(value, max(0, size - 1))
+        previous_package = self.active_indices.get("slice_package", 0)
         self.active_indices[key] = value
-        if key == "frame":
-            self.active_frame = value
-        elif key == "z":
+        if key == "slice_package":
+            if value != previous_package:
+                self.active_image_plane = self.native_image_plane
+            self.active_z = min(self.active_z, self.view_dimensions.get("z", 1) - 1)
+            self.active_indices["z"] = self.active_z
+        if key in self.non_spatial_dim_names:
+            names = self.non_spatial_dim_names
+            shape = tuple(self.experiment_dims[name] for name in names)
+            indices = tuple(
+                min(max(0, self.active_indices.get(name, 0)), count - 1)
+                for name, count in zip(names, shape)
+            )
+            self.active_frame = int(np.ravel_multi_index(indices, shape))
+            if names[:1] == ["t"]:
+                self.active_indices["frame"] = self.active_indices.get("t", 0)
+        if key == "z":
             self.active_z = value
+        self._slice_cache.clear()
+
+    def set_active_frame(self, value: int) -> None:
+        """Select a flattened acquisition frame and its named dimension indices."""
+        previous_package = self.active_indices.get("slice_package", 0)
+        self.active_frame = self._bounded_frame(value)
+        names = self.non_spatial_dim_names
+        if names and self.experiment_dims:
+            shape = tuple(self.experiment_dims[name] for name in names)
+            self.active_indices.update(
+                zip(names, (int(v) for v in np.unravel_index(self.active_frame, shape)))
+            )
+        if self.active_indices.get("slice_package", 0) != previous_package:
+            self.active_image_plane = self.native_image_plane
+            self.active_z = min(self.active_z, self.view_dimensions.get("z", 1) - 1)
+            self.active_indices["z"] = self.active_z
+        if names[:1] == ["t"] and self.experiment_dims:
+            self.active_indices["frame"] = self.active_indices.get("t", 0)
+        elif "frame" not in names or not self.experiment_dims:
+            self.active_indices["frame"] = self.active_frame
         self._slice_cache.clear()
 
     def frame_image(
@@ -1447,7 +1842,14 @@ class GuiSession:
         frame_idx = self._bounded_frame(frame)
         z_idx = self.active_z if z is None else max(0, int(z))
         indices = dict(self.active_indices)
-        indices["frame"] = frame_idx
+        if frame is not None and self.non_spatial_dim_names and self.experiment_dims:
+            names = self.non_spatial_dim_names
+            shape = tuple(self.experiment_dims[name] for name in names)
+            indices.update(zip(names, np.unravel_index(frame_idx, shape)))
+        if self.non_spatial_dim_names[:1] == ["t"] and self.experiment_dims:
+            indices["frame"] = indices.get("t", 0)
+        elif "frame" not in self.non_spatial_dim_names or not self.experiment_dims:
+            indices["frame"] = frame_idx
         indices["z"] = z_idx
         source = "original" if original else "current"
         key = (
@@ -1458,14 +1860,17 @@ class GuiSession:
             tuple(sorted(indices.items())),
         )
         if key not in self._slice_cache:
+            data = self.current_experiment.get("original_mr_image") if original else None
+            if data is None:
+                data = self.current_experiment.get("mr_image")
             self._slice_cache[key] = _display_slice(
-                self.original_image_array if original else self.image_array,
+                _array_source(data),
                 dims=self.experiment_dims,
                 indices=indices,
                 kind="image",
                 plane_dims=self.image_plane_dims,
             )
-        return self._slice_cache[key]
+        return self._crop_display_image(self._slice_cache[key])
 
     def non_imaging_vector(self, frame: int | None = None, *, original: bool = False) -> np.ndarray:
         arr = np.asarray(self.original_image_array if original else self.image_array)
@@ -1527,7 +1932,7 @@ class GuiSession:
                 kind="image",
                 plane_dims=self.image_plane_dims,
             )
-        return self._slice_cache[key]
+        return self._crop_display_image(self._slice_cache[key])
 
     def kspace_image(
         self,
@@ -1541,6 +1946,20 @@ class GuiSession:
         frame_idx = self._bounded_frame(frame)
         z_idx = self.active_z if z is None else max(0, int(z))
         mode_name = mode or self.active_kspace_mode
+        acquisition = self.current_experiment.get("acquisition")
+        if (
+            acquisition is not None
+            and acquisition.recipe.output_slice_counts
+            and acquisition.kind == "cartesian"
+        ):
+            selected = acquisition.select_frames(np.asarray([frame_idx]))
+            count = acquisition.recipe.output_slice_counts[frame_idx]
+            coil = min(int(self.active_indices.get("coil", 0)), acquisition.coil_count - 1)
+            return transform_kspace(
+                selected.samples[min(z_idx, count - 1), coil],
+                mode_name,
+                center=self.active_kspace_centering,
+            )
         indices = dict(self.active_indices)
         indices["frame"] = frame_idx
         indices["z"] = z_idx
@@ -1572,16 +1991,26 @@ class GuiSession:
         )
         if key not in self._slice_cache:
             self._slice_cache[key] = _display_slice(
-                self.map_array(map_name),
-                dims=self.experiment_dims,
+                _array_source(self.fitted_maps[map_name]),
+                dims=self.map_dimensions(map_name),
                 indices=indices,
                 kind="map",
                 plane_dims=self.image_plane_dims,
             )
-        return self._slice_cache[key]
+        return self._crop_display_image(self._slice_cache[key])
 
     def add_roi(self, roi: ROI) -> None:
         roi = self._roi_with_inferred_dims(roi)
+        if self.is_loaded:
+            metadata = dict(roi.metadata)
+            metadata.setdefault("source_experiment", self.selected_experiment)
+            metadata.setdefault(
+                "registration_space",
+                (self.current_experiment.get("extra_metadata") or {}).get(
+                    "registration_space", self.selected_experiment
+                ),
+            )
+            roi = ROI(roi.name, roi.mask, dims=roi.dims, metadata=metadata)
         self.rois = [existing for existing in self.rois if existing.name != roi.name]
         self.rois.append(roi)
         self._sync_shared_roi(roi)
@@ -1595,6 +2024,20 @@ class GuiSession:
     def enable_shared_roi(self, name: str) -> bool:
         for roi in self.shared_rois:
             if roi.name == name:
+                current = (self.current_experiment.get("extra_metadata") or {}).get(
+                    "registration_space", self.selected_experiment
+                )
+                source = self.current_experiment.get("pipeline_source_grid") or {}
+                roi_space = roi.metadata.get("registration_space")
+                if (
+                    roi_space
+                    and roi_space not in {current, self.selected_experiment, source.get("space")}
+                    and self.selected_experiment
+                    not in roi.metadata.get("compatible_experiments", [])
+                ):
+                    raise ValueError(
+                        "This ROI belongs to another registration space. Align the experiments or transfer it first"
+                    )
                 self.rois = [existing for existing in self.rois if existing.name != name]
                 self.rois.append(_copy_roi(roi))
                 return True
@@ -1663,7 +2106,44 @@ class GuiSession:
                 ]
 
     def apply_rois_to_all_experiments(self) -> None:
+        source_dims = tuple(self.roi_dim_names)
+        source_shape = tuple(self.roi_shape)
+        source_geometry = self.build_dataset().spatial_geometry
+        for name in self.experiment_names:
+            dims = dict(self.summary_by_name.get(name, {}).get("dims") or {})
+            target_dims = tuple(
+                (["slice_package"] if "slice_package" in dims else []) + spatial_names(dims)
+            )
+            target_shape = tuple(int(dims[dim]) for dim in target_dims)
+            if source_dims != target_dims or source_shape != target_shape:
+                raise ValueError("Native grids differ. Register experiments before sharing ROIs")
+            geometry = _spatial_geometry_from_experiment_data(
+                self.data["experiments"][name], dims=dims
+            )
+            spacing = source_geometry.voxel_sizes if source_geometry is not None else None
+            if (spacing is None) != (geometry.voxel_sizes is None) or (
+                spacing is not None
+                and not np.allclose(spacing, geometry.voxel_sizes, atol=1e-6, rtol=1e-6)
+            ):
+                raise ValueError("Voxel spacing differs. Register experiments before sharing ROIs")
+            for frame in range(
+                max(1, len(source_geometry.frame_affines) if source_geometry else 0,
+                    len(geometry.frame_affines))
+            ):
+                source_affine = (
+                    source_geometry.affine_for_frame(frame) if source_geometry else None
+                )
+                target_affine = geometry.affine_for_frame(frame)
+                if (source_affine is None) != (target_affine is None) or (
+                    source_affine is not None
+                    and not np.allclose(source_affine, target_affine, atol=1e-6, rtol=1e-6)
+                ):
+                    raise ValueError(
+                        "Physical geometry differs. Register experiments before sharing ROIs"
+                    )
         current_rois = [_copy_roi(roi) for roi in self.rois]
+        current_rois = [ROI(roi.name, roi.mask, dims=roi.dims,
+            metadata={**roi.metadata, "compatible_experiments":list(self.experiment_names)}) for roi in current_rois]
         selected_roi = self.fit_settings.selected_roi
         current_names = {roi.name for roi in current_rois}
         if selected_roi not in current_names:
@@ -1818,6 +2298,13 @@ class GuiSession:
             else:
                 saved_specs = (getattr(source_model, "parameter_specs", None) or
                     getattr(getattr(source_model, "parametrization_factory", None), "parameter_specs", {})) or {}
+        if saved_specs and self.fit_settings.selected_pools:
+            active = make_model(
+                selected_key, pools=self.fit_settings.selected_pools,
+                pool_overrides=self.fit_settings.pool_overrides or None,
+            )
+            saved_specs = {key: value for key, value in saved_specs.items()
+                           if key in active.parameter_units}
         parameter_overrides = {str(key): dict(value) for key, value in saved_specs.items()}
         for key, value in self.fit_settings.param_overrides.items():
             parameter_overrides[key] = {**parameter_overrides.get(key, {}), **value}
@@ -1827,6 +2314,8 @@ class GuiSession:
             if (
                 self.fit_settings.param_overrides
                 or self.fit_settings.selected_pools
+                or self.fit_settings.pool_overrides
+                or self.fit_settings.parameter_constant_dims
                 or (
                     selected
                     and normalize_model_key(selected)
@@ -1852,7 +2341,8 @@ class GuiSession:
                 parameter_constant_dims=self.fit_settings.parameter_constant_dims or None,
             )
             dataset = self.build_dataset()
-        if experiment.exp_type == "sat_trans":
+        inputs = model_fit_inputs(getattr(model, "name", None))
+        if experiment.exp_type == "sat_trans" and inputs.reference_scan:
             source_study = self.fit_study()
             if source_study is None or self.selected_experiment is None:
                 raise RuntimeError("A loaded study is required to normalize saturation-transfer scans")
@@ -1861,7 +2351,7 @@ class GuiSession:
                 self.selected_experiment,
                 reference=self.fit_settings.sat_trans_reference_scan,
             )
-        if normalize_model_key(getattr(model, "name", None)) in {"ab_mt_n", "zaiss_full"}:
+        if inputs.prior_maps:
             experiment = self._insert_ab_mt_prior_maps(experiment)
         study = Study(
             [experiment],
@@ -1938,6 +2428,17 @@ class GuiSession:
             return value
         return Quantity(jnp.asarray(arr), unit or _default_ab_mt_map_unit(kind))
 
+    @staticmethod
+    def _validate_fit_samples(experiment, model):
+        if normalize_model_key(getattr(model, "name", None)) not in {"dti", "dki"}:
+            return
+        _, _, groups = _field_metadata(experiment, model=model)
+        group_count = int(np.prod([experiment.dims[name] for name in groups]))
+        specs = getattr(model, "_mrax_param_specs", {}) or {}
+        trainable = sum(bool(spec.get("trainable", True)) for spec in specs.values())
+        if experiment.frame_count // max(group_count, 1) < 2 and trainable > 1:
+            raise ValueError("A tensor fit needs more than one diffusion volume. Select a diffusion series with b-values and gradient directions.")
+
     def run_current_fit(
         self,
         *,
@@ -1963,9 +2464,37 @@ class GuiSession:
                 raise RuntimeError("View-state fitting requires both an experiment and dataset override")
             experiment = input_experiment
             dataset = input_dataset
+        self._validate_fit_samples(experiment, model)
         roi = input_roi if input_roi is not None else (self.roi(roi_name) if use_roi else None)
         mask = roi.mask if roi is not None else None
         mask_dims = self._roi_mask_dims(roi, tuple(experiment.spatial_dim_names)) if roi is not None else None
+        spatial_geometry = dataset.spatial_geometry
+        output_shape = experiment.spatial_shape
+        field_shape, field_names, _extra_dims = _field_metadata(experiment, model=model)
+        fit_bounds = None
+        if (
+            mask is not None
+            and model.name in {"dti", "dki"}
+            and set(mask_dims or ()) <= set(experiment.spatial_dim_names)
+            and self.fit_settings.mask_fill_value is not None
+            and not any(self.fit_settings.regularizer_configs.values())
+            and not any(self.fit_settings.parameter_constant_dims.values())
+        ):
+            spatial_dims = tuple(experiment.spatial_dim_names)
+            spatial_mask = np.asarray(broadcast_mask(
+                mask, output_shape, mask_dims=mask_dims, target_dims=spatial_dims,
+            ))
+            support = np.nonzero(spatial_mask > 0)
+            if support and support[0].size:
+                bounds = tuple(slice(int(axis.min()), int(axis.max()) + 1) for axis in support)
+                sizes = {name: part.stop - part.start for name, part in zip(spatial_dims, bounds, strict=True)}
+                if any(sizes[name] != experiment.dims[name] for name in spatial_dims):
+                    fit_bounds = bounds
+                    selection = tuple(bounds[spatial_dims.index(name)] if name in spatial_dims else slice(None)
+                                      for name in experiment.dims)
+                    experiment = replace(experiment, dims={name: sizes.get(name, size) for name, size in experiment.dims.items()})
+                    dataset = replace(dataset, data=np.asarray(dataset.data)[selection], spatial_geometry=None)
+                    mask, mask_dims = spatial_mask[bounds], spatial_dims
         frame_mask = self.frame_mask.as_array() if self.frame_mask is not None else None
         initial_params, fit_notes = self._dti_initial_params(
             experiment,
@@ -1987,7 +2516,13 @@ class GuiSession:
             study_globals=dict((self.data or {}).get("study_globals") or {}),
             auto_mask_nan_observables=self.fit_settings.auto_mask_nan_observables,
             regularizer_configs=self.fit_settings.regularizer_configs or None,
+            data_normalization=self.fit_settings.data_normalization,
             initial_params=initial_params,
+            physical_metric=(
+                "initial_gradient"
+                if model.name in {"t2_se", "t2star_se", "exp_decay"}
+                else "curvature"
+            ),
             compute_derived_maps=(
                 self.fit_settings.compute_derived_maps
                 if compute_derived_maps is None
@@ -2009,20 +2544,36 @@ class GuiSession:
             frame_mask=frame_mask,
         )
         fit_notes.extend(replacement_notes)
+        if fit_bounds is not None:
+            restored = {}
+            for name, value in fields.items():
+                array = _as_numpy(value)
+                complete = np.full(output_shape, self.fit_settings.mask_fill_value, dtype=array.dtype)
+                complete[fit_bounds] = array
+                restored[name] = (
+                    Quantity(complete, value.si_unit)
+                    if isinstance(value, Quantity) else complete
+                )
+            fields = restored
         if fit_info.regularization_mode == "smoothed_tv":
-            fit_notes.append(f"Warning: {fit_info.optimizer_name} uses smoothed TV gradients; choose auto, FISTA, or split_bregman for true TV proximal fitting.")
+            fit_notes.append(f"Warning: {fit_info.optimizer_name} uses smoothed TV gradients. Choose auto, FISTA, or split_bregman for true TV proximal fitting.")
         return {
             "name": self.selected_experiment or "gui_fit",
             "model": model.name,
             "fields": fields,
+            "field_dims": {
+                name: {dim: int(size) for dim, size in zip(field_names, field_shape, strict=True)}
+                for name, value in fields.items()
+                if _as_numpy(value).shape == field_shape
+            },
             "loss_history": losses,
             "cached": False,
             "fit_notes": fit_notes,
             "optimizer_name": fit_info.optimizer_name,
             "regularization_mode": fit_info.regularization_mode,
             "spatial_geometry": (
-                dataset.spatial_geometry.to_metadata()
-                if dataset.spatial_geometry is not None
+                spatial_geometry.to_metadata()
+                if spatial_geometry is not None
                 else None
             ),
         }
@@ -2045,21 +2596,32 @@ class GuiSession:
             return None, []
         try:
             data = reshape_dims_to_frames(_as_numpy(dataset.data), experiment.dims)
-            bvals_fit = bvals
-            bvecs_fit = bvecs
-            if frame_mask is not None:
-                fm = np.asarray(frame_mask, dtype=bool).reshape((-1,))
-                if int(fm.size) == int(data.shape[0]):
-                    data = data[fm]
-                    bvals_fit = _slice_frame_values(bvals, fm)
-                    bvecs_fit = _slice_frame_values(bvecs, fm)
-            rank = dti_design_rank(bvals_fit, bvecs_fit)
-            if rank < 7:
-                return None, [
-                    f"DTI tensor initialization skipped because the active frame set has design rank {rank}/7; include b0 frames and at least six independent diffusion directions for tensor fitting."
-                ]
-            direct = fit_dti_log_linear(data, bvals_fit, bvecs_fit, mask=None)
-            initial_params = _fields_to_initial_params(model, direct)
+            field_shape, _, groups = _field_metadata(experiment, model=model)
+            group_shape = tuple(int(experiment.dims[name]) for name in groups)
+            frame_grid = np.arange(len(data)).reshape(experiment.non_spatial_shape)
+            seeds = {}
+            ranks = []
+            for group in np.ndindex(group_shape):
+                coordinates = dict(zip(groups, group, strict=True))
+                selection = tuple(coordinates.get(name, slice(None)) for name in experiment.non_spatial_dim_names)
+                included = np.zeros(len(data), dtype=bool)
+                included[np.asarray(frame_grid[selection]).reshape(-1)] = True
+                if frame_mask is not None:
+                    included &= np.asarray(frame_mask, dtype=bool).reshape(-1)
+                bvals_fit = _slice_frame_values(bvals, included)
+                bvecs_fit = _slice_frame_values(bvecs, included)
+                rank = dti_design_rank(bvals_fit, bvecs_fit)
+                if rank < 7:
+                    return None, [
+                        f"DTI tensor initialization skipped because an active frame group has design rank {rank}/7. Include b0 frames and at least six independent diffusion directions for each group."
+                    ]
+                ranks.append(rank)
+                direct = fit_dti_log_linear(data[included], bvals_fit, bvecs_fit, mask=None)
+                for name in model.parameter_units:
+                    if name in direct:
+                        seeds.setdefault(name, np.empty(field_shape, dtype=np.float32))[group] = direct[name]
+            rank = min(ranks)
+            initial_params = _fields_to_initial_params(model, seeds)
         except Exception:
             return None, []
         if initial_params is None:
@@ -2154,31 +2716,104 @@ class GuiSession:
         model_name: str | None = None,
         input_experiment: Experiment | None = None,
         input_dataset: DataSet | None = None,
+        input_roi: ROI | None = None,
+        use_roi: bool = False,
     ) -> dict[str, Any]:
         """Run the core MRax pre-fit sanity check for current GUI fit inputs."""
 
         try:
+            from mrax.core.loss_builder import (
+                _field_metadata,
+                _frame_mask_from_observables,
+                _normalize_constant_dims,
+            )
+
             experiment, model, dataset, _study = self.build_fit_inputs(model_name)
             if input_experiment is not None or input_dataset is not None:
                 if input_experiment is None or input_dataset is None:
                     raise RuntimeError("View-state fitting requires both an experiment and dataset override")
                 experiment = input_experiment
                 dataset = input_dataset
+            self._validate_fit_samples(experiment, model)
             report = experiment.sanity_check(
                 model,
                 dataset,
                 study_globals=dict((self.data or {}).get("study_globals") or {}),
             )
+            errors, warnings, notes = report.errors, report.warnings, report.notes
+            errors.extend("Missing observable: " + name for name in report.missing_observables)
+            errors.extend(
+                "Provide one of: " + ", ".join(group) for group in report.missing_any_of
+            )
+            report.missing_observables.clear()
+            report.missing_any_of.clear()
+            field_shape, field_names, _ = _field_metadata(experiment, model=model)
+            _normalize_constant_dims(model.parameter_constant_dims, field_names, field_shape)
+            params, unpack = model.parametrization_factory((1, 1))
+            for name, value in unpack(params).items():
+                if not np.isfinite(np.asarray(value)).all():
+                    errors.append("Initial parameter values must be finite: " + name)
+            count = frame_count_from_dims(experiment.dims)
+            included = (
+                np.asarray(self.frame_mask.as_array(), dtype=bool)
+                if self.frame_mask is not None else np.ones(count, dtype=bool)
+            )
+            observables = {
+                **dict((self.data or {}).get("study_globals") or {}),
+                **dict(experiment.observables),
+            }
+            arrays = expand_observables_to_frames(
+                observables, experiment.dims, getattr(experiment, "_mrax_dim_observables", None),
+            )
+            if self.fit_settings.auto_mask_nan_observables:
+                observable_mask = _frame_mask_from_observables(arrays, experiment)
+                if observable_mask is not None and included.shape == (count,):
+                    usable = np.asarray(observable_mask, dtype=bool)
+                    removed = int(np.count_nonzero(included & ~usable))
+                    if removed:
+                        warnings.append(f"Excluded {removed} frames with non-finite observables.")
+                    included = included & usable
+            for name, values in arrays.items():
+                values = np.asarray(values)
+                if (values.ndim == 0 or not self.fit_settings.auto_mask_nan_observables) and not np.isfinite(values).all():
+                    errors.append("Observable must be finite: " + name)
+            if included.shape != (count,) or not included.any():
+                errors.append("Keep at least one valid included frame")
+            else:
+                roi = input_roi if input_roi is not None else (self.roi() if use_roi else None)
+                if use_roi and roi is None:
+                    errors.append("Select at least one nonempty ROI, or choose Whole image")
+                data = np.asarray(dataset.data)
+                frames = reshape_dims_to_frames(data, experiment.dims)
+                masks = None
+                if roi is not None:
+                    mask = broadcast_mask(
+                        roi.mask, data.shape,
+                        mask_dims=self._roi_mask_dims(roi, tuple(experiment.spatial_dim_names)),
+                        target_dims=tuple(experiment.dims),
+                    )
+                    masks = reshape_dims_to_frames(mask, experiment.dims)
+                if not any(
+                    np.any(np.isfinite(frames[index]) & (masks[index] != 0))
+                    if masks is not None else np.isfinite(frames[index]).any()
+                    for index in np.flatnonzero(included)
+                ):
+                    errors.append("No finite image samples remain in the selected region and frames")
+                notes.append(f"Included frames: {int(included.sum())} of {count}.")
             text = report.explain()
             ok = bool(report.ok)
         except Exception as exc:
             text = "Fit sanity check\nerrors:\n  - " + str(exc) + "\nstatus: fix required items before running run_fit"
             ok = False
+            errors, warnings, notes = [str(exc)], [], []
         return {
             "name": self.selected_experiment or "gui_fit",
             "model": model_name or self.fit_settings.model_name or self.current_model_name,
             "ok": ok,
             "report": text,
+            "errors": errors,
+            "warnings": warnings,
+            "notes": notes,
         }
 
     def run_preview_fit(
@@ -2186,6 +2821,7 @@ class GuiSession:
         *,
         model_name: str | None = None,
         roi_name: str | None = None,
+        use_roi: bool = True,
         input_experiment: Experiment | None = None,
         input_dataset: DataSet | None = None,
         input_roi: ROI | None = None,
@@ -2196,28 +2832,92 @@ class GuiSession:
     ) -> dict[str, Any]:
         steps = self.fit_settings.num_steps if num_steps is None else int(num_steps)
         if progress_callback is not None:
-            progress_callback(0, max(1, steps), "Preparing ROI preview fit")
-        roi = input_roi if input_roi is not None else self.roi(roi_name)
-        if roi is None:
-            raise RuntimeError("At least one ROI is required for preview fitting")
+            progress_callback(0, max(1, steps), "Preparing signal preview fit")
+        roi = input_roi if input_roi is not None else (self.roi(roi_name) if use_roi else None)
+        if use_roi and roi_name is not None and roi is None:
+            raise ValueError("Choose an enabled ROI or use the whole image mean")
         experiment, model, dataset, _study = self.build_fit_inputs(model_name)
         if input_experiment is not None or input_dataset is not None:
             if input_experiment is None or input_dataset is None:
                 raise RuntimeError("View-state fitting requires both an experiment and dataset override")
             experiment = input_experiment
             dataset = input_dataset
-        extracted = extract_timecourse_from_experiment(np.asarray(dataset.data), experiment, roi, stat="mean")
-        observed = _as_numpy(extracted["timecourse"])
+        self._validate_fit_samples(experiment, model)
+        if roi is None:
+            axes = tuple(list(experiment.dims).index(name) for name in experiment.spatial_dim_names)
+            observed = np.nanmean(np.asarray(dataset.data).reshape(experiment.shape), axis=axes)
+        else:
+            extracted = extract_timecourse_from_experiment(np.asarray(dataset.data), experiment, roi, stat="mean")
+            observed = _as_numpy(extracted["timecourse"])
         non_spatial = tuple(int(experiment.dims[name]) for name in experiment.non_spatial_dim_names)
         preview_dims = {name: int(experiment.dims[name]) for name in experiment.non_spatial_dim_names}
         preview_dims.update({"x": 1, "y": 1})
         preview_data = observed.reshape(non_spatial + (1, 1))
+        preview_observables = dict(experiment.observables)
+        spatial_rank = len(experiment.spatial_shape)
+        for name, quantity in experiment.observables.items():
+            values = np.asarray(quantity.values)
+            if (
+                not spatial_rank or values.ndim < spatial_rank
+                or tuple(values.shape[-spatial_rank:]) != experiment.spatial_shape
+                or name in {"bvecs", "bvec"}
+            ):
+                continue
+            if roi is not None:
+                mask_dims = tuple(roi.dims or experiment.spatial_dim_names)
+                if set(mask_dims) <= set(experiment.spatial_dim_names):
+                    mask = broadcast_mask(roi.mask, experiment.spatial_shape, mask_dims=mask_dims,
+                                          target_dims=tuple(experiment.spatial_dim_names))
+                else:
+                    if values.ndim == spatial_rank:
+                        values = np.broadcast_to(values, experiment.shape)
+                    else:
+                        expanded = expand_observables_to_frames(
+                            {name: quantity}, experiment.dims,
+                            getattr(experiment, "_mrax_dim_observables", None),
+                        )[name]
+                        values = np.asarray(expanded).reshape(experiment.shape)
+                    mask = broadcast_mask(roi.mask, values.shape, mask_dims=mask_dims,
+                                          target_dims=tuple(experiment.dims))
+                values = np.where(mask, values, np.nan)
+            reduced = np.nanmean(values, axis=tuple(range(values.ndim - spatial_rank, values.ndim)))
+            preview_observables[name] = quantity.with_values(reduced.reshape(reduced.shape + (1, 1)))
         preview_exp = Experiment(
             dims=preview_dims,
-            observables=dict(experiment.observables),
+            observables=preview_observables,
             exp_type=experiment.exp_type,
         )
-        preview_ds = DataSet(data=jnp.asarray(preview_data), name="roi_preview")
+        if getattr(experiment, "_mrax_dim_observables", None) is not None:
+            preview_exp._mrax_dim_observables = dict(experiment._mrax_dim_observables)
+        from mrax.core.loss_builder import _field_metadata, _normalize_constant_dims
+
+        field_shape, field_names, _ = _field_metadata(experiment, model=model)
+        _, preview_names, _ = _field_metadata(preview_exp, model=model)
+        retained = {
+            axis: preview_names.index(name) for axis, name in enumerate(field_names)
+            if name not in experiment.spatial_dim_names and name in preview_names
+        }
+        model = copy(model)
+        constants = _normalize_constant_dims(model.parameter_constant_dims, field_names, field_shape)
+        model.parameter_constant_dims = {
+            name: tuple(retained[axis] for axis in axes if axis in retained)
+            for name, axes in constants.items()
+        }
+        regularizers = {}
+        for name, entries in (self.fit_settings.regularizer_configs or model.regularizer_configs or {}).items():
+            for entry in entries:
+                axes = entry.get("axes")
+                axes = list(range(len(field_names))) if axes is None else axes
+                axes = [field_names.index(axis) if isinstance(axis, str) else int(axis)
+                        for axis in axes]
+                axes = [axis if axis >= 0 else len(field_names) + axis for axis in axes]
+                if any(not 0 <= axis < len(field_names) for axis in axes):
+                    raise ValueError("Choose detected regularization dimensions")
+                axes = [retained[axis] for axis in axes if axis in retained]
+                if axes:
+                    regularizers.setdefault(name, []).append({**entry, "axes": axes})
+        model.reg_weights = {}
+        preview_ds = DataSet(data=jnp.asarray(preview_data), name="signal_preview")
         frame_mask = self.frame_mask.as_array() if self.frame_mask is not None else None
         fields, losses, model_fn = run_fit(
             preview_exp,
@@ -2228,7 +2928,8 @@ class GuiSession:
             frame_mask=frame_mask,
             study_globals=dict((self.data or {}).get("study_globals") or {}),
             auto_mask_nan_observables=self.fit_settings.auto_mask_nan_observables,
-            regularizer_configs=self.fit_settings.regularizer_configs or None,
+            regularizer_configs=regularizers,
+            data_normalization=self.fit_settings.data_normalization,
             return_model_callable=True,
             progress_callback=progress_callback,
             device=device,
@@ -2246,6 +2947,11 @@ class GuiSession:
             "fields": fields,
             "loss_history": losses,
             "model": model.name,
+            "roi_name": roi.name if roi is not None else None,
+            "frame_dimensions": [
+                (name, int(experiment.dims[name])) for name in experiment.non_spatial_dim_names
+            ],
+            "parameter_dimensions": [(name, int(preview_exp.dims[name])) for name in preview_names],
         }
 
     def save_fit_result(self, fit_result: Mapping[str, Any], output_dir: str | Path, *, bundle=True, progress_callback=None) -> Path:
@@ -2438,9 +3144,34 @@ class GuiSession:
 
     @staticmethod
     def _ensure_original_image_snapshot(exp_data: MutableMapping[str, Any]) -> None:
-        if exp_data.get("original_mr_image") is not None or exp_data.get("mr_image") is None:
+        original = exp_data.get("original_mr_image")
+        if original is None:
+            original = exp_data.get("mr_image")
+        if original is None:
             return
-        exp_data["original_mr_image"] = np.asarray(exp_data.get("mr_image")).copy()
+        exp_data["original_mr_image"] = _original_image_snapshot(original)
+
+
+def _array_source(value: Any):
+    """Inspect or slice an array before transferring numerical data to the host."""
+    if isinstance(value, Quantity):
+        value = value.values
+    return value if hasattr(value, "ndim") and hasattr(value, "shape") else np.asarray(value)
+
+
+def _original_image_snapshot(value: Any):
+    if hasattr(value, "block_until_ready") and hasattr(value, "shape"):
+        return value
+    image = np.asarray(value)
+    # A file-backed view must not remain tied to an external mutable mapping.
+    base = image
+    needs_copy = image.flags.writeable or isinstance(base, np.memmap)
+    while isinstance(getattr(base, "base", None), np.ndarray):
+        base = base.base
+        needs_copy = needs_copy or base.flags.writeable or isinstance(base, np.memmap)
+    original = image.copy() if needs_copy else image
+    original.flags.writeable = False
+    return original
 
 
 def _as_numpy(value: Any) -> np.ndarray:
@@ -2911,7 +3642,7 @@ def _study_to_session_data(
         image = dataset.data
         experiments[name] = {
             "mr_image": image,
-            "original_mr_image": np.asarray(image).copy(),
+            "original_mr_image": _original_image_snapshot(image),
             "raw_kspace": dataset.kspace,
             "acquisition": dataset.acquisition,
             "trajectory": dataset.trajectory, "density": dataset.density,
@@ -3001,14 +3732,27 @@ def _display_slice(
     kind: str = "image",
     plane_dims: Sequence[str] = ("x", "y"),
 ) -> np.ndarray:
-    arr = np.asarray(array)
+    arr = _array_source(array)
+    if dims and kind == "map":
+        spatial = {name: dims[name] for name in spatial_names(dims)}
+        if tuple(arr.shape) == tuple(spatial.values()):
+            dims = spatial
+    if dims and "slice_package" in dims and kind != "kspace":
+        spatial = {name: dims[name] for name in spatial_names(dims)}
+        shape = tuple(spatial.values())
+        if tuple(arr.shape) == shape:
+            dims = spatial
+        elif arr.shape[-len(shape) :] == shape and arr.ndim == len(shape) + 1:
+            if kind == "map" and arr.shape[0] == dims["slice_package"]:
+                dims = {"slice_package": dims["slice_package"], **spatial}
+            elif kind == "image" and arr.shape[0] == frame_count_from_dims(dims):
+                arr = arr.reshape(tuple(dims.values()))
+            elif kind == "image" and arr.shape[0] == 1:
+                dims = {"frame": 1, **spatial}
     if arr.ndim == 0:
-        return arr.reshape((1, 1))
+        return np.asarray(arr).reshape((1, 1))
     if arr.ndim == 1:
-        return arr.reshape((1, arr.shape[0]))
-    if arr.ndim == 2:
-        return arr
-
+        return np.asarray(arr).reshape((1, arr.shape[0]))
     controls = _axis_controls_for_kind(arr, dims or {}, kind, plane_dims=plane_dims)
     index_map = dict(indices or {})
     slicer: list[object] = [slice(None)] * arr.ndim
@@ -3016,7 +3760,7 @@ def _display_slice(
         axis = int(control["axis"])
         key = str(control["key"])
         if 0 <= axis < arr.ndim:
-            value = int(index_map.get(key, 0))
+            value = int(index_map.get(str(control["label"]), index_map.get(key, 0)))
             slicer[axis] = max(0, min(value, arr.shape[axis] - 1))
     selected = np.asarray(arr[tuple(slicer)])
     if selected.ndim == 2:
@@ -3036,8 +3780,7 @@ def _display_slice(
         return selected.reshape((1, selected.shape[0]))
     if selected.ndim == 2:
         return selected
-    # If some unknown dimension remains, keep the first plane instead of
-    # flattening unrelated axes into a confusing preview.
+    # Keep the first plane when a dimension remains unresolved.
     while selected.ndim > 2:
         selected = np.take(selected, 0, axis=0)
     return selected
@@ -3063,7 +3806,7 @@ def _axis_controls_for_image(
     *,
     plane_dims: Sequence[str] = ("x", "y"),
 ) -> list[dict[str, int | str]]:
-    arr = np.asarray(arr)
+    arr = _array_source(arr)
     if arr.ndim <= 2:
         return []
     dim_names = list(dims.keys()) if len(dims) == arr.ndim else []
@@ -3085,7 +3828,7 @@ def _axis_controls_for_image(
 
 
 def _axis_controls_for_non_image(arr: np.ndarray, dims: Mapping[str, int]) -> list[dict[str, int | str]]:
-    arr = np.asarray(arr)
+    arr = _array_source(arr)
     if arr.ndim <= 1:
         return []
     dim_names = list(dims.keys()) if len(dims) == arr.ndim else []
@@ -3104,7 +3847,11 @@ def _axis_controls_for_map(
     *,
     plane_dims: Sequence[str] = ("x", "y"),
 ) -> list[dict[str, int | str]]:
-    arr = np.asarray(arr)
+    arr = _array_source(arr)
+    if dims and "slice_package" in dims:
+        spatial = {name: dims[name] for name in spatial_names(dims)}
+        if arr.shape == (dims["slice_package"],) + tuple(spatial.values()):
+            dims = {"slice_package": dims["slice_package"], **spatial}
     if arr.ndim <= 2:
         return []
     controls: list[dict[str, int | str]] = []
@@ -3135,7 +3882,7 @@ def _axis_controls_for_map(
 
 
 def _axis_controls_for_kspace(arr: np.ndarray, dims: Mapping[str, int]) -> list[dict[str, int | str]]:
-    arr = np.asarray(arr)
+    arr = _array_source(arr)
     if arr.ndim <= 2:
         return []
     non_spatial = non_spatial_names(dims)

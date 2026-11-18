@@ -30,7 +30,7 @@ def prepare_pulseq_samples(info, samples, *, spatial_shape=None, frame_indices=N
         raise ValueError("Pulseq FOV must contain positive finite spatial lengths")
     physical = np.asarray(physical)[:, :len(shape)]
     if len(physical) != sample_count:
-        raise ValueError("Measured ADC count differs from the sequence trajectory; provide the matching sequence or explicit ADC selection")
+        raise ValueError("Measured ADC count differs from the sequence trajectory. Provide the matching sequence or explicit ADC selection")
     output_shape = shape
     if info.adc_counts and len(set(info.adc_counts)) == 1:
         n = int(info.adc_counts[0])
@@ -124,7 +124,7 @@ def prepare_pulseq_samples(info, samples, *, spatial_shape=None, frame_indices=N
         frame_indices = np.asarray(frame_indices, int)
         frames, counts = np.unique(frame_indices, return_counts=True)
         if len(set(counts)) != 1:
-            raise ValueError("Frame sample counts differ; select a frame explicitly")
+            raise ValueError("Frame sample counts differ. Select a frame explicitly")
         grouped = np.argsort(frame_indices, kind='stable').reshape((len(frames), int(counts[0])))
         values = np.empty((len(frames), samples.shape[0], int(counts[0])), samples.dtype)
         coords = None
@@ -133,7 +133,7 @@ def prepare_pulseq_samples(info, samples, *, spatial_shape=None, frame_indices=N
             order = np.lexsort(tuple(np.round(k[:, i], 6) for i in range(k.shape[1])))
             k = k[order]
             if coords is not None and not np.allclose(coords, k, atol=2e-6):
-                raise ValueError("Pulseq trajectory changes between frames; select a frame explicitly")
+                raise ValueError("Pulseq trajectory changes between frames. Select a frame explicitly")
             coords = k
             values[index] = samples[:, selected[order]]
         acquired = None

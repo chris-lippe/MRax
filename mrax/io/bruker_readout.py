@@ -13,7 +13,7 @@ def prepare_delayed_readouts(records, target_trajectory, *, folder, method, acqp
 
     A Fourier profile inversion is only a suggested reconstruction operation.
     The returned primary stream contains the original measurements from every
-    imaging polarity; reference and skipped ADC samples remain auxiliary data.
+    imaging polarity. Reference and skipped ADC samples remain auxiliary data.
     """
     from .bruker_parameters import parse_jcamp
     from .bruker_sampling import _parse_bruker_inverse_fid_delay
@@ -38,8 +38,7 @@ def prepare_delayed_readouts(records, target_trajectory, *, folder, method, acqp
     delay = _parse_bruker_inverse_fid_delay(reco)
     if delay is None:
         raise ValueError("Delayed readout acquisition delay is not explicitly declared")
-    # Nonzero digital/analog filter delays must be resolved rather than hidden
-    # in an empirical spatial shift. Their sample-time semantics are distinct.
+    # Resolve digital and analog filter delays in their own sample-time units.
     import re
 
     stage = str(reco.get("RecoStageNodes", ""))

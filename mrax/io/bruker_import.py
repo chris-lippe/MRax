@@ -5,7 +5,7 @@ import logging
 import warnings
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -57,25 +57,14 @@ ExperimentRecipe = Callable[[dict, dict, int], str | RecipeResult]
 PDataIndex = str | int | Dict[str | int, str | int]
 DEFAULT_PDATA_INDEX = "1"
 
-def _attach_acquisition(dataset, folder, pdata_index, *, definition_paths, profiles, strict_raw, image_frame_order=None):
+def _attach_acquisition(dataset, folder, pdata_index, *, definition_paths, profiles, strict_raw, image_frame_order=None, slice_package=None):
     try:
         acquisition, report = read_bruker_acquisition(folder, pdata_index=pdata_index,
-            definition_paths=definition_paths, profiles=profiles)
+            definition_paths=definition_paths, profiles=profiles, slice_package=slice_package)
         if image_frame_order is not None:
             order = np.asarray(image_frame_order, int)
-            if order.shape != (acquisition.frame_count,) or acquisition.recipe.stack_slices != 1:
-                raise ValueError("Image-frame reordering requires an explicit mapping to acquisition readouts")
-            recipe = acquisition.recipe
-            options = {}
-            for name in ("acquired", "statistical_weights"):
-                value = getattr(acquisition, name)
-                if value is not None and value.ndim == acquisition.samples.ndim and value.shape[0] == acquisition.frame_count:
-                    options[name] = value[order]
-            acquisition = replace(acquisition, samples=acquisition.samples[order],
-                frame_coordinates={name: np.asarray(value)[order] for name, value in acquisition.frame_coordinates.items()},
-                recipe=replace(recipe,
-                    frame_image_shifts=tuple(recipe.frame_image_shifts[i] for i in order) if recipe.frame_image_shifts else (),
-                    frame_permutations=tuple(recipe.frame_permutations[i] for i in order) if recipe.frame_permutations else ()), **options)
+            acquisition = acquisition.select_frames(order)
+        acquisition = replace(acquisition, geometry=dataset.spatial_geometry)
     except (OSError, ValueError) as error:
         if strict_raw:
             raise
@@ -107,14 +96,28 @@ def import_bruker_experiment(
     profiles=None,
     strict_raw: bool = True,
     device: DeviceLike = "cpu",
+    slice_package: int | None = None,
 ) -> Tuple[Experiment, DataSet, Model, dict]:
+    """Read one spatial image product without changing any source files.
+
+    Multiple stacks remain in one experiment along ``slice_package``. Selecting
+    ``slice_package`` explicitly imports only that zero-based package.
+    Raw reconstruction additionally requires the
+    selected product's reconstruction parameters.
+    """
     exp_dir = Path(exp_dir)
     resolved_pdata_index = _resolve_pdata_index(pdata_index, exp_dir.name)
     method = parse_jcamp(exp_dir / "method")
     acqp = parse_jcamp(exp_dir / "acqp") if (exp_dir / "acqp").exists() else {}
     pdata_dir = exp_dir / "pdata" / resolved_pdata_index
     reco_params = parse_jcamp(pdata_dir / "reco") if (pdata_dir / "reco").exists() else {}
-    data, visu, spatial_shape = load_2dseq(pdata_dir)
+    data, visu, spatial_shape = load_2dseq(pdata_dir, slice_package=slice_package)
+    name = str(exp_dir.name)
+    package_grids = visu.get("_mrax_package_frame_indices") or []
+    package_count = len(package_grids)
+    all_data = data
+    if package_count:
+        data = data[: data.shape[0] // package_count]
     study_globals = _normalize_study_globals(study_globals)
     recipe_type, recipe_obs, recipe_model = _apply_recipe(recipe, visu, method, frame_count=data.shape[0])
     frame_count = data.shape[0]
@@ -141,9 +144,21 @@ def import_bruker_experiment(
             obs,
             fair_mode=method.get("PVM_FairMode"),
         )
+        if fair_order is not None:
+            if package_count:
+                visu["_mrax_package_frame_indices"] = [
+                    [grid[int(index)] for index in fair_order] for grid in package_grids
+                ]
+                fair_order = np.concatenate(
+                    [fair_order + package * frame_count for package in range(package_count)]
+                )
+                all_data = all_data[fair_order]
+            else:
+                grid = visu["_mrax_output_frame_indices"]
+                visu["_mrax_output_frame_indices"] = [grid[int(index)] for index in fair_order]
     experiment, _ = build_imported_experiment_dataset(
         ImportDefinition(
-            name=str(exp_dir.name),
+            name=name,
             data=np.asarray(data),
             frame_count=frame_count,
             spatial_shape=spatial_shape,
@@ -169,7 +184,7 @@ def import_bruker_experiment(
                 obs["TR"] = Quantity(np.asarray(tr_full_s, dtype=np.float32) * 1e3, "ms")
                 experiment, _ = build_imported_experiment_dataset(
                     ImportDefinition(
-                        name=str(exp_dir.name),
+                        name=name,
                         data=np.asarray(data),
                         frame_count=frame_count,
                         spatial_shape=spatial_shape,
@@ -180,12 +195,30 @@ def import_bruker_experiment(
     sequence_type = _bruker_sequence_type(method, visu)
     from .bruker_storage import discover_raw_stream
     stream, _ = discover_raw_stream(exp_dir, acqp)
-    raw_meta = {"status": "not_loaded" if stream is not None else "unavailable", "lazy_available": stream is not None}
+    raw_available = stream is not None and (pdata_dir / "reco").is_file()
+    raw_meta = {"status": "not_loaded" if raw_available else "unavailable", "lazy_available": raw_available}
+    if stream is not None and not raw_available:
+        raw_meta.update(reason="missing_reconstruction_recipe",
+            message="This image product has no reconstruction recipe. Import the acquisition's source images to reconstruct it.")
     experiment, dataset = build_imported_experiment_dataset(ImportDefinition(
-        name=str(exp_dir.name), data=np.asarray(data), frame_count=frame_count,
+        name=name, data=np.asarray(data), frame_count=frame_count,
         spatial_shape=spatial_shape, exp_type=exp_type, observables=obs,
         sequence_type=sequence_type, kspace_metadata=raw_meta,
         spatial_geometry=bruker_spatial_geometry(visu, spatial_shape=spatial_shape)))
+    if package_count:
+        dataset.data = jnp.asarray(all_data.reshape((package_count,) + experiment.shape))
+        experiment.dims = {"slice_package": package_count, **experiment.dims}
+        experiment._mrax_dim_observables = {
+            "slice_package": None,
+            **getattr(experiment, "_mrax_dim_observables", {}),
+        }
+        dataset.spatial_geometry = replace(
+            dataset.spatial_geometry,
+            frame_dims=tuple(
+                (name, experiment.dims[name]) for name in experiment.non_spatial_dim_names
+            ),
+        )
+        experiment.validate(dataset)
     experiment.study_globals = study_globals
     model_from_default = False
     if recipe_model is not None:
@@ -266,6 +299,27 @@ def import_bruker_experiment(
             _LOG.debug("Ignored optional operation failure", exc_info=True)
 
     metadata = {
+        "name": name,
+        "slice_package": slice_package,
+        "slice_packages": [
+            {
+                **description,
+                "spatial_geometry": bruker_spatial_geometry(
+                    {
+                        **visu,
+                        "_mrax_package_frame_indices": None,
+                        "_mrax_output_frame_indices": package_grids[package],
+                        "_mrax_selected_package": package,
+                    },
+                    spatial_shape=spatial_shape[:2] + (description["slice_count"],),
+                ).to_metadata(),
+            }
+            for package, description in enumerate(visu.get("_mrax_slice_packages", []))
+        ],
+        "image_geometry_version": 3,
+        "source_format": "Bruker",
+        "image_source": str(exp_dir / "pdata" / resolved_pdata_index / "2dseq"),
+        "raw_source": None if stream is None else str(stream),
         "scan_no": str(exp_dir.name),
         "path": exp_dir,
         "type": exp_type,
@@ -289,10 +343,10 @@ def import_bruker_experiment(
     if non_imaging_role:
         metadata["non_imaging"] = True
         metadata["data_role"] = non_imaging_role
-    if load_raw_kspace and stream is not None:
+    if load_raw_kspace and raw_available:
         metadata["raw_import"] = _attach_acquisition(dataset, exp_dir, resolved_pdata_index,
             definition_paths=definition_paths, profiles=profiles, strict_raw=strict_raw,
-            image_frame_order=metadata.get("image_frame_order"))
+            image_frame_order=metadata.get("image_frame_order"), slice_package=slice_package)
     return experiment, dataset, model, metadata
 
 @device_function
@@ -312,19 +366,23 @@ def import_bruker_study(
     strict_raw: bool = True,
     device: DeviceLike = "cpu",
     progress_callback: Callable[[int, int, str], None] | None = None,
+    selected_experiments: Sequence[str] | None = None,
 ):
     root = Path(study_root)
     study_globals = _normalize_study_globals(study_globals, field_strength_mhz)
-    if "field_strength_mhz" not in study_globals:
-        warnings.warn(
-            "No field_strength_mhz provided for this study. Set field_strength_mhz=... or include it in study_globals; "
-            "models that require it will raise errors when fitted.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
     entries: List[dict] = []
     skipped_entries: List[dict] = []
     scan_dirs = discover_bruker_experiments(root)
+    if isinstance(selected_experiments, (str, bytes)):
+        raise ValueError("Provide selected experiment names as a list")
+    if selected_experiments is not None:
+        selected = {str(name) for name in selected_experiments}
+        available = {path.name for path in scan_dirs}
+        if not selected:
+            raise ValueError("Select at least one Bruker experiment")
+        if selected - available:
+            raise ValueError("The selected Bruker experiments are no longer available")
+        scan_dirs = [path for path in scan_dirs if path.name in selected]
     total_steps = max(1, len(scan_dirs) + 1)
     if progress_callback is not None:
         progress_callback(0, total_steps, "Scanning Bruker study")
@@ -369,11 +427,19 @@ def import_bruker_study(
                 recipe=recipe,
                 load_raw_kspace=load_raw_kspace,
                 rotate_bvecs_to_image=rotate_bvecs_to_image,
-                definition_paths=definition_paths, profiles=profiles, strict_raw=strict_raw, device=device,
+                definition_paths=definition_paths,
+                profiles=profiles,
+                strict_raw=strict_raw,
+                device=device,
             )
             entries.append(
                 {
                     "scan_no": meta["scan_no"],
+                    "name": meta["name"],
+                    "slice_package": meta["slice_package"],
+                    "slice_packages": meta["slice_packages"],
+                    "image_geometry_version": meta["image_geometry_version"],
+                    "spatial_geometry": meta["spatial_geometry"],
                     "experiment": experiment,
                     "dataset": dataset,
                     "model": model,
@@ -389,6 +455,9 @@ def import_bruker_study(
                     "type": meta["type"],
                     "path": meta["path"],
                     "pdata_index": meta["pdata_index"],
+                    "source_format": meta.get("source_format", "Bruker"),
+                    "image_source": meta.get("image_source"),
+                    "raw_source": meta.get("raw_source"),
                 }
             )
         except Exception as exc:
@@ -420,22 +489,42 @@ def import_bruker_study(
 
     if progress_callback is not None:
         progress_callback(total_steps, total_steps, "Building MRax study")
+    if "field_strength_mhz" not in study_globals:
+        from .bruker_frequency import bruker_imaging_frequency, consistent_bruker_frequency
+
+        frequency = consistent_bruker_frequency(
+            bruker_imaging_frequency(e["method"], e["visu"], e.get("acqp")) for e in entries
+        )
+        if frequency is not None:
+            study_globals["field_strength_mhz"] = Quantity(frequency, "MHz")
+        else:
+            warnings.warn(
+                "No consistent Bruker imaging frequency was detected. Set field_strength_mhz explicitly. "
+                "Models that require it will raise errors when fitted.",
+                RuntimeWarning, stacklevel=2,
+            )
     study = Study(
         experiments=[e["experiment"] for e in entries],
         datasets=[e["dataset"] for e in entries],
         models=[e["model"] for e in entries],
-        names=[e["scan_no"] for e in entries],
+        names=[e["name"] for e in entries],
         study_globals=study_globals,
     )
     metadata = {
         "subject": root.name,
         "experiments": {
-            e["scan_no"]: {
+            e["name"]: {
                 "scan_no": e["scan_no"],
+                "slice_package": e["slice_package"],
+                "slice_packages": e["slice_packages"],
+                "image_geometry_version": e["image_geometry_version"],
                 "study_subject": root.name,
                 "type": e["type"],
                 "path": str(e["path"]),
                 "pdata_index": e["pdata_index"],
+                "source_format": e["source_format"],
+                "image_source": e["image_source"],
+                "raw_source": e["raw_source"],
                 "status": "loaded",
                 "visu": e["visu"],
                 "method": e["method"],

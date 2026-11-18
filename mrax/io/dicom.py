@@ -324,7 +324,7 @@ def _select_series_uid(
             raise KeyError(f"Unknown DICOM series instance UID '{requested}'")
         return requested
     if len(grouped) != 1:
-        raise ValueError("Multiple DICOM series found; choose one with series_instance_uid")
+        raise ValueError("Multiple DICOM series found. Choose one with series_instance_uid")
     return next(iter(grouped))
 
 

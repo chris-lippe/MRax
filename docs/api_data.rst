@@ -6,18 +6,18 @@ Data and study containers
 Data structures that keep arrays, units, and experiment context together.
 
 - ``DataSet`` bundles magnitude/k-space arrays plus optional noise level and derived
-  results; ``shape`` and ``spatial_shape`` expose the spatial dimensions expected by
+  results. ``shape`` and ``spatial_shape`` expose the spatial dimensions expected by
   models.
 - ``Quantity`` pairs any ndarray with an SI unit string so observables are explicitly
   typed.
-- ``Experiment`` declares dimension names and observables; ``validate`` checks dataset
+- ``Experiment`` declares dimension names and observables. ``validate`` checks dataset
   compatibility and observable types.
 - ``JointExperiment`` and ``join_experiments`` stack compatible experiments into a
-  frame-major dataset for joint fitting or reconstruction; ``select_experiment_frames``
+  frame-major dataset for joint fitting or reconstruction. ``select_experiment_frames``
   extracts sub-experiments by frame indices.
 - Dimension helpers in :mod:`mrax.data_struct.dimensions` infer non-spatial axis splits,
   reshape frame-major arrays, and expand observables to per-frame arrays.
-- ``Model`` ties a forward model, parametrization factory, and per-parameter units; it
+- ``Model`` ties a forward model, parametrization factory, and per-parameter units. It
   can emit regularizer terms via ``make_regularizer_terms``.
 - ``Study`` keeps multiple experiments/datasets/models together and attaches shared
   study globals (e.g., ``field_strength_mhz``) to each experiment/model.

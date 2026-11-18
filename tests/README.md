@@ -1,23 +1,30 @@
-# Test suite
+# Regression tests
 
-| Suite | Coverage |
+| Area | Contracts |
 | --- | --- |
-| `test_core_workflows.py` | Models, observables, losses, variance and study fitting |
-| `test_optimizer_workflows.py` | Optax integration, bounds, schedules, callbacks and checkpoints |
-| `test_fista_workflows.py` | FISTA recurrence, line search, restart and precision |
-| `test_split_bregman_workflows.py` | Split-Bregman updates, primal solves and stability |
-| `test_proximal_workflows.py` | TV operators, joint TV/box prox and physical-coordinate fitting |
-| `test_acquisition_workflows.py` | Encoding, reconstruction, geometry and model-based inversion |
-| `test_nufft_workflows.py` | Direct-DFT comparisons, adjoints, derivatives and sampling |
-| `test_import_workflows.py` | Synthetic Bruker and DICOM imports |
-| `test_pulseq_workflows.py` | Synthetic Pulseq, MRD and NIfTI alignment and timing |
-| `test_gui_workflows.py` | Sessions, imports, ROI editing, plots and state |
-| `test_save_export_workflows.py` | Bundles, image exports, package metadata and path safety |
-| `test_device_workflows.py` | Device selection, placement and CPU/GPU parity |
-| `test_preprocessing_workflows.py` | Drift, baselines, DCE and group statistics |
+| Models and fitting | Known signals and parameter recovery, observables, units, weighting, masks, bounds, checkpoint resume and cancellation |
+| Solvers and reconstruction | Independent solver references, Fourier/NUFFT adjoints, measured samples, reconstruction stages and quantitative import-to-fit agreement |
+| Import and geometry | Bruker, DICOM, Pulseq/MRD and NIfTI dimensions, timing, orientation and multiple slice packages |
+| Processing and analysis | Denoising, noise estimates, drift, ROIs, timecourses and retained fit results |
+| Workspaces and files | Editable/reusable pipelines, bundles, image exports, source immutability, overwrite confirmation and atomic failure handling |
+| Browser | Complete data, viewing, segmentation, processing, reconstruction, fitting, metadata, analysis and save/load workflows |
 
-Shared file builders live in `_synthetic.py`.
+## Routine checks
 
-Run `python -m pytest -q`. For headless GUI checks, set
-`QT_QPA_PLATFORM=offscreen`. Tests select available CPU/GPU devices explicitly;
-GPU-specific cases skip when a GPU is unavailable.
+```sh
+python -m pytest -q
+npm --prefix frontend run build
+npm --prefix frontend test
+```
+
+Python tests use CPU cases by default. Browser tests use Chromium. To check one
+area, pass its test file. `npm --prefix frontend run test:smoke` runs one complete
+GUI workflow. Use `--durations=10` with pytest to review runtime when extending the
+suite. Timing comparisons should use the same environment.
+
+## Explicit qualification
+
+```sh
+npm --prefix frontend run test:cross-browser
+python -m pytest -q -m gpu tests/test_optimizer_workflows.py
+```

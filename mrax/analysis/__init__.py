@@ -47,7 +47,6 @@ from .stats import cohens_d, describe_values, fdr_bh, hedges_g, nonparametric_te
 from .timecourse import extract_timecourse, extract_timecourse_from_experiment
 from .timecourse_processing import (
     apply_baseline,
-    apply_dilution_correction,
     estimate_timecourse_baseline,
     interpolate_timecourses,
     mean_timecourses_by_label,
@@ -73,7 +72,6 @@ __all__ = [
     "DTIMaps",
     "DCEAnalysisResult",
     "apply_baseline",
-    "apply_dilution_correction",
     "analyze_dce_series",
     "estimate_timecourse_baseline",
     "extract_roi_values",

@@ -48,12 +48,12 @@ def save_acquisition(path: str | Path, acquisition: AcquisitionData) -> None:
             "target_points": readout.target_points, "relative_cutoff": readout.relative_cutoff}
     arrays["metadata"] = np.asarray(json.dumps(metadata))
     # Opening the stream explicitly prevents NumPy from changing the filename.
-    with Path(path).open("wb") as stream:
+    with Path(path).open("xb") as stream:
         np.savez_compressed(stream, **arrays)
 
 
 def load_acquisition(path: str | Path) -> AcquisitionData:
-    """Load and validate an acquisition; archives containing pickle are rejected."""
+    """Load and validate an acquisition. Archives containing pickle are rejected."""
     with np.load(path, allow_pickle=False) as archive:
         metadata = json.loads(str(archive["metadata"]))
         if metadata.get("schema_version") != 1:
