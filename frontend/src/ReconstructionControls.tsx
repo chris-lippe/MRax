@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
+import { ComputeDeviceSelect } from './ComputeDeviceSelect';
 import type { AnalysisProps } from './analysisTypes';
 import { InspectorSection } from './InspectorSection';
 import { WorkbenchIcon } from './WorkbenchIcon';
@@ -11,7 +12,13 @@ import { recoProblem, type RecoCatalog, type RecoPlan } from './reconstructionPl
 import { WorkflowButton } from './WorkflowButton';
 import { usePipelineOptions } from './usePipelineOptions';
 
-type Draft = { plan: RecoPlan; component: string; generation: number; submitted?: boolean };
+type Draft = {
+  plan: RecoPlan;
+  component: string;
+  device: string;
+  generation: number;
+  submitted?: boolean;
+};
 
 export function ReconstructionControls({
   workspace: w,
@@ -45,6 +52,10 @@ export function ReconstructionControls({
   const editing = editingStep?.kind === 'reconstruct';
   const editKey = editing ? editingStep.id + editingStep.version : '';
   const editOptions = editing ? JSON.stringify(editingStep.options) : '';
+  const savedStep = editing
+    ? editingStep
+    : w?.pipeline.steps.find((step) => step.kind === 'reconstruct');
+  const savedDevice = String(savedStep?.options.device ?? 'cpu');
   const catalog = loaded?.context === context ? loaded.value : null;
   useEffect(() => {
     let stopped = false;
@@ -77,10 +88,11 @@ export function ReconstructionControls({
         [context]: {
           plan: structuredClone(options.pipeline!),
           component: options.component ?? 'magnitude',
+          device: savedDevice,
           generation: -1,
         },
       }));
-  }, [context, editKey, editOptions]);
+  }, [context, editKey, editOptions, savedDevice]);
   useEffect(() => {
     const draft = drafts[context];
     if (
@@ -93,22 +105,24 @@ export function ReconstructionControls({
       return;
     if (
       JSON.stringify(draft.plan) === JSON.stringify(catalog.plan) &&
-      draft.component === catalog.component
+      draft.component === catalog.component &&
+      draft.device === savedDevice
     )
       setDrafts((previous) => {
         const next = { ...previous };
         delete next[context];
         return next;
       });
-  }, [drafts, context, catalog, loaded?.key, requestKey, w]);
+  }, [drafts, context, catalog, loaded?.key, requestKey, savedDevice, w]);
   const draft = drafts[context];
   const plan = draft?.plan ?? catalog?.plan;
   const component = draft?.component ?? catalog?.component ?? 'magnitude';
-  const change = (plan: RecoPlan, output = component) => {
+  const device = draft?.device ?? savedDevice;
+  const change = (plan: RecoPlan, output = component, target = device) => {
     if (!w) return;
     setDrafts((previous) => ({
       ...previous,
-      [context]: { plan, component: output, generation: w.pipeline.generation },
+      [context]: { plan, component: output, device: target, generation: w.pipeline.generation },
     }));
   };
   const loadPreset = (plan: RecoPlan, output = component) => {
@@ -117,7 +131,7 @@ export function ReconstructionControls({
       void run('pipeline', {
         action: 'configure',
         kind: 'reconstruct',
-        options: { pipeline: plan, component: output },
+        options: { pipeline: plan, component: output, device },
       });
   };
   const issue = plan && catalog ? recoProblem(plan, catalog.stages, catalog.encoding) : '';
@@ -125,7 +139,7 @@ export function ReconstructionControls({
   usePipelineOptions(
     Boolean(editing && active && plan && catalog),
     Boolean(editKey && edited.current === editKey),
-    { view: 'mrax_reconstruction', component, pipeline: plan },
+    { view: 'mrax_reconstruction', component, pipeline: plan, device },
     stagePipelineOptions,
     issue || undefined,
   );
@@ -156,7 +170,7 @@ export function ReconstructionControls({
           type="button"
           className="secondary full"
           disabled={busy || !w?.loaded || !w.can_load_raw || w.has_kspace}
-          onClick={() => void run('reconstruct', { view: 'k_space' })}
+          onClick={() => void run('reconstruct', { view: 'k_space', device })}
         >
           <WorkbenchIcon name="open" />
           Load raw k-space
@@ -176,6 +190,7 @@ export function ReconstructionControls({
           void run('reconstruct', {
             view: 'mrax_reconstruction',
             component,
+            device,
             pipeline: settings,
             step_id: editing ? editingStep.id : undefined,
           });
@@ -296,6 +311,14 @@ export function ReconstructionControls({
                 <option value="phase">Phase</option>
               </select>
             </label>
+            <ComputeDeviceSelect
+              label="Reconstruction compute device"
+              value={device}
+              onChange={(target) => {
+                if (plan) change(plan, component, target);
+              }}
+              onError={setError}
+            />
             <p className="control-note">
               Reconstruction runs from acquired samples. Later image processing is reapplied to its
               output.

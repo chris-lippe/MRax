@@ -52,6 +52,9 @@ jobs:
         run: |
           python -m build
           python -m twine check dist/*
+          mkdir -p /tmp/mrax-release-source
+          tar -xzf dist/*.tar.gz -C /tmp/mrax-release-source --strip-components=1
+          sphinx-build -W --keep-going -E -b html /tmp/mrax-release-source/docs /tmp/mrax-sdist-docs
           python -m venv /tmp/mrax-release-wheel
           /tmp/mrax-release-wheel/bin/python -m pip install --force-reinstall "$(echo dist/*.whl)[gui]"
           /tmp/mrax-release-wheel/bin/python -I tests/qualify_browser_install.py --device cpu

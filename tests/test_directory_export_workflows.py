@@ -1,6 +1,7 @@
 """Multi-file exports modify named files, never replace selected directories."""
 
 import hashlib
+import subprocess
 import time
 from threading import Event
 
@@ -224,7 +225,21 @@ def test_export_subfolders_cannot_redirect_writes_through_symlinks(tmp_path):
     elsewhere.mkdir()
     (prepared / "nested").mkdir(parents=True)
     (prepared / "nested" / "array").write_text("new data")
-    (target / "nested").symlink_to(elsewhere, target_is_directory=True)
+    link = target / "nested"
+    try:
+        link.symlink_to(elsewhere, target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != 1314:
+            raise
+        # A directory junction exercises a real redirect under a standard Windows account.
+        subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/j", "nested", r"..\elsewhere"],
+            cwd=target,
+            check=True,
+            capture_output=True,
+        )
+        assert link.is_junction()
+    assert link.samefile(elsewhere)
     with pytest.raises(ValueError, match="symbolic link"):
         export_file_plan(prepared, target, policy=lambda *_: (True, ""))
     assert not list(elsewhere.iterdir())

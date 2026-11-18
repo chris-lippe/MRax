@@ -335,7 +335,7 @@ def test_signal_profiles_use_whole_images_and_declared_spectral_coordinates(clie
     for component, expected in (
         ("real", complex_values.real),
         ("imag", complex_values.imag),
-        ("phase", np.angle(complex_values)),
+        ("phase", np.angle(complex_values.astype(source.dtype, copy=False))),
         ("magnitude", np.abs(complex_values)),
         ("auto", np.abs(complex_values)),
     ):

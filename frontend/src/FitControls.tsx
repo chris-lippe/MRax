@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type Options } from './api';
+import { ComputeDeviceSelect } from './ComputeDeviceSelect';
 import type { AnalysisProps } from './analysisTypes';
 import { JsonEditor, NumberField, Report } from './Controls';
 import { fitRois, roiColor } from './scene';
@@ -50,8 +51,7 @@ export function FitControls({
     [excluded, setExcluded] = useState<number[]>([]);
   const [steps, setSteps] = useState(Number(w?.fit_settings.num_steps ?? 600)),
     [rate, setRate] = useState(Number(w?.fit_settings.step_size ?? 0.02));
-  const [device, setDevice] = useState(String(editingStep?.options.device ?? 'cpu')),
-    [devices, setDevices] = useState<{ id: string; label: string }[]>([]);
+  const [device, setDevice] = useState(String(editingStep?.options.device ?? 'cpu'));
   const hasRois = Boolean(w?.rois.some((roi) => roi.enabled && roi.pixels > 0));
   const useRoi = w?.scene.fit_region === 'rois' && hasRois;
   const previewRoi = w?.display.plot_whole_image
@@ -59,11 +59,6 @@ export function FitControls({
     : w?.rois.find((roi) => roi.name === w.selected_roi && roi.enabled && roi.pixels > 0);
   const selectedRois = w ? fitRois(w) : [];
   const [error, setError] = useState('');
-  useEffect(() => {
-    void api<{ devices: { id: string; label: string }[] }>('/api/catalog')
-      .then((c) => setDevices(c.devices))
-      .catch((e) => setError(String(e)));
-  }, []);
   useEffect(() => {
     let cancelled = false;
     setError('');
@@ -364,23 +359,7 @@ export function FitControls({
               <option value="full">Whole image</option>
             </select>
           </label>
-          <label>
-            Compute device
-            <select
-              aria-label="Compute device"
-              value={device}
-              onChange={(e) => setDevice(e.target.value)}
-            >
-              <option value="cpu">CPU</option>
-              {devices
-                .filter((d) => !d.id.startsWith('cpu'))
-                .map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.label}
-                  </option>
-                ))}
-            </select>
-          </label>
+          <ComputeDeviceSelect value={device} onChange={setDevice} onError={setError} />
         </div>
       </InspectorSection>
       {choices?.field_dimensions.some(

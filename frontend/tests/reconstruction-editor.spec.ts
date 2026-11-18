@@ -79,6 +79,11 @@ test('stages insert, edit, remove and discard. Named reconstruction workflows sa
 }, info) => {
   await fixture(page, info);
   const original = await pixels(request);
+  const device = page.getByRole('combobox', { name: 'Reconstruction compute device', exact: true });
+  await expect(device).toHaveValue('cpu');
+  const catalog = await (await request.get('/api/catalog')).json();
+  const targetDevice =
+    catalog.devices.find((d: { id: string }) => d.id.startsWith('gpu:'))?.id ?? 'cpu';
   const chain = page.getByRole('region', { name: 'Reconstruction stages', exact: true });
   const window = chain.getByRole('listitem', { name: 'K-space window', exact: true });
   await window.getByRole('button', { name: 'K-space window settings', exact: true }).click();
@@ -104,6 +109,7 @@ test('stages insert, edit, remove and discard. Named reconstruction workflows sa
   expect(await pixels(request)).toEqual(original);
   await window.getByRole('button', { name: 'Move K-space window up', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveCount(0);
+  await device.selectOption(targetDevice);
   await page.getByLabel('Reconstruction pipeline name', { exact: true }).fill('Windowed Fourier');
   expect((await opened(request))[0].pipeline.steps).toHaveLength(0);
   await page.getByRole('button', { name: 'Apply reconstruction', exact: true }).click();
@@ -113,6 +119,7 @@ test('stages insert, edit, remove and discard. Named reconstruction workflows sa
     .toBe('Windowed Fourier');
   expect(await pixels(request)).not.toEqual(original);
   const [applied] = await opened(request);
+  expect(applied.pipeline.steps[0].options.device).toBe(targetDevice);
   expect(applied.pipeline.steps[0].label).toBe('Windowed Fourier');
   expect(
     (applied.pipeline.steps[0].options.workflow as { steps: { settings: Options }[] }).steps[0]
@@ -161,6 +168,7 @@ test('stages insert, edit, remove and discard. Named reconstruction workflows sa
     'Imported Fourier',
   );
   await page.getByLabel('Reconstruction pipeline name', { exact: true }).fill('Edited Fourier');
+  await expect(device).toHaveValue(targetDevice);
   await expect(pipeline).toContainText('Unapplied changes');
   expect((await opened(request))[0].pipeline.steps[0].label).toBe('Imported Fourier');
   await page.getByRole('button', { name: 'Apply reconstruction', exact: true }).click();

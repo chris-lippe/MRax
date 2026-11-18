@@ -35,18 +35,22 @@ def file_identity(path):
     return [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns]
 
 
+def _is_link(path: Path) -> bool:
+    return path.is_symlink() or path.is_junction()
+
+
 def export_file_plan(prepared, destination, *, policy):
     """Inspect only generated filenames. Never treat a directory as replaceable."""
     prepared, destination = Path(prepared), Path(destination)
-    if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
+    if _is_link(destination) or (destination.exists() and not destination.is_dir()):
         raise ValueError("Choose a destination folder")
     if not destination.exists() and not destination.parent.is_dir():
         raise ValueError("Choose an existing parent folder")
     files = []
     conflicts = []
     for source in sorted(prepared.rglob("*")):
-        if source.is_symlink():
-            raise ValueError("Export files cannot contain symbolic links")
+        if _is_link(source):
+            raise ValueError("Export files cannot contain symbolic links or junctions")
         if not source.is_file():
             continue
         relative = source.relative_to(prepared).as_posix()
@@ -54,26 +58,27 @@ def export_file_plan(prepared, destination, *, policy):
         for parent in target.parents:
             if parent == destination:
                 break
-            if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+            if _is_link(parent) or (parent.exists() and not parent.is_dir()):
                 raise ValueError(
-                    "An output subfolder is occupied by a file or symbolic link: " + relative
+                    "An output subfolder is occupied by a file, symbolic link or junction: "
+                    + relative
                 )
         replaceable, reason = policy(relative, target)
         files.append(relative)
-        if target.exists() or target.is_symlink():
-            if target.is_symlink() or not target.is_file():
+        linked = _is_link(target)
+        if target.exists() or linked:
+            regular_file = not linked and target.is_file()
+            if not regular_file:
                 replaceable, reason = (
                     False,
-                    "An existing folder or symbolic link cannot be replaced",
+                    "An existing folder, symbolic link or junction cannot be replaced",
                 )
             conflicts.append(
                 {
                     "path": relative,
                     "replaceable": replaceable,
                     "reason": reason,
-                    "identity": file_identity(target)
-                    if target.is_file() and not target.is_symlink()
-                    else None,
+                    "identity": file_identity(target) if regular_file else None,
                 }
             )
     if not files:

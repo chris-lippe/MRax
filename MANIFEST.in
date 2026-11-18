@@ -24,6 +24,7 @@ recursive-exclude frontend/node_modules *
 recursive-exclude frontend/test-results *
 recursive-exclude frontend/playwright-report *
 recursive-include docs *.rst *.py *.css *.js *.html *.png *.svg
+include docs/notebooks/*.ipynb
 recursive-include notebooks *.ipynb
 recursive-include tests *.py
 prune docs/_build
